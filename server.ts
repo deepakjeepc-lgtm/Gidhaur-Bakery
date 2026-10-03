@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import sharp from 'sharp';
 import { createServer as createViteServer } from 'vite';
 import { sendOrderNotificationEmail, buildOrderStatusEmailHtml } from './src/server/emailHelper';
 
@@ -432,6 +433,84 @@ app.post('/api/customer-emails/clear', (_req, res) => {
   store.customerEmails = [];
   saveStore(store);
   res.json({ success: true });
+});
+
+// Dynamic PWA Icons sync endpoint: updates public icon PNG files with the user's custom uploaded logo
+app.post('/api/update-pwa-icons', async (req, res) => {
+  try {
+    const { imageBase64, imageUrl } = req.body;
+    let buffer: Buffer | null = null;
+    if (imageBase64) {
+      const clean = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      buffer = Buffer.from(clean, 'base64');
+    } else if (imageUrl) {
+      const response = await fetch(imageUrl);
+      const arrayBuf = await response.arrayBuffer();
+      buffer = Buffer.from(arrayBuf);
+    }
+
+    if (!buffer) {
+      return res.status(400).json({ error: 'No image data provided' });
+    }
+
+    const publicDir = path.join(process.cwd(), 'public');
+    if (!fs.existsSync(publicDir)) {
+      fs.mkdirSync(publicDir, { recursive: true });
+    }
+
+    // 1. Generate 512x512 PNG icons
+    await sharp(buffer).resize(512, 512, { fit: 'cover' }).png().toFile(path.join(publicDir, 'icon-512.png'));
+    await sharp(buffer).resize(512, 512, { fit: 'cover' }).png().toFile(path.join(publicDir, 'pwa-512x512.png'));
+
+    // 2. Generate 192x192 PNG icons
+    await sharp(buffer).resize(192, 192, { fit: 'cover' }).png().toFile(path.join(publicDir, 'icon-192.png'));
+    await sharp(buffer).resize(192, 192, { fit: 'cover' }).png().toFile(path.join(publicDir, 'pwa-192x192.png'));
+
+    // 3. Generate 180x180 iOS Apple Touch Icon
+    await sharp(buffer).resize(180, 180, { fit: 'cover' }).png().toFile(path.join(publicDir, 'apple-touch-icon.png'));
+
+    // 4. Generate 512x512 Maskable Icon with 12% safe-zone margin
+    const innerSize = Math.round(512 * 0.80);
+    const inner = await sharp(buffer).resize(innerSize, innerSize, { fit: 'cover' }).toBuffer();
+    await sharp({
+      create: {
+        width: 512,
+        height: 512,
+        channels: 4,
+        background: { r: 255, g: 255, b: 255, alpha: 1 }
+      }
+    })
+    .composite([{ input: inner, top: Math.round((512 - innerSize) / 2), left: Math.round((512 - innerSize) / 2) }])
+    .png()
+    .toFile(path.join(publicDir, 'icon-maskable-512.png'));
+
+    fs.copyFileSync(path.join(publicDir, 'icon-maskable-512.png'), path.join(publicDir, 'pwa-maskable-512x512.png'));
+
+    // Also sync to dist/ if build exists
+    const distDir = path.join(process.cwd(), 'dist');
+    if (fs.existsSync(distDir)) {
+      const filesToSync = [
+        'icon-512.png',
+        'pwa-512x512.png',
+        'icon-192.png',
+        'pwa-192x192.png',
+        'apple-touch-icon.png',
+        'icon-maskable-512.png',
+        'pwa-maskable-512x512.png',
+      ];
+      for (const file of filesToSync) {
+        const srcFile = path.join(publicDir, file);
+        if (fs.existsSync(srcFile)) {
+          fs.copyFileSync(srcFile, path.join(distDir, file));
+        }
+      }
+    }
+
+    res.json({ success: true, message: 'PWA & App launcher icons updated successfully!' });
+  } catch (err: any) {
+    console.error('Error updating PWA icons:', err);
+    res.status(500).json({ error: err.message || 'Failed to update PWA icons' });
+  }
 });
 
 // -------------------------------------------------------------

@@ -282,6 +282,20 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
           }
         }
 
+        // Sync to server PWA icon files
+        try {
+          const reader = new FileReader();
+          reader.onload = async () => {
+            const base64 = reader.result as string;
+            await fetch('/api/update-pwa-icons', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ imageBase64: base64, imageUrl: res.url }),
+            }).catch(() => {});
+          };
+          reader.readAsDataURL(file);
+        } catch (_) {}
+
         setBranding((prev) => ({
           ...prev,
           faviconUrl: res.url,

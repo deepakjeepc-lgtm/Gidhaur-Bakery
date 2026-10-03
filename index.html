@@ -21,6 +21,15 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Cinzel:wght@600;700&family=Dancing+Script:wght@600;700&family=Great+Vibes&family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500;700&family=Lato:wght@400;700&family=Lora:ital,wght@0,600;1,600&family=Merriweather:wght@400;700&family=Montserrat:wght@500;700&family=Open+Sans:wght@400;600;700&family=Outfit:wght@500;700&family=Pacifico&family=Playfair+Display:ital,wght@0,600;0,800;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Poppins:wght@400;600;700&family=Roboto+Mono:wght@400;600;700&family=Roboto:wght@400;500;700&family=Satisfy&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function() {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function(err) {
+            console.debug('SW registration:', err);
+          });
+        });
+      }
+    </script>
   </head>
   <body class="bg-white text-[#1e2022] antialiased selection:bg-slate-200 selection:text-slate-900">
     <div id="root"></div>
