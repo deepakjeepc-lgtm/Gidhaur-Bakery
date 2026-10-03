@@ -513,6 +513,28 @@ app.post('/api/update-pwa-icons', async (req, res) => {
   }
 });
 
+// Digital Asset Links for Android TWA Fullscreen Verification
+app.get('/.well-known/assetlinks.json', (_req, res) => {
+  const assetLinksPath = path.join(process.cwd(), 'public', '.well-known', 'assetlinks.json');
+  if (fs.existsSync(assetLinksPath)) {
+    res.setHeader('Content-Type', 'application/json');
+    res.sendFile(assetLinksPath);
+  } else {
+    res.json([
+      {
+        relation: ['delegate_permission/common.handle_all_urls'],
+        target: {
+          namespace: 'android_app',
+          package_name: 'app.vercel.gidhaur_bakery.twa',
+          sha256_cert_fingerprints: [
+            '25:3B:30:6E:B8:3C:11:CA:E5:37:F7:BC:F2:ED:20:E4:65:A8:70:57:E1:98:B6:D2:77:A8:5C:4C:AC:23:5C:F6',
+          ],
+        },
+      },
+    ]);
+  }
+});
+
 // -------------------------------------------------------------
 // Vite middleware integration (Vite in dev, static files in prod)
 // -------------------------------------------------------------
