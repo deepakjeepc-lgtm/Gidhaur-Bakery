@@ -1,0 +1,178 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A food, bakery, beverage, or snack product sold by Swadeep.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Display name of the food item"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Detailed description of ingredients and preparation"
+        },
+        "price": {
+          "type": "number",
+          "description": "Price in INR (₹)"
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Category name, e.g. Bakery, Snacks, Desserts, Beverages"
+        },
+        "imageUrl": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Image download URL"
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Whether the product is currently in stock"
+        },
+        "isVegetarian": {
+          "type": "boolean",
+          "description": "Whether item is 100% vegetarian"
+        },
+        "prepTimeMinutes": {
+          "type": "number",
+          "description": "Estimated kitchen prep time in minutes"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when product was created"
+        }
+      },
+      "required": ["name", "price", "category", "available"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A food order placed by a guest customer or registered user.",
+      "type": "object",
+      "properties": {
+        "orderId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Unique alphanumeric order identifier shown to customer"
+        },
+        "customerName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100,
+          "description": "Customer full name"
+        },
+        "phone": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 20,
+          "description": "Customer phone number"
+        },
+        "address": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 500,
+          "description": "Delivery address with street, flat/house number and landmark"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional preparation or delivery instructions"
+        },
+        "items": {
+          "type": "array",
+          "description": "List of ordered items with quantities and unit prices"
+        },
+        "totalAmount": {
+          "type": "number",
+          "description": "Total order payable amount in INR"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "preparing", "out_for_delivery", "delivered", "rejected"],
+          "description": "Live fulfillment progress status"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the order was submitted"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the order status was updated"
+        }
+      },
+      "required": ["orderId", "customerName", "phone", "address", "items", "totalAmount", "status"]
+    },
+    "DeliveryAgent": {
+      "title": "DeliveryAgent",
+      "description": "A delivery rider handling food orders.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Agent name" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "status": { "type": "string", "enum": ["active", "busy", "offline"] }
+      },
+      "required": ["name", "phone", "status"]
+    },
+    "KitchenStaff": {
+      "title": "KitchenStaff",
+      "description": "A chef or kitchen crew member.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Staff name" },
+        "role": { "type": "string", "description": "Kitchen role" },
+        "status": { "type": "string", "enum": ["active", "offline"] }
+      },
+      "required": ["name", "role", "status"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "Application settings document.",
+      "type": "object",
+      "properties": {
+        "restaurantName": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": {
+        "$ref": "#/entities/Product"
+      },
+      "description": "Menu products collection available for browsing and ordering"
+    },
+    "/orders/{orderId}": {
+      "schema": {
+        "$ref": "#/entities/Order"
+      },
+      "description": "Orders collection containing guest orders and live status"
+    },
+    "/delivery_agents/{agentId}": {
+      "schema": {
+        "$ref": "#/entities/DeliveryAgent"
+      },
+      "description": "Riders and delivery agents profiles"
+    },
+    "/kitchen_staff/{staffId}": {
+      "schema": {
+        "$ref": "#/entities/KitchenStaff"
+      },
+      "description": "Kitchen staff profiles"
+    },
+    "/settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/Settings"
+      },
+      "description": "Store configuration and categories"
+    }
+  }
+}

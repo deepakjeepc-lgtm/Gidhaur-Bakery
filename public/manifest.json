@@ -1,0 +1,38 @@
+{
+  "name": "Gidhaur Bakery",
+  "short_name": "Gidhaur",
+  "description": "Order fresh & delicious bakery delicacies and food directly with Gidhaur Bakery. Quick guest ordering, real-time live order tracking, Kitchen KDS, and Delivery Rider portal.",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "orientation": "portrait-primary",
+  "categories": ["food", "shopping", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Order Food",
+      "url": "/",
+      "description": "Browse menu and order fresh food"
+    },
+    {
+      "name": "Track Live Order",
+      "url": "/track",
+      "description": "Check real-time order status"
+    }
+  ]
+}

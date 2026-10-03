@@ -1,0 +1,399 @@
+@import "tailwindcss";
+
+/* Safe Area Inset Support for iPhone Notch, Dynamic Island, and Android Gesture Bars */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+}
+
+.pt-safe {
+  padding-top: max(env(safe-area-inset-top, 0px), 0px);
+}
+.pt-safe-top {
+  padding-top: max(calc(env(safe-area-inset-top, 0px) + 0.75rem), 1rem);
+}
+.top-safe-sticky {
+  top: max(calc(env(safe-area-inset-top, 0px) + 0.5rem), 0.75rem);
+}
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 0px);
+}
+.pl-safe {
+  padding-left: max(env(safe-area-inset-left, 0px), 0px);
+}
+.pr-safe {
+  padding-right: max(env(safe-area-inset-right, 0px), 0px);
+}
+.mt-safe {
+  margin-top: max(env(safe-area-inset-top, 0px), 0px);
+}
+.mb-safe {
+  margin-bottom: max(env(safe-area-inset-bottom, 0px), 0px);
+}
+
+@layer base {
+  html {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: #0f172a;
+    background-color: #f6f8fb;
+    letter-spacing: 0.015em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #root {
+    width: 100%;
+    max-width: 100%;
+    min-height: 100vh;
+  }
+
+  img {
+    image-rendering: -webkit-optimize-contrast;
+    content-visibility: visible;
+  }
+
+  /* Fast touch responsiveness */
+  button, a, input, select, textarea, [role="button"] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  h1, h2, h3, h4, h5, h6, .font-heading {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: 0.008em;
+  }
+
+  p, span, div, a, button, input {
+    letter-spacing: 0.012em;
+  }
+
+  .font-amount, .font-price {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-feature-settings: 'tnum' 1, 'cv11' 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+  }
+  .product-card-container {
+    content-visibility: auto;
+    contain-intrinsic-size: 260px;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Shimmer Loading Animation */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-shimmer::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, 0.6) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: shimmer 1.5s infinite ease-in-out;
+  content: '';
+  pointer-events: none;
+}
+
+/* Subtle Tactile Spring / Bounce Animation for CartDrawer Entry */
+@keyframes cartBounceIn {
+  0% {
+    opacity: 0;
+    transform: translateY(52px) scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-7px) scale(1.015);
+  }
+  75% {
+    transform: translateY(2.5px) scale(0.996);
+  }
+  90% {
+    transform: translateY(-1px) scale(1.002);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-cart-bounce-in {
+  animation: cartBounceIn 0.38s cubic-bezier(0.22, 1, 0.36, 1.15) forwards;
+  will-change: transform, opacity;
+  transform-origin: bottom center;
+}
+
+/* Smooth Bottom Popup & Bottom Fadeout Animations */
+@keyframes bottomPopup {
+  0% {
+    opacity: 0;
+    transform: translateY(44px) scale(0.92);
+  }
+  60% {
+    opacity: 0.95;
+    transform: translateY(-2px) scale(1.008);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes bottomFadeout {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(38px) scale(0.90);
+  }
+}
+
+@keyframes backdropFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes backdropFadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-bottom-popup {
+  animation: bottomPopup 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.05) forwards;
+  will-change: transform, opacity;
+  transform-origin: bottom center;
+}
+
+.animate-bottom-fadeout {
+  animation: bottomFadeout 0.22s cubic-bezier(0.4, 0, 0.7, 1) forwards;
+  will-change: transform, opacity;
+  transform-origin: bottom center;
+}
+
+.animate-backdrop-in {
+  animation: backdropFadeIn 0.24s ease-out forwards;
+}
+
+.animate-backdrop-out {
+  animation: backdropFadeOut 0.22s ease-in forwards;
+}
+
+@keyframes textShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.animate-text-shimmer {
+  background: linear-gradient(
+    90deg,
+    #475569 0%,
+    #475569 30%,
+    #0f172a 42%,
+    #ffffff 50%,
+    #0f172a 58%,
+    #475569 70%,
+    #475569 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: textShimmer 2.6s ease-in-out infinite;
+}
+
+/* Category Switch Transition Animations */
+@keyframes categoryContentFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tabPillPop {
+  0% {
+    transform: scale(0.92);
+  }
+  60% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-category-switch {
+  animation: categoryContentFadeIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animate-tab-active {
+  animation: tabPillPop 0.25s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-category-switch,
+  .animate-tab-active,
+  .animate-cart-bounce-in,
+  .animate-bottom-popup,
+  .animate-bottom-fadeout {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Hide scrollbar for clean chip trays and carousels */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Diwali Festive Sway & Gentle Diya Flicker */
+@keyframes diwaliSway {
+  0%, 100% {
+    transform: rotate(-1.2deg);
+  }
+  50% {
+    transform: rotate(1.2deg);
+  }
+}
+
+@keyframes diwaliFlicker {
+  0%, 100% {
+    transform: scale(1) translateY(0);
+    opacity: 0.95;
+  }
+  25% {
+    transform: scale(1.08, 0.95) translateY(-0.5px);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.96, 1.05) translateY(0.5px);
+    opacity: 0.88;
+  }
+  75% {
+    transform: scale(1.05, 0.97) translateY(-0.5px);
+    opacity: 1;
+  }
+}
+
+.animate-diwali-sway {
+  animation: diwaliSway 4.5s ease-in-out infinite;
+}
+
+.animate-diwali-flicker {
+  animation: diwaliFlicker 1.6s ease-in-out infinite;
+}
+
+@keyframes festiveShimmer {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.animate-festive-shimmer {
+  background-size: 200% auto;
+  animation: festiveShimmer 3.5s ease infinite;
+}
+
+@keyframes shakeAlert {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  20%, 60% {
+    transform: translateX(-6px);
+  }
+  40%, 80% {
+    transform: translateX(6px);
+  }
+}
+
+.animate-shake-alert {
+  animation: shakeAlert 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+
+
+

@@ -1,0 +1,8 @@
+{
+  "name": "Swadeep",
+  "description": "Gidhaur Bakery - Freshly baked cakes, breads, pastries, and delicious treats with live order tracking and admin management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

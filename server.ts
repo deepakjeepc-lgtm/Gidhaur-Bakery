@@ -1,0 +1,461 @@
+import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import { createServer as createViteServer } from 'vite';
+import { sendOrderNotificationEmail, buildOrderStatusEmailHtml } from './src/server/emailHelper';
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json({ limit: '10mb' }));
+
+// Data storage directory and file for persistent cross-device synchronization
+const DATA_DIR = path.join(process.cwd(), 'data');
+const STORE_FILE = path.join(DATA_DIR, 'store.json');
+
+interface StoreData {
+  bannerSettings: any;
+  orders: any[];
+  staff: {
+    deliveryAgents: any[];
+    kitchenStaff: any[];
+  };
+  settings: any;
+  customerEmails: any[];
+}
+
+const DEFAULT_BANNER_SETTINGS = {
+  isEnabled: true,
+  autoSlideIntervalSeconds: 5,
+  banners: [
+    {
+      id: 'banner-welcome-1',
+      badge: 'SPECIAL OFFER',
+      title: 'Artisan Pizzas & Burger Combos',
+      description: 'Get flat 20% off on all freshly crafted stone-baked pizzas and gourmet meal combos.',
+      couponCode: 'GIDHAUR20',
+      discountText: '20% OFF',
+      targetCategory: 'Combos',
+      buttonText: 'Explore Combos',
+      imageUrl: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=600&q=80',
+      isActive: true,
+      order: 1,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: 'banner-welcome-2',
+      badge: "CHEF'S SPECIAL",
+      title: 'Signature Desserts & Shakes',
+      description: 'Indulge in melt-in-mouth Belgian chocolate brownies, pastries, and thick creamy shakes.',
+      couponCode: 'SWEET50',
+      discountText: 'FLAT ₹50 OFF',
+      targetCategory: 'Desserts',
+      buttonText: 'View Desserts',
+      imageUrl: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&w=600&q=80',
+      isActive: true,
+      order: 2,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: 'banner-welcome-3',
+      badge: 'EXPRESS DELIVERY',
+      title: 'Free Delivery on Orders Above ₹199',
+      description: 'Order your favorite snacks & meals and get piping-hot delivery right to your doorstep.',
+      couponCode: 'FREEDEL',
+      discountText: 'FREE DELIVERY',
+      targetCategory: 'All',
+      buttonText: 'Order Now',
+      imageUrl: 'https://images.unsplash.com/photo-1526367790999-0150786686a2?auto=format&fit=crop&w=600&q=80',
+      isActive: true,
+      order: 3,
+      createdAt: new Date().toISOString(),
+    },
+  ],
+};
+
+function loadStore(): StoreData {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(STORE_FILE)) {
+      const raw = fs.readFileSync(STORE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return {
+        bannerSettings: parsed.bannerSettings || DEFAULT_BANNER_SETTINGS,
+        orders: Array.isArray(parsed.orders) ? parsed.orders : [],
+        staff: parsed.staff || { deliveryAgents: [], kitchenStaff: [] },
+        settings: parsed.settings || {},
+        customerEmails: Array.isArray(parsed.customerEmails) ? parsed.customerEmails : [],
+      };
+    }
+  } catch (err) {
+    console.error('Error loading store.json, using defaults:', err);
+  }
+
+  const initial: StoreData = {
+    bannerSettings: DEFAULT_BANNER_SETTINGS,
+    orders: [],
+    staff: { deliveryAgents: [], kitchenStaff: [] },
+    settings: {},
+    customerEmails: [],
+  };
+  saveStore(initial);
+  return initial;
+}
+
+function saveStore(data: StoreData) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(STORE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving store.json:', err);
+  }
+}
+
+let store = loadStore();
+
+// SSE Clients Registry for Real-Time Multi-Device Sync (Simulator, iPhone, etc.)
+type SSEClient = {
+  id: string;
+  res: express.Response;
+};
+let sseClients: SSEClient[] = [];
+
+function broadcastSSE(eventType: string, payload: any) {
+  const data = `event: ${eventType}\ndata: ${JSON.stringify(payload)}\n\n`;
+  sseClients.forEach((client) => {
+    try {
+      client.res.write(data);
+    } catch {
+      // client disconnected
+    }
+  });
+}
+
+// -------------------------------------------------------------
+// API Routes
+// -------------------------------------------------------------
+
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// SSE Live Sync Stream for Real-Time Multi-Device Collaboration
+app.get('/api/sync/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const clientId = Math.random().toString(36).substring(2, 12);
+  const client: SSEClient = { id: clientId, res };
+  sseClients.push(client);
+
+  // Send initial synchronized state snapshot
+  res.write(`event: init\ndata: ${JSON.stringify({
+    bannerSettings: store.bannerSettings,
+    orders: store.orders,
+    settings: store.settings,
+    staff: store.staff,
+  })}\n\n`);
+
+  // Heartbeat ping every 15 seconds to keep mobile Safari connection active
+  const heartbeatTimer = setInterval(() => {
+    try {
+      res.write(': heartbeat\n\n');
+    } catch {
+      clearInterval(heartbeatTimer);
+    }
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(heartbeatTimer);
+    sseClients = sseClients.filter((c) => c.id !== clientId);
+  });
+});
+
+// Banner Settings endpoints
+app.get('/api/settings/banners', (_req, res) => {
+  res.json(store.bannerSettings);
+});
+
+app.post('/api/settings/banners', (req, res) => {
+  const incoming = req.body;
+  if (!incoming || typeof incoming !== 'object') {
+    return res.status(400).json({ error: 'Invalid banner settings payload' });
+  }
+
+  store.bannerSettings = {
+    ...store.bannerSettings,
+    ...incoming,
+    updatedAt: new Date().toISOString(),
+  };
+  saveStore(store);
+
+  // Broadcast to all devices (desktop simulator, iPhone, all open tabs)
+  broadcastSSE('banner_settings', store.bannerSettings);
+
+  res.json({ success: true, bannerSettings: store.bannerSettings });
+});
+
+// Orders endpoints
+app.get('/api/orders', (_req, res) => {
+  res.json(store.orders);
+});
+
+app.post('/api/orders', (req, res) => {
+  const newOrder = req.body;
+  if (!newOrder || !newOrder.id) {
+    return res.status(400).json({ error: 'Order must contain an id' });
+  }
+
+  const existingIdx = store.orders.findIndex((o) => o.id === newOrder.id || o.orderId === newOrder.orderId);
+  if (existingIdx >= 0) {
+    store.orders[existingIdx] = { ...store.orders[existingIdx], ...newOrder, updatedAt: new Date().toISOString() };
+  } else {
+    store.orders.unshift(newOrder);
+  }
+  saveStore(store);
+
+  broadcastSSE('orders_update', store.orders);
+  res.json({ success: true, order: newOrder });
+});
+
+app.patch('/api/orders/:id', (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+  const orderIdx = store.orders.findIndex(
+    (o) => o.id === id || o.orderId === id || o.id?.toLowerCase() === id.toLowerCase() || o.orderId?.toLowerCase() === id.toLowerCase()
+  );
+  if (orderIdx === -1) {
+    const newOrder = {
+      id,
+      orderId: id,
+      ...updates,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    store.orders.unshift(newOrder);
+    saveStore(store);
+    broadcastSSE('orders_update', store.orders);
+    return res.json({ success: true, order: newOrder });
+  }
+
+  store.orders[orderIdx] = {
+    ...store.orders[orderIdx],
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+  saveStore(store);
+
+  broadcastSSE('orders_update', store.orders);
+  res.json({ success: true, order: store.orders[orderIdx] });
+});
+
+app.delete('/api/orders/:id', (req, res) => {
+  const { id } = req.params;
+  store.orders = store.orders.filter((o) => o.id !== id && o.orderId !== id);
+  saveStore(store);
+
+  broadcastSSE('orders_update', store.orders);
+  res.json({ success: true, deletedId: id });
+});
+
+app.post('/api/orders/clear-archive', (req, res) => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  store.orders = store.orders.filter((o) => {
+    const oDate = o.createdAt ? new Date(o.createdAt).toISOString().split('T')[0] : '';
+    return oDate === todayStr;
+  });
+  saveStore(store);
+
+  broadcastSSE('orders_update', store.orders);
+  res.json({ success: true, remaining: store.orders.length });
+});
+
+app.post('/api/orders/clear-all', (_req, res) => {
+  store.orders = [];
+  saveStore(store);
+
+  broadcastSSE('orders_update', store.orders);
+  res.json({ success: true });
+});
+
+// General settings endpoints
+app.get('/api/settings', (_req, res) => {
+  res.json(store.settings);
+});
+
+app.post('/api/settings', (req, res) => {
+  store.settings = { ...store.settings, ...req.body };
+  saveStore(store);
+  broadcastSSE('settings_update', store.settings);
+  res.json({ success: true, settings: store.settings });
+});
+
+// Cleanup product images from storage tracker endpoint
+app.post('/api/cleanup-product-images', (req, res) => {
+  const { productId, productName, imageUrls } = req.body || {};
+  console.log(`[Storage Cleanup] Triggered image cleanup for product ${productId} (${productName}): ${imageUrls?.length || 0} images`);
+  res.json({ success: true, count: imageUrls?.length || 0 });
+});
+
+// -------------------------------------------------------------
+// Customer Email Notifications & Directory Endpoints
+// -------------------------------------------------------------
+
+// Send Order Status Email Endpoint
+app.post('/api/send-order-email', async (req, res) => {
+  try {
+    const { order, status, recipientEmail, settings } = req.body || {};
+    const appUrl = `${req.protocol}://${req.get('host')}`;
+    const effectiveSettings = { ...store.settings, ...(settings || {}) };
+
+    const targetEmail = recipientEmail || order?.customerEmail;
+    if (!targetEmail) {
+      return res.status(400).json({ success: false, message: 'No recipient email specified' });
+    }
+
+    const result = await sendOrderNotificationEmail({
+      order,
+      status: status || order?.status || 'pending',
+      recipientEmail: targetEmail,
+      settings: effectiveSettings,
+      appUrl,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('Error in /api/send-order-email:', err);
+    res.status(500).json({ success: false, message: err?.message || 'Server error sending email' });
+  }
+});
+
+// Admin Test Email Endpoint
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { recipientEmail, settings } = req.body || {};
+    const appUrl = `${req.protocol}://${req.get('host')}`;
+    const effectiveSettings = { ...store.settings, ...(settings || {}) };
+
+    if (!recipientEmail) {
+      return res.status(400).json({ success: false, message: 'Recipient email is required for test' });
+    }
+
+    const dummyOrder = {
+      orderId: 'TEST-' + Math.floor(1000 + Math.random() * 9000),
+      customerName: 'Store Administrator',
+      totalAmount: 299,
+      subtotal: 299,
+      address: 'Main Market, Gidhaur (Sample Delivery Address)',
+      paymentMethod: 'UPI',
+      paymentStatus: 'paid',
+      items: [
+        {
+          product: { name: 'Fresh Artisan Cake / Pizza', price: 299 },
+          quantity: 1,
+        },
+      ],
+    };
+
+    const result = await sendOrderNotificationEmail({
+      order: dummyOrder,
+      status: 'pending',
+      recipientEmail,
+      settings: effectiveSettings,
+      appUrl,
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err?.message || 'Test email failed' });
+  }
+});
+
+// Customer Emails Directory Endpoints
+app.get('/api/customer-emails', (_req, res) => {
+  res.json(store.customerEmails || []);
+});
+
+app.post('/api/customer-emails', (req, res) => {
+  const record = req.body;
+  if (!record || !record.email) {
+    return res.status(400).json({ success: false, message: 'Email required' });
+  }
+
+  const cleanEmail = (record.email || '').trim().toLowerCase();
+  const existingIdx = (store.customerEmails || []).findIndex(
+    (c: any) => c.email.toLowerCase() === cleanEmail
+  );
+
+  if (existingIdx !== -1) {
+    store.customerEmails[existingIdx] = {
+      ...store.customerEmails[existingIdx],
+      ...record,
+      email: cleanEmail,
+      totalOrders: (store.customerEmails[existingIdx].totalOrders || 1) + 1,
+      lastOrderDate: new Date().toISOString(),
+    };
+  } else {
+    store.customerEmails = [
+      {
+        ...record,
+        email: cleanEmail,
+        totalOrders: 1,
+        lastOrderDate: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      ...(store.customerEmails || []),
+    ];
+  }
+
+  saveStore(store);
+  res.json({ success: true, count: store.customerEmails.length });
+});
+
+app.delete('/api/customer-emails/:id', (req, res) => {
+  const { id } = req.params;
+  const cleanId = id.toLowerCase();
+  store.customerEmails = (store.customerEmails || []).filter(
+    (c: any) => c.id !== id && c.email.toLowerCase() !== cleanId
+  );
+  saveStore(store);
+  res.json({ success: true, remaining: store.customerEmails.length });
+});
+
+app.post('/api/customer-emails/clear', (_req, res) => {
+  store.customerEmails = [];
+  saveStore(store);
+  res.json({ success: true });
+});
+
+// -------------------------------------------------------------
+// Vite middleware integration (Vite in dev, static files in prod)
+// -------------------------------------------------------------
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    // Express 4 wildcard
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Swadeep Full-Stack Server running on port ${PORT}`);
+  });
+}
+
+startServer();

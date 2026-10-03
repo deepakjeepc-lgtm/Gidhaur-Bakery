@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Solid white background -->
+  <rect width="512" height="512" fill="#ffffff"/>
+  
+  <!-- "deep" Typography matching reference: d (coral-orange), ee (black), p (coral-orange) -->
+  <text 
+    x="256" 
+    y="312" 
+    font-family="'Playfair Display', Georgia, 'Times New Roman', serif" 
+    font-size="166" 
+    font-weight="900" 
+    text-anchor="middle" 
+    letter-spacing="-4"
+  >
+    <tspan fill="#ff502b">d</tspan><tspan fill="#0a0a0a">ee</tspan><tspan fill="#ff502b">p</tspan>
+  </text>
+</svg>

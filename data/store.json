@@ -1,0 +1,57 @@
+{
+  "bannerSettings": {
+    "isEnabled": true,
+    "autoSlideIntervalSeconds": 5,
+    "banners": [
+      {
+        "id": "banner-welcome-1",
+        "badge": "SPECIAL OFFER",
+        "title": "Artisan Pizzas & Burger Combos",
+        "description": "Get flat 20% off on all freshly crafted stone-baked pizzas and gourmet meal combos.",
+        "couponCode": "GIDHAUR20",
+        "discountText": "20% OFF",
+        "targetCategory": "Combos",
+        "buttonText": "Explore Combos",
+        "imageUrl": "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=600&q=80",
+        "isActive": true,
+        "order": 1,
+        "createdAt": "2026-09-15T15:56:30.437Z"
+      },
+      {
+        "id": "banner-welcome-2",
+        "badge": "CHEF'S SPECIAL",
+        "title": "Signature Desserts & Shakes",
+        "description": "Indulge in melt-in-mouth Belgian chocolate brownies, pastries, and thick creamy shakes.",
+        "couponCode": "SWEET50",
+        "discountText": "FLAT ₹50 OFF",
+        "targetCategory": "Desserts",
+        "buttonText": "View Desserts",
+        "imageUrl": "https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&w=600&q=80",
+        "isActive": true,
+        "order": 2,
+        "createdAt": "2026-09-15T15:56:30.437Z"
+      },
+      {
+        "id": "banner-welcome-3",
+        "badge": "EXPRESS DELIVERY",
+        "title": "Free Delivery on Orders Above ₹199",
+        "description": "Order your favorite snacks & meals and get piping-hot delivery right to your doorstep.",
+        "couponCode": "FREEDEL",
+        "discountText": "FREE DELIVERY",
+        "targetCategory": "All",
+        "buttonText": "Order Now",
+        "imageUrl": "https://images.unsplash.com/photo-1526367790999-0150786686a2?auto=format&fit=crop&w=600&q=80",
+        "isActive": true,
+        "order": 3,
+        "createdAt": "2026-09-15T15:56:30.437Z"
+      }
+    ],
+    "updatedAt": "2026-09-15T15:56:48.314Z"
+  },
+  "orders": [],
+  "staff": {
+    "deliveryAgents": [],
+    "kitchenStaff": []
+  },
+  "settings": {}
+}
