@@ -9,8 +9,9 @@
   "dir": "ltr",
   "display": "standalone",
   "display_override": [
-    "window-controls-overlay",
+    "fullscreen",
     "standalone",
+    "window-controls-overlay",
     "browser"
   ],
   "background_color": "#ffffff",
