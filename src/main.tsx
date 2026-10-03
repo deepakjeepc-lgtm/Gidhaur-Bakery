@@ -24,11 +24,16 @@ if (typeof window !== 'undefined') {
 }
 
 // Register PWA service worker
-if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((err) => {
-      console.warn('SW registration failed:', err);
-    });
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => {
+        console.log('PWA Service Worker registered:', reg.scope);
+      })
+      .catch((err) => {
+        console.warn('SW registration failed:', err);
+      });
   });
 }
 

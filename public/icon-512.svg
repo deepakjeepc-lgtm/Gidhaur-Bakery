@@ -1,17 +1,52 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Solid white background -->
-  <rect width="512" height="512" fill="#ffffff"/>
+  <defs>
+    <linearGradient id="gbGrad512" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="goldGrad512" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="50%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
   
-  <!-- "deep" Typography matching reference: d (coral-orange), ee (black), p (coral-orange) -->
+  <!-- Outer Rounded Squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#gbGrad512)"/>
+  
+  <!-- Subtle inner border -->
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="url(#goldGrad512)" stroke-width="6" opacity="0.35"/>
+  
+  <!-- Chef Hat / Bakery Artisan Icon -->
+  <g transform="translate(256, 185) scale(3.1)">
+    <!-- Bakery Crown / Chef Hat -->
+    <path d="M-22 6 C-28 -4, -14 -18, -4 -12 C0 -22, 16 -22, 20 -10 C30 -14, 40 0, 34 10 C36 14, 30 18, 22 18 L-14 18 C-22 18, -26 12, -22 6 Z" fill="url(#goldGrad512)" transform="translate(-8, -4)"/>
+    <path d="M-18 16 L22 16 L20 23 L-16 23 Z" fill="#ffffff" opacity="0.9"/>
+  </g>
+  
+  <!-- Brand Monogram "GIDHAUR BAKERY" -->
   <text 
     x="256" 
-    y="312" 
-    font-family="'Playfair Display', Georgia, 'Times New Roman', serif" 
-    font-size="166" 
+    y="378" 
+    font-family="'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif" 
+    font-size="90" 
     font-weight="900" 
+    fill="#ffffff" 
     text-anchor="middle" 
-    letter-spacing="-4"
+    letter-spacing="5"
   >
-    <tspan fill="#ff502b">d</tspan><tspan fill="#0a0a0a">ee</tspan><tspan fill="#ff502b">p</tspan>
+    GIDHAUR
+  </text>
+  <text 
+    x="256" 
+    y="432" 
+    font-family="'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif" 
+    font-size="36" 
+    font-weight="800" 
+    fill="url(#goldGrad512)" 
+    text-anchor="middle" 
+    letter-spacing="14"
+  >
+    BAKERY
   </text>
 </svg>

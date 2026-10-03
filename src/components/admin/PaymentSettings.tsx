@@ -554,44 +554,38 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
     {
       id: 'website' as SettingsSection,
       name: 'Website & Logos',
-      shortName: 'Website Info',
+      shortName: 'Website & Logos',
       icon: Globe,
-      badge: branding.faviconUrl || branding.pwaIconUrl ? 'Configured' : 'Default',
     },
     {
       id: 'store' as SettingsSection,
-      name: 'Store Profile & Hours',
+      name: 'Store Profile',
       shortName: 'Store Profile',
       icon: Store,
-      badge: isStoreOpen ? 'Open' : 'Closed',
     },
     {
       id: 'payments' as SettingsSection,
       name: 'Payments & UPI',
-      shortName: 'Payments',
+      shortName: 'Payments & UPI',
       icon: CreditCard,
-      badge: enableOnlinePayment ? 'Online Active' : 'POD Only',
     },
     {
       id: 'delivery' as SettingsSection,
       name: 'Delivery & Coverage',
-      shortName: 'Delivery',
+      shortName: 'Delivery & Coverage',
       icon: Truck,
-      badge: `${freeDeliveryRadiusKm} km Free`,
     },
     {
       id: 'emails' as SettingsSection,
-      name: 'Email & Customers',
-      shortName: 'Emails',
+      name: 'Email Notifications',
+      shortName: 'Email Notifications',
       icon: Mail,
-      badge: customerEmailsList.length > 0 ? `${customerEmailsList.length} Emails` : (senderEmail ? 'Gmail Active' : 'Not Set'),
     },
     {
       id: 'security' as SettingsSection,
       name: 'Staff & Security',
-      shortName: 'Accounts',
+      shortName: 'Staff & Security',
       icon: ShieldCheck,
-      badge: 'Admin Access',
     },
   ];
 
@@ -623,9 +617,9 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
         </button>
       </div>
 
-      {/* Sub-Navigation Switcher Bar - Clean unified dock */}
-      <div className="bg-slate-100/90 rounded-2xl sm:rounded-3xl p-1.5 border border-slate-200/80 shadow-2xs">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
+      {/* Sub-Navigation Switcher Bar - Pristine Single-Row Capsule Dock (Icon + Title Only) */}
+      <div className="bg-slate-100/90 rounded-full p-1.5 border border-slate-200/80 shadow-2xs overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-1 sm:gap-1.5 min-w-max">
           {SECTIONS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeSection === tab.id;
@@ -634,39 +628,24 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveSection(tab.id)}
-                className={`flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-2.5 px-3 py-2.5 rounded-xl sm:rounded-2xl transition-all cursor-pointer text-left ${
+                className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-full transition-all cursor-pointer select-none whitespace-nowrap shrink-0 ${
                   isActive
                     ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'bg-transparent hover:bg-white/80 text-slate-600 hover:text-slate-900'
+                    : 'bg-transparent hover:bg-white/80 text-slate-600 hover:text-slate-900 font-semibold'
                 }`}
               >
                 <div
-                  className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
+                  className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                     isActive
-                      ? 'bg-white/15 text-white'
-                      : 'bg-white text-slate-500 border border-slate-200/70 shadow-2xs'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white text-slate-600 border border-slate-200/80 shadow-2xs'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                 </div>
-                <div className="min-w-0 text-center sm:text-left">
-                  <span
-                    className={`text-xs block truncate leading-tight ${
-                      isActive ? 'font-extrabold text-white' : 'font-semibold text-slate-700'
-                    }`}
-                  >
-                    {tab.shortName}
-                  </span>
-                  <span
-                    className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full inline-block mt-0.5 border ${
-                      isActive
-                        ? 'bg-white/20 text-white border-white/20'
-                        : 'bg-white text-slate-500 border-slate-200/80'
-                    }`}
-                  >
-                    {tab.badge}
-                  </span>
-                </div>
+                <span className="text-xs font-bold">
+                  {tab.name}
+                </span>
               </button>
             );
           })}

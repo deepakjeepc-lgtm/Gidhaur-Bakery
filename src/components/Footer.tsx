@@ -2,6 +2,7 @@ import React from 'react';
 import { Clock, Phone, Lock, ShieldCheck } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 import { useLocation } from '../context/LocationContext';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface FooterProps {
   onGoToAdmin?: () => void;
@@ -42,8 +43,11 @@ export const Footer: React.FC<FooterProps> = ({ onGoToAdmin }) => {
           </a>
         </div>
 
-        {/* Right Section: Official FSSAI License Badge & Admin Lock */}
+        {/* Right Section: Official FSSAI Certified Badge, PWA Install & Admin Lock */}
         <div className="flex items-center gap-2.5 flex-wrap justify-center">
+          {/* In-App PWA Install Button */}
+          <PWAInstallButton />
+
           {/* Official FSSAI Certified Badge */}
           <div
             className="inline-flex items-center gap-2 px-3 py-1 bg-white rounded-xl border border-slate-200 shadow-2xs select-none"

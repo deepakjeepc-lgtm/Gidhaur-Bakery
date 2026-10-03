@@ -1,8 +1,12 @@
-const CACHE_NAME = 'swadeep-pwa-v1';
+const CACHE_NAME = 'gidhaur-bakery-pwa-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-512.png',
+  '/apple-touch-icon.png',
   '/icon-192.svg',
   '/icon-512.svg'
 ];
@@ -54,7 +58,10 @@ self.addEventListener('fetch', (event) => {
         if (
           networkResponse &&
           networkResponse.status === 200 &&
-          (url.origin === location.origin || url.hostname.includes('fonts.googleapis.com') || url.hostname.includes('gstatic.com') || url.hostname.includes('unsplash.com'))
+          (url.origin === location.origin ||
+            url.hostname.includes('fonts.googleapis.com') ||
+            url.hostname.includes('gstatic.com') ||
+            url.hostname.includes('unsplash.com'))
         ) {
           const responseClone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {

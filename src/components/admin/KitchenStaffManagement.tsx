@@ -416,7 +416,7 @@ export const KitchenStaffManagement: React.FC<KitchenStaffManagementProps> = ({
                   <input
                     type="email"
                     required
-                    placeholder="chef.vikram@swadeep.com"
+                    placeholder="chef.vikram@gidhaurbakery.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-slate-900"
