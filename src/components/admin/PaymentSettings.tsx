@@ -1030,151 +1030,158 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
             </div>
 
             {/* 3. PWA & MOBILE APP ICONS STUDIO (HD MULTI-RESOLUTION AUTO-GENERATOR) */}
-            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs hover:border-amber-300/80 transition-colors p-5 space-y-4 flex flex-col justify-between md:col-span-2">
-              <div>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3 pb-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-extrabold text-sm shadow-xs">
+            <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm hover:border-amber-300 transition-all p-5 sm:p-6 space-y-5 flex flex-col justify-between md:col-span-2">
+              <div className="space-y-4">
+                {/* Header with Title & Live Engine Badge */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white flex items-center justify-center font-heading font-black text-base shadow-sm shadow-amber-500/20 shrink-0">
                       3
                     </div>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h4 className="font-heading font-extrabold text-base text-slate-900">
-                          Master PWA & Mobile App Store Icon (HD Auto-Generator)
+                        <h4 className="font-heading font-extrabold text-base text-slate-900 tracking-tight">
+                          Master PWA & Mobile App Store Icons
                         </h4>
-                        <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600 inline" />
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[10px] font-bold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           Multi-Resolution Sync Engine
                         </span>
                       </div>
-                      <span className="text-xs font-semibold text-slate-500 block mt-0.5">
+                      <p className="text-xs text-slate-500 font-medium mt-0.5">
                         One upload automatically compiles all 6 exact HD icon files for Android APK, PWABuilder, iOS & Google Play.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Requirements & Guidelines Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3 bg-slate-50/70 hover:bg-slate-50 rounded-2xl border border-slate-200/70 transition-colors flex items-start gap-2.5">
+                    <div className="w-7 h-7 rounded-xl bg-amber-100/80 text-amber-800 flex items-center justify-center font-bold text-xs shrink-0">
+                      1
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-bold text-slate-800 block">Recommended Dimensions</span>
+                      <span className="text-[10px] text-slate-500 font-medium leading-tight block mt-0.5">
+                        512×512 px or 1024×1024 px (Square 1:1)
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-50/70 hover:bg-slate-50 rounded-2xl border border-slate-200/70 transition-colors flex items-start gap-2.5">
+                    <div className="w-7 h-7 rounded-xl bg-amber-100/80 text-amber-800 flex items-center justify-center font-bold text-xs shrink-0">
+                      2
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-bold text-slate-800 block">Supported Formats</span>
+                      <span className="text-[10px] text-slate-500 font-medium leading-tight block mt-0.5">
+                        PNG (Solid / Transparent), WebP, JPG, SVG
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-50/70 hover:bg-slate-50 rounded-2xl border border-slate-200/70 transition-colors flex items-start gap-2.5">
+                    <div className="w-7 h-7 rounded-xl bg-amber-100/80 text-amber-800 flex items-center justify-center font-bold text-xs shrink-0">
+                      3
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-bold text-slate-800 block">Auto-Compiled Assets</span>
+                      <span className="text-[10px] text-slate-500 font-medium leading-tight block mt-0.5">
+                        512px, 192px, 180px iOS, Adaptive Maskable
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Requirements Subtitle Checklist Box */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200/80 mb-4 text-xs text-slate-600">
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-lg bg-amber-100 text-amber-800 font-black text-[10px] flex items-center justify-center shrink-0">
-                      1
-                    </span>
-                    <div>
-                      <strong className="text-slate-800 block text-[11px]">Recommended Size:</strong>
-                      <span className="text-[10px] text-slate-500 font-medium">512×512 px or 1024×1024 px Square 1:1</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-lg bg-amber-100 text-amber-800 font-black text-[10px] flex items-center justify-center shrink-0">
-                      2
-                    </span>
-                    <div>
-                      <strong className="text-slate-800 block text-[11px]">Formats Supported:</strong>
-                      <span className="text-[10px] text-slate-500 font-medium">PNG (Solid / Transparent), WebP, JPG, SVG</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-lg bg-amber-100 text-amber-800 font-black text-[10px] flex items-center justify-center shrink-0">
-                      3
-                    </span>
-                    <div>
-                      <strong className="text-slate-800 block text-[11px]">Auto-Compiled Files:</strong>
-                      <span className="text-[10px] text-slate-500 font-medium">512px, 192px, 180px iOS, Adaptive Maskable</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Multi-Device Live Interactive Preview Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {/* Multi-Device Live Interactive Previews */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
                   {/* Variant 1: Android Adaptive Squircle */}
-                  <div className="p-3 bg-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <div className="p-3.5 bg-gradient-to-b from-slate-50/80 to-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2.5 group">
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
                       Android Launcher
                     </span>
-                    <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 shadow-md flex items-center justify-center overflow-hidden relative group">
+                    <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200/90 shadow-md shadow-slate-900/5 flex items-center justify-center overflow-hidden p-0.5 transition-transform group-hover:scale-105">
                       <img
-                        src={branding.pwaIconUrl || '/icon-192.png'}
+                        src={branding.pwaIconUrl || '/icon-192.png?v=3'}
                         alt="Android Icon"
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover rounded-xl"
                       />
                     </div>
-                    <span className="text-[9px] font-semibold text-slate-500">
+                    <span className="text-[10px] font-bold text-slate-600">
                       Adaptive Squircle
                     </span>
                   </div>
 
                   {/* Variant 2: iOS Continuous Rounded Tile */}
-                  <div className="p-3 bg-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <div className="p-3.5 bg-gradient-to-b from-slate-50/80 to-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2.5 group">
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
                       iPhone / iPad
                     </span>
-                    <div className="w-14 h-14 rounded-[18px] bg-white border border-slate-200 shadow-md flex items-center justify-center overflow-hidden">
+                    <div className="w-16 h-16 rounded-[20px] bg-white border border-slate-200/90 shadow-md shadow-slate-900/5 flex items-center justify-center overflow-hidden p-0.5 transition-transform group-hover:scale-105">
                       <img
-                        src={branding.pwaIconUrl || '/apple-touch-icon.png'}
+                        src={branding.pwaIconUrl || '/apple-touch-icon.png?v=3'}
                         alt="iOS Icon"
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover rounded-[18px]"
                       />
                     </div>
-                    <span className="text-[9px] font-semibold text-slate-500">
+                    <span className="text-[10px] font-bold text-slate-600">
                       180×180 iOS Tile
                     </span>
                   </div>
 
                   {/* Variant 3: Google Play Store Master */}
-                  <div className="p-3 bg-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <div className="p-3.5 bg-gradient-to-b from-slate-50/80 to-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2.5 group">
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
                       Google Play Store
                     </span>
-                    <div className="w-14 h-14 rounded-xl bg-white border border-slate-200 shadow-md flex items-center justify-center overflow-hidden">
+                    <div className="w-16 h-16 rounded-xl bg-white border border-slate-200/90 shadow-md shadow-slate-900/5 flex items-center justify-center overflow-hidden p-0.5 transition-transform group-hover:scale-105">
                       <img
-                        src={branding.pwaIconUrl || '/icon-512.png'}
+                        src={branding.pwaIconUrl || '/icon-512.png?v=3'}
                         alt="Master 512 Icon"
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover rounded-lg"
                       />
                     </div>
-                    <span className="text-[9px] font-semibold text-slate-500">
+                    <span className="text-[10px] font-bold text-slate-600">
                       512×512 HD Master
                     </span>
                   </div>
 
                   {/* Variant 4: Browser Tab Favicon */}
-                  <div className="p-3 bg-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      Browser Tab Favicon
+                  <div className="p-3.5 bg-gradient-to-b from-slate-50/80 to-white rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col items-center text-center space-y-2.5 group">
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                      Browser Favicon
                     </span>
-                    <div className="w-14 h-14 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center">
-                      <div className="w-6 h-6 rounded-xs overflow-hidden shadow-2xs">
+                    <div className="w-16 h-16 rounded-xl bg-slate-100/90 border border-slate-200 flex items-center justify-center transition-transform group-hover:scale-105">
+                      <div className="w-7 h-7 rounded-sm overflow-hidden shadow-2xs bg-white">
                         <img
-                          src={branding.faviconUrl || branding.pwaIconUrl || '/icon-192.png'}
+                          src={branding.faviconUrl || branding.pwaIconUrl || '/icon-192.png?v=3'}
                           alt="Favicon"
                           className="w-full h-full object-cover"
                         />
                       </div>
                     </div>
-                    <span className="text-[9px] font-semibold text-slate-500">
+                    <span className="text-[10px] font-bold text-slate-600">
                       Tab Icon
                     </span>
                   </div>
                 </div>
 
-                {/* Generated Files Verified Badges */}
-                <div className="mt-3.5 pt-3 border-t border-slate-100 flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">
-                    Compiled Files:
+                {/* Compiled Files Status Strip */}
+                <div className="pt-2 flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mr-1">
+                    Verified Assets:
                   </span>
                   {['icon-512.png', 'pwa-512x512.png', 'icon-192.png', 'pwa-192x192.png', 'icon-maskable-512.png', 'apple-touch-icon.png'].map((f) => (
-                    <span key={f} className="text-[9px] font-mono font-semibold px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md border border-slate-200/70">
-                      ✓ {f}
+                    <span key={f} className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md border border-slate-200/80 shadow-2xs">
+                      <span className="text-emerald-600 font-bold">✓</span> {f}
                     </span>
                   ))}
                 </div>
               </div>
 
-              {/* Upload & Actions Control Bar */}
-              <div className="pt-3 flex flex-col sm:flex-row items-center gap-2.5">
+              {/* Upload & Reset Controls */}
+              <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-center gap-2.5">
                 <input
                   type="file"
                   ref={appIconInputRef}
@@ -1190,7 +1197,7 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
                   type="button"
                   onClick={() => appIconInputRef.current?.click()}
                   disabled={isUploadingLogo === 'appIcon'}
-                  className="w-full sm:flex-1 py-3 px-5 rounded-2xl bg-gradient-to-r from-amber-600 via-amber-700 to-amber-800 hover:from-amber-700 hover:to-amber-900 active:bg-amber-950 disabled:bg-slate-300 text-white font-extrabold text-xs flex items-center justify-center gap-2.5 shadow-md shadow-amber-600/25 transition-all active:scale-95 cursor-pointer"
+                  className="w-full sm:flex-1 py-3 px-5 rounded-2xl bg-gradient-to-r from-amber-600 via-amber-700 to-amber-800 hover:from-amber-700 hover:to-amber-900 active:scale-[0.98] disabled:bg-slate-300 text-white font-heading font-extrabold text-xs flex items-center justify-center gap-2.5 shadow-sm shadow-amber-600/30 transition-all cursor-pointer"
                 >
                   <Upload className="w-4 h-4 text-amber-100" />
                   <span>
@@ -1204,7 +1211,7 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
                   <button
                     type="button"
                     onClick={() => handleRemoveAppIcon()}
-                    className="py-3 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                    className="py-3 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 active:scale-[0.98] text-rose-600 border border-rose-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shrink-0"
                     title="Reset to Default"
                   >
                     <Trash2 className="w-4 h-4" />

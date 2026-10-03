@@ -38,13 +38,13 @@ export function applyWebsiteBrandingToDocument(settings: Partial<RestaurantSetti
     if (type) el.type = type;
   };
 
-  // 2. Favicon (Browser Tab Icon)
-  const activeFavicon = (settings.faviconUrl && settings.faviconUrl.trim()) || '/icon-192.png';
+  // 2. Favicon (Browser Tab Icon - Cache Busted)
+  const activeFavicon = (settings.faviconUrl && settings.faviconUrl.trim()) || '/icon-192.png?v=3';
   setLinkTag('icon', activeFavicon, 'image/png');
   setLinkTag('shortcut icon', activeFavicon, 'image/png');
 
   // 3. Apple Touch Icon & PWA Mobile Icon (Add to Home Screen)
-  const pwaIcon = (settings.pwaIconUrl && settings.pwaIconUrl.trim()) || (settings.faviconUrl && settings.faviconUrl.trim()) || '/apple-touch-icon.png';
+  const pwaIcon = (settings.pwaIconUrl && settings.pwaIconUrl.trim()) || (settings.faviconUrl && settings.faviconUrl.trim()) || '/apple-touch-icon.png?v=3';
   setLinkTag('apple-touch-icon', pwaIcon);
 
   // 4. Meta Description & SEO Title
