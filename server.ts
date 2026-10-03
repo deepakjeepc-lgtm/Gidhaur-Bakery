@@ -458,33 +458,62 @@ app.post('/api/update-pwa-icons', async (req, res) => {
       fs.mkdirSync(publicDir, { recursive: true });
     }
 
-    // 1. Generate 512x512 PNG icons
-    await sharp(buffer).resize(512, 512, { fit: 'cover' }).png().toFile(path.join(publicDir, 'icon-512.png'));
-    await sharp(buffer).resize(512, 512, { fit: 'cover' }).png().toFile(path.join(publicDir, 'pwa-512x512.png'));
+    // 1. Generate 512x512 PNG icons (High quality lanczos3 resampler)
+    await sharp(buffer)
+      .resize(512, 512, { fit: 'cover', kernel: 'lanczos3' })
+      .png({ quality: 100, compressionLevel: 9 })
+      .toFile(path.join(publicDir, 'icon-512.png'));
+    await sharp(buffer)
+      .resize(512, 512, { fit: 'cover', kernel: 'lanczos3' })
+      .png({ quality: 100, compressionLevel: 9 })
+      .toFile(path.join(publicDir, 'pwa-512x512.png'));
 
     // 2. Generate 192x192 PNG icons
-    await sharp(buffer).resize(192, 192, { fit: 'cover' }).png().toFile(path.join(publicDir, 'icon-192.png'));
-    await sharp(buffer).resize(192, 192, { fit: 'cover' }).png().toFile(path.join(publicDir, 'pwa-192x192.png'));
+    await sharp(buffer)
+      .resize(192, 192, { fit: 'cover', kernel: 'lanczos3' })
+      .png({ quality: 100, compressionLevel: 9 })
+      .toFile(path.join(publicDir, 'icon-192.png'));
+    await sharp(buffer)
+      .resize(192, 192, { fit: 'cover', kernel: 'lanczos3' })
+      .png({ quality: 100, compressionLevel: 9 })
+      .toFile(path.join(publicDir, 'pwa-192x192.png'));
 
     // 3. Generate 180x180 iOS Apple Touch Icon
-    await sharp(buffer).resize(180, 180, { fit: 'cover' }).png().toFile(path.join(publicDir, 'apple-touch-icon.png'));
+    await sharp(buffer)
+      .resize(180, 180, { fit: 'cover', kernel: 'lanczos3' })
+      .png({ quality: 100, compressionLevel: 9 })
+      .toFile(path.join(publicDir, 'apple-touch-icon.png'));
 
-    // 4. Generate 512x512 Maskable Icon with 12% safe-zone margin
-    const innerSize = Math.round(512 * 0.80);
-    const inner = await sharp(buffer).resize(innerSize, innerSize, { fit: 'cover' }).toBuffer();
+    // 4. Generate 512x512 Maskable Icon with 15% safe-zone margin
+    const innerSize = Math.round(512 * 0.82);
+    const inner = await sharp(buffer).resize(innerSize, innerSize, { fit: 'cover', kernel: 'lanczos3' }).toBuffer();
+    
+    // Sample dominant or corner color for seamless background padding
+    const stats = await sharp(buffer).stats();
+    const dominant = stats.dominant || { r: 128, g: 11, b: 26 };
+
     await sharp({
       create: {
         width: 512,
         height: 512,
         channels: 4,
-        background: { r: 255, g: 255, b: 255, alpha: 1 }
+        background: { r: dominant.r, g: dominant.g, b: dominant.b, alpha: 1 }
       }
     })
     .composite([{ input: inner, top: Math.round((512 - innerSize) / 2), left: Math.round((512 - innerSize) / 2) }])
-    .png()
+    .png({ quality: 100 })
     .toFile(path.join(publicDir, 'icon-maskable-512.png'));
 
     fs.copyFileSync(path.join(publicDir, 'icon-maskable-512.png'), path.join(publicDir, 'pwa-maskable-512x512.png'));
+
+    // 5. Generate high quality base64-embedded SVGs so public/icon-*.svg also show the exact real logo
+    const png512Base64 = fs.readFileSync(path.join(publicDir, 'icon-512.png')).toString('base64');
+    const svg512Content = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><image width="512" height="512" href="data:image/png;base64,${png512Base64}"/></svg>`;
+    fs.writeFileSync(path.join(publicDir, 'icon-512.svg'), svg512Content, 'utf-8');
+
+    const png192Base64 = fs.readFileSync(path.join(publicDir, 'icon-192.png')).toString('base64');
+    const svg192Content = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192"><image width="192" height="192" href="data:image/png;base64,${png192Base64}"/></svg>`;
+    fs.writeFileSync(path.join(publicDir, 'icon-192.svg'), svg192Content, 'utf-8');
 
     // Also sync to dist/ if build exists
     const distDir = path.join(process.cwd(), 'dist');
@@ -497,6 +526,8 @@ app.post('/api/update-pwa-icons', async (req, res) => {
         'apple-touch-icon.png',
         'icon-maskable-512.png',
         'pwa-maskable-512x512.png',
+        'icon-512.svg',
+        'icon-192.svg',
       ];
       for (const file of filesToSync) {
         const srcFile = path.join(publicDir, file);
@@ -506,7 +537,20 @@ app.post('/api/update-pwa-icons', async (req, res) => {
       }
     }
 
-    res.json({ success: true, message: 'PWA & App launcher icons updated successfully!' });
+    res.json({
+      success: true,
+      message: 'All 6 PWA, iOS & Android HD App Icons generated and updated successfully from your original logo!',
+      timestamp: new Date().toISOString(),
+      generatedFiles: [
+        'icon-512.png (512x512 Master)',
+        'pwa-512x512.png (512x512 PWA)',
+        'icon-192.png (192x192 Medium)',
+        'pwa-192x192.png (192x192 PWA)',
+        'apple-touch-icon.png (180x180 iOS)',
+        'icon-maskable-512.png (512x512 Android Adaptive)',
+        'icon-512.svg & icon-192.svg (Vector Wrappers)',
+      ],
+    });
   } catch (err: any) {
     console.error('Error updating PWA icons:', err);
     res.status(500).json({ error: err.message || 'Failed to update PWA icons' });

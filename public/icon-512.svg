@@ -1,52 +1,60 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="gbGrad512" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0f172a"/>
-      <stop offset="100%" stop-color="#1e293b"/>
-    </linearGradient>
-    <linearGradient id="goldGrad512" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#fbbf24"/>
-      <stop offset="50%" stop-color="#f59e0b"/>
-      <stop offset="100%" stop-color="#d97706"/>
-    </linearGradient>
+    <!-- Rich deep crimson maroon background matching original artwork -->
+    <radialGradient id="bgGrad" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#800618"/>
+      <stop offset="85%" stop-color="#690412"/>
+      <stop offset="100%" stop-color="#55030e"/>
+    </radialGradient>
   </defs>
-  
-  <!-- Outer Rounded Squircle -->
-  <rect width="512" height="512" rx="112" fill="url(#gbGrad512)"/>
-  
-  <!-- Subtle inner border -->
-  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="url(#goldGrad512)" stroke-width="6" opacity="0.35"/>
-  
-  <!-- Chef Hat / Bakery Artisan Icon -->
-  <g transform="translate(256, 185) scale(3.1)">
-    <!-- Bakery Crown / Chef Hat -->
-    <path d="M-22 6 C-28 -4, -14 -18, -4 -12 C0 -22, 16 -22, 20 -10 C30 -14, 40 0, 34 10 C36 14, 30 18, 22 18 L-14 18 C-22 18, -26 12, -22 6 Z" fill="url(#goldGrad512)" transform="translate(-8, -4)"/>
-    <path d="M-18 16 L22 16 L20 23 L-16 23 Z" fill="#ffffff" opacity="0.9"/>
+
+  <!-- Squircle rounded container -->
+  <rect width="512" height="512" rx="106" fill="url(#bgGrad)"/>
+
+  <!-- Fluid Swirl & Droplets in Pure Cream White -->
+  <g fill="#ffffff">
+    <!-- Main Sweeping Fluid Baker's "G" Swirl -->
+    <path d="M 358 178
+             C 334 196, 302 216, 260 238
+             C 214 262, 174 294, 158 334
+             C 142 374, 154 416, 194 438
+             C 238 462, 298 450, 344 414
+             C 388 380, 404 330, 394 286
+             C 386 250, 360 224, 330 224
+             C 300 224, 274 246, 264 274
+             C 254 302, 264 330, 290 344
+             C 308 354, 324 350, 330 338
+             C 334 328, 328 320, 318 316
+             C 308 312, 302 302, 304 292
+             C 308 278, 322 268, 336 270
+             C 352 272, 360 288, 358 308
+             C 354 340, 332 378, 292 396
+             C 252 414, 206 404, 182 376
+             C 162 352, 160 320, 176 288
+             C 198 244, 244 208, 300 178
+             C 340 156, 372 136, 386 116
+             C 390 110, 396 112, 394 120
+             C 390 138, 378 162, 358 178 Z" />
+
+    <!-- Droplet 1 (Top Spurt - Bulbous outer, tapered base) -->
+    <path d="M 334 94
+             C 328 116, 332 142, 344 158
+             C 352 148, 368 124, 376 98
+             C 382 76, 372 60, 356 62
+             C 344 64, 338 76, 334 94 Z" />
+
+    <!-- Droplet 2 (Middle Spurt - Angled 45 deg) -->
+    <path d="M 390 134
+             C 380 152, 380 174, 390 188
+             C 400 180, 420 162, 436 142
+             C 448 126, 444 110, 430 108
+             C 416 106, 400 116, 390 134 Z" />
+
+    <!-- Droplet 3 (Bottom Spurt - Flared right) -->
+    <path d="M 412 188
+             C 406 202, 408 218, 418 228
+             C 428 222, 448 210, 462 196
+             C 472 186, 470 172, 458 170
+             C 446 168, 424 174, 412 188 Z" />
   </g>
-  
-  <!-- Brand Monogram "GIDHAUR BAKERY" -->
-  <text 
-    x="256" 
-    y="378" 
-    font-family="'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif" 
-    font-size="90" 
-    font-weight="900" 
-    fill="#ffffff" 
-    text-anchor="middle" 
-    letter-spacing="5"
-  >
-    GIDHAUR
-  </text>
-  <text 
-    x="256" 
-    y="432" 
-    font-family="'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif" 
-    font-size="36" 
-    font-weight="800" 
-    fill="url(#goldGrad512)" 
-    text-anchor="middle" 
-    letter-spacing="14"
-  >
-    BAKERY
-  </text>
 </svg>

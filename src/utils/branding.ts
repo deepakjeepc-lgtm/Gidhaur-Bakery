@@ -38,17 +38,14 @@ export function applyWebsiteBrandingToDocument(settings: Partial<RestaurantSetti
     if (type) el.type = type;
   };
 
-  // 2. Favicon (Browser Tab Icon - e.g. Google Flow / ChatGPT / AI Studio style)
-  if (settings.faviconUrl && settings.faviconUrl.trim()) {
-    setLinkTag('icon', settings.faviconUrl);
-    setLinkTag('shortcut icon', settings.faviconUrl);
-  }
+  // 2. Favicon (Browser Tab Icon)
+  const activeFavicon = (settings.faviconUrl && settings.faviconUrl.trim()) || '/icon-192.png';
+  setLinkTag('icon', activeFavicon, 'image/png');
+  setLinkTag('shortcut icon', activeFavicon, 'image/png');
 
   // 3. Apple Touch Icon & PWA Mobile Icon (Add to Home Screen)
-  const pwaIcon = settings.pwaIconUrl || settings.faviconUrl;
-  if (pwaIcon && pwaIcon.trim()) {
-    setLinkTag('apple-touch-icon', pwaIcon);
-  }
+  const pwaIcon = (settings.pwaIconUrl && settings.pwaIconUrl.trim()) || (settings.faviconUrl && settings.faviconUrl.trim()) || '/apple-touch-icon.png';
+  setLinkTag('apple-touch-icon', pwaIcon);
 
   // 4. Meta Description & SEO Title
   if (settings.websiteDescription) {
