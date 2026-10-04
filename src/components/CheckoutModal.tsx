@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeft as ArrowLeftIcon,
   X as XIcon,
@@ -66,6 +66,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [showUpiQr, setShowUpiQr] = useState(false);
   const [copiedUpi, setCopiedUpi] = useState(false);
   const [upiUnavailableNotice, setUpiUnavailableNotice] = useState(false);
+  const [paymentErrorGlow, setPaymentErrorGlow] = useState(false);
+  const paymentSectionRef = useRef<HTMLDivElement>(null);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -79,14 +81,17 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const upiId = settings?.upiId?.trim() || 'gidhaurbakery@upi';
   const upiPayeeName = settings?.upiPayeeName?.trim() || 'Gidhaur Bakery';
 
-  // Auto-fill saved customer profile from this device
+  // Auto-fill saved customer profile from this device (Name, Phone, Address, Email ONLY).
+  // Cooking/delivery notes box must ALWAYS start fresh & empty for every order!
   useEffect(() => {
     if (isOpen) {
       triggerHaptic('medium');
       // Reset payment method selection to null every time modal opens
       setPaymentMethod(null);
+      setPaymentErrorGlow(false);
       setShowUpiQr(false);
       setUpiUnavailableNotice(false);
+      setNotes(''); // Strictly reset cooking/delivery note box to empty
       try {
         const savedProfileStr = localStorage.getItem('swadeep_customer_profile');
         if (savedProfileStr) {
@@ -95,7 +100,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           if (profile.phone) setPhone(profile.phone);
           if (profile.address) setAddress(profile.address);
           if (profile.customerEmail) setCustomerEmail(profile.customerEmail);
-          if (profile.notes) setNotes(profile.notes);
+
+          // Purge legacy saved notes from stored profile so it never reappears
+          if (profile.notes) {
+            delete profile.notes;
+            localStorage.setItem('swadeep_customer_profile', JSON.stringify(profile));
+          }
         }
       } catch (e) {
         console.warn('Could not read saved profile:', e);
@@ -153,7 +163,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
 
     if (!paymentMethod) {
-      errs.paymentMethod = 'Please choose a payment option to continue';
+      errs.paymentMethod = 'required';
+      setPaymentErrorGlow(true);
+      setTimeout(() => {
+        paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+    } else {
+      setPaymentErrorGlow(false);
     }
 
     setErrors(errs);
@@ -191,6 +207,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       return;
     }
     triggerHaptic('selection');
+    setPaymentErrorGlow(false);
     setUpiUnavailableNotice(false);
     setPaymentMethod('upi');
     if (errors.paymentMethod) setErrors((prev) => ({ ...prev, paymentMethod: '' }));
@@ -222,7 +239,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     const cleanEmail = customerEmail.trim();
     const cleanNotes = notes.trim();
 
-    // Auto-save profile for future orders
+    // Auto-save ONLY permanent identity details (Name, Phone, Address, Email) for future checkout.
+    // Cooking/delivery note is per-order only and is excluded so the note box stays completely fresh and empty.
     try {
       localStorage.setItem(
         'swadeep_customer_profile',
@@ -231,7 +249,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           phone: cleanPhone,
           address: cleanAddress,
           customerEmail: cleanEmail,
-          notes: cleanNotes,
           lastUpdated: new Date().toISOString(),
         })
       );
@@ -370,6 +387,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       }
 
       clearCart();
+      setNotes('');
       setIsSubmitting(false);
       triggerHaptic('success');
       try {
@@ -418,6 +436,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       } catch {}
 
       clearCart();
+      setNotes('');
       setIsSubmitting(false);
       triggerHaptic('success');
       try {
@@ -677,14 +696,18 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </div>
 
           {/* SECTION 3: Payment Method Selection (Default: None selected) */}
-          <div className="space-y-2" id="checkout-payment-selection-section">
+          <div ref={paymentSectionRef} className="space-y-2 scroll-mt-24" id="checkout-payment-selection-section">
             <div className="flex items-center justify-between px-1">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
                 <span>Payment Method</span>
                 <span className="text-red-500 font-bold">*</span>
               </span>
               {!paymentMethod ? (
-                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all ${
+                  paymentErrorGlow 
+                    ? 'text-red-700 bg-red-50 border-red-300' 
+                    : 'text-amber-700 bg-amber-50 border-amber-200'
+                }`}>
                   Select 1 option
                 </span>
               ) : (
@@ -694,14 +717,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               )}
             </div>
 
-            {/* Validation Error Banner */}
-            {errors.paymentMethod && (
-              <div className="p-2.5 bg-red-50 rounded-xl border border-red-200 text-red-700 text-xs flex items-center gap-2 animate-in fade-in duration-150">
-                <AlertCircleIcon className="w-4 h-4 shrink-0 text-red-500" />
-                <span className="font-medium">{errors.paymentMethod}</span>
-              </div>
-            )}
-
             {/* Payment Option Cards */}
             <div className="grid grid-cols-1 gap-2">
               {/* Option 1: Pay on Delivery */}
@@ -709,12 +724,15 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 onClick={() => {
                   triggerHaptic('selection');
                   setPaymentMethod('cod');
+                  setPaymentErrorGlow(false);
                   setUpiUnavailableNotice(false);
                   if (errors.paymentMethod) setErrors((prev) => ({ ...prev, paymentMethod: '' }));
                 }}
                 className={`py-3 px-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between select-none ${
                   paymentMethod === 'cod'
                     ? 'border-slate-900 bg-slate-900/[0.04] ring-1.5 ring-slate-900 shadow-2xs'
+                    : paymentErrorGlow && !paymentMethod
+                    ? 'border-red-400 bg-red-50/15'
                     : 'border-slate-200/90 bg-white hover:bg-slate-50/80'
                 }`}
                 id="payment-method-cod-btn"
@@ -753,9 +771,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 onClick={handleSelectUpiOption}
                 className={`py-3 px-3.5 rounded-2xl border transition-all select-none space-y-2.5 ${
                   !isOnlinePaymentEnabled
-                    ? 'border-slate-200/80 bg-slate-50/60 cursor-pointer hover:bg-slate-100/60'
+                    ? paymentErrorGlow && !paymentMethod
+                      ? 'border-red-400/80 bg-slate-50/60 cursor-pointer'
+                      : 'border-slate-200/80 bg-slate-50/60 cursor-pointer hover:bg-slate-100/60'
                     : paymentMethod === 'upi'
                     ? 'border-blue-600 bg-blue-50/40 ring-1.5 ring-blue-600 shadow-2xs cursor-pointer'
+                    : paymentErrorGlow && !paymentMethod
+                    ? 'border-red-400 bg-red-50/15 cursor-pointer'
                     : 'border-slate-200/90 bg-white hover:bg-slate-50/80 cursor-pointer'
                 }`}
                 id="payment-method-upi-btn"
@@ -899,26 +921,34 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             onPointerDown={() => {
               if (!isSubmitting) triggerHaptic('heavy');
             }}
-            className="pointer-events-auto max-w-xl w-full h-16 px-6 sm:px-8 bg-white/35 hover:bg-white/55 active:scale-[0.98] backdrop-blur-xl rounded-full border border-white/50 shadow-[0_12px_36px_rgba(15,23,42,0.1),0_2px_8px_rgba(15,23,42,0.03)] flex items-center justify-between text-slate-950 transition-all cursor-pointer group select-none disabled:opacity-70 disabled:cursor-not-allowed"
+            className={`pointer-events-auto max-w-xl w-full h-16 px-6 sm:px-8 active:scale-[0.98] backdrop-blur-xl rounded-full border transition-all duration-200 cursor-pointer group select-none disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-between ${
+              paymentMethod
+                ? 'bg-slate-950 hover:bg-slate-900 text-white border-slate-900 shadow-[0_14px_38px_rgba(15,23,42,0.35),0_2px_8px_rgba(15,23,42,0.12)] ring-1.5 ring-slate-800'
+                : 'bg-white/45 hover:bg-white/65 text-slate-800 border-white/60 shadow-[0_12px_36px_rgba(15,23,42,0.08),0_2px_8px_rgba(15,23,42,0.02)]'
+            }`}
             id="checkout-confirm-btn"
           >
             {isSubmitting ? (
               <div className="flex items-center justify-center w-full gap-2.5 py-0.5">
-                <Loader2Icon className="w-5 h-5 animate-spin text-slate-800" />
-                <span className="text-sm sm:text-base font-extrabold tracking-wide text-slate-950">Placing order...</span>
+                <Loader2Icon className={`w-5 h-5 animate-spin ${paymentMethod ? 'text-white' : 'text-slate-800'}`} />
+                <span className={`text-sm sm:text-base font-extrabold tracking-wide ${paymentMethod ? 'text-white' : 'text-slate-950'}`}>Placing order...</span>
               </div>
             ) : (
               <>
-                <div className="flex items-center gap-3 font-heading font-black text-sm sm:text-base text-slate-950">
-                  <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-900/5 border border-slate-900/10 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <CheckIcon className="w-4 h-4 text-slate-900 stroke-[3]" />
+                <div className={`flex items-center gap-3 font-heading font-black text-sm sm:text-base ${paymentMethod ? 'text-white' : 'text-slate-950'}`}>
+                  <span className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform ${
+                    paymentMethod 
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-400/40 shadow-xs' 
+                      : 'bg-slate-900/5 border border-slate-900/10 text-slate-900'
+                  }`}>
+                    <CheckIcon className="w-4 h-4 stroke-[3]" />
                   </span>
                   <span className="tracking-tight font-black">
                     Place Order
                   </span>
                 </div>
-                <div className="flex items-baseline gap-1 font-heading font-black text-xl text-slate-950 tracking-tight">
-                  <span className="text-sm font-bold text-slate-600 select-none">₹</span>
+                <div className={`flex items-baseline gap-1 font-heading font-black text-xl tracking-tight ${paymentMethod ? 'text-white' : 'text-slate-950'}`}>
+                  <span className={`text-sm font-bold select-none ${paymentMethod ? 'text-slate-400' : 'text-slate-600'}`}>₹</span>
                   <span>{grandTotal}</span>
                 </div>
               </>

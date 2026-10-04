@@ -420,7 +420,7 @@ function MainApp() {
   const [categoryIcons, setCategoryIcons] = useState<Record<string, CategoryDetail>>(() => getCachedCategoryIcons());
 
   useEffect(() => {
-    const unsub = subscribeToCategories([], (newCats, newIcons, defaultLandingCat) => {
+    const unsub = subscribeToCategories([], (newCats, newIcons) => {
       setManagedCategories(newCats);
       setCategoryIcons(newIcons || {});
     });

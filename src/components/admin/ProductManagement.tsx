@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
 import {
   Plus,
   Search,
@@ -9,11 +9,11 @@ import {
   Sparkles,
   Layers,
   Leaf,
-  ChevronsUp,
-  ArrowUp,
-  ArrowDown,
-  Link2
+  Link2,
+  GripVertical,
+  X
 } from 'lucide-react';
+import { triggerHaptic } from '../../utils/haptics';
 import {
   collection,
   addDoc,
@@ -55,28 +55,38 @@ interface ProductManagementProps {
 interface ProductTableRowProps {
   product: Product;
   idx: number;
-  totalProducts: number;
-  onMoveToFront: (product: Product, index: number) => void;
-  onMoveUp: (product: Product, index: number) => void;
-  onMoveDown: (product: Product, index: number) => void;
+  totalProducts?: number;
+  isDragging?: boolean;
+  isDragOver?: boolean;
+  onMoveToFront?: (product: Product, index: number) => void;
+  onMoveUp?: (product: Product, index: number) => void;
+  onMoveDown?: (product: Product, index: number) => void;
   onToggleAvailability: (product: Product) => void;
   onToggleFeatured?: (product: Product) => void;
   onEdit: (product: Product) => void;
   onDelete: (product: Product) => void;
   onOpenLinkGroup: (product: Product) => void;
+  onDragStart?: (e: React.DragEvent, index: number) => void;
+  onDragOver?: (e: React.DragEvent, index: number) => void;
+  onDrop?: (e: React.DragEvent, index: number) => void;
+  onDragEnd?: () => void;
+  onTouchStartDrag?: (e: React.TouchEvent, index: number) => void;
 }
 
 const ProductTableRow = memo<ProductTableRowProps>(({
   product,
   idx,
-  totalProducts,
-  onMoveToFront,
-  onMoveUp,
-  onMoveDown,
+  isDragging,
+  isDragOver,
   onToggleAvailability,
   onEdit,
   onDelete,
-  onOpenLinkGroup
+  onOpenLinkGroup,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onTouchStartDrag
 }) => {
   const isPinned = Boolean(product.isFeatured || product.isPinnedToFront);
 
@@ -94,15 +104,34 @@ const ProductTableRow = memo<ProductTableRowProps>(({
 
   return (
     <tr
-      className={`hover:bg-stone-50/50 transition-colors group ${
-        isPinned ? 'bg-amber-50/30' : ''
+      data-product-index={idx}
+      draggable
+      onDragStart={(e) => onDragStart?.(e, idx)}
+      onDragOver={(e) => onDragOver?.(e, idx)}
+      onDrop={(e) => onDrop?.(e, idx)}
+      onDragEnd={onDragEnd}
+      className={`transition-colors duration-75 group select-none ${
+        isPinned ? 'bg-amber-50/30' : 'hover:bg-stone-50/70'
+      } ${
+        isDragging ? 'opacity-30 bg-amber-100/60' : ''
+      } ${
+        isDragOver ? 'bg-amber-100/90 outline-2 outline-amber-500 -outline-offset-2' : ''
       }`}
     >
       {/* Product & Position */}
       <td className="py-4 px-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          {/* Position Badge & Reorder Controls */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Grip Handle & Position Badge */}
           <div className="flex items-center gap-1.5 shrink-0">
+            <div
+              onTouchStart={(e) => onTouchStartDrag?.(e, idx)}
+              className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-amber-700 hover:bg-amber-50 active:bg-amber-100 cursor-grab active:cursor-grabbing shrink-0 transition-colors touch-none select-none"
+              title="Left click hold on Desktop or Long press on Mobile to reorder product"
+              aria-label={`Drag ${product.name} to reorder`}
+            >
+              <GripVertical className="w-4 h-4 text-slate-400 group-hover:text-slate-600" />
+            </div>
+
             <span
               className={`w-6 h-6 rounded-lg text-[10px] font-heading font-extrabold flex items-center justify-center shrink-0 ${
                 idx === 0
@@ -113,36 +142,6 @@ const ProductTableRow = memo<ProductTableRowProps>(({
             >
               #{idx + 1}
             </span>
-
-            <div className="flex items-center gap-0.5 shrink-0 bg-slate-50 p-1 rounded-xl border border-slate-200/80">
-              <button
-                type="button"
-                onClick={() => onMoveToFront(product, idx)}
-                disabled={idx === 0}
-                className="p-1 text-amber-600 hover:text-amber-800 disabled:opacity-20 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer flex items-center"
-                title="Move to Front (1st Position)"
-              >
-                <ChevronsUp className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => onMoveUp(product, idx)}
-                disabled={idx === 0}
-                className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-20 hover:bg-slate-200/70 rounded-lg transition-colors cursor-pointer"
-                title="Move 1 step earlier"
-              >
-                <ArrowUp className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={() => onMoveDown(product, idx)}
-                disabled={idx === totalProducts - 1}
-                className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-20 hover:bg-slate-200/70 rounded-lg transition-colors cursor-pointer"
-                title="Move 1 step later"
-              >
-                <ArrowDown className="w-3 h-3" />
-              </button>
-            </div>
           </div>
 
           {/* Photo Thumbnail */}
@@ -301,6 +300,16 @@ ProductTableRow.displayName = 'ProductTableRow';
 // Main Product Management Dashboard View
 // -------------------------------------------------------------
 export const ProductManagement: React.FC<ProductManagementProps> = ({ products, onRefresh }) => {
+  // Local optimistic products state for butter-smooth zero-reload reordering
+  const [localProducts, setLocalProducts] = useState<Product[]>(products);
+  const isDraggingRef = useRef(false);
+
+  useEffect(() => {
+    if (!isDraggingRef.current) {
+      setLocalProducts(products);
+    }
+  }, [products]);
+
   const [categories, setCategories] = useState<string[]>(() => getCachedCategories());
   const [categoryIcons, setCategoryIcons] = useState<Record<string, CategoryDetail>>(() =>
     getCachedCategoryIcons()
@@ -329,8 +338,10 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
 
   useEffect(() => {
     const unsub = subscribeToCategories([], (cats, icons) => {
-      setCategories(cats);
-      if (icons) setCategoryIcons(icons);
+      queueMicrotask(() => {
+        setCategories(cats);
+        if (icons) setCategoryIcons(icons);
+      });
     });
     return () => unsub();
   }, []);
@@ -537,10 +548,48 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
     [products]
   );
 
-  // Filtered & sorted products (memoized)
+  // Debounced persistence helper for product sort order (prevents screen flashes)
+  const productSaveDebounceRef = useRef<number | null>(null);
+
+  const persistProductOrder = useCallback((updatedList: Product[]) => {
+    if (productSaveDebounceRef.current) {
+      clearTimeout(productSaveDebounceRef.current);
+    }
+    productSaveDebounceRef.current = window.setTimeout(async () => {
+      try {
+        // Quietly update local storage cache without full-page event
+        const cachedStr = localStorage.getItem('swadeep_cached_products');
+        const allCurrent: Product[] = cachedStr ? JSON.parse(cachedStr) : [...updatedList];
+        const orderMap = new Map<string, number>();
+        updatedList.forEach((p, i) => orderMap.set(p.id, i + 1));
+
+        const newAll = allCurrent.map((p) => {
+          if (orderMap.has(p.id)) {
+            return { ...p, sortOrder: orderMap.get(p.id) };
+          }
+          return p;
+        });
+        localStorage.setItem('swadeep_cached_products', JSON.stringify(newAll));
+
+        // Firestore batch update in background
+        const batch = writeBatch(db);
+        updatedList.forEach((p, i) => {
+          batch.update(doc(db, 'products', p.id), {
+            sortOrder: i + 1,
+            updatedAt: serverTimestamp(),
+          });
+        });
+        await batch.commit();
+      } catch (err: any) {
+        console.warn('Background product sortOrder save note:', err?.message || err);
+      }
+    }, 500);
+  }, []);
+
+  // Filtered & sorted products (derived from localProducts for 0ms optimistic UI)
   const filteredProducts = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    return products.filter((p) => {
+    return localProducts.filter((p) => {
       const matchesSearch =
         !q ||
         p.name.toLowerCase().includes(q) ||
@@ -558,7 +607,7 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
 
       return matchesSearch && matchesCategory;
     });
-  }, [products, searchQuery, selectedCategory]);
+  }, [localProducts, searchQuery, selectedCategory]);
 
   const sortedProducts = useMemo(() => {
     return [...filteredProducts].sort((a, b) => {
@@ -567,6 +616,107 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
       return aOrder - bOrder;
     });
   }, [filteredProducts]);
+
+  // Drag and drop state for products
+  const [draggedProductIdx, setDraggedProductIdx] = useState<number | null>(null);
+  const [dragOverProductIdx, setDragOverProductIdx] = useState<number | null>(null);
+  const touchActiveProductIdxRef = useRef<number | null>(null);
+
+  // Smooth, jitter-free product reorder handler
+  const handleProductReorder = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+      if (fromIndex >= sortedProducts.length || toIndex >= sortedProducts.length) return;
+
+      const fromItem = sortedProducts[fromIndex];
+      const toItem = sortedProducts[toIndex];
+      if (!fromItem || !toItem) return;
+
+      setLocalProducts((prev) => {
+        const current = [...prev];
+        const actualFrom = current.findIndex((p) => p.id === fromItem.id);
+        const actualTo = current.findIndex((p) => p.id === toItem.id);
+        if (actualFrom === -1 || actualTo === -1) return prev;
+
+        const [moved] = current.splice(actualFrom, 1);
+        current.splice(actualTo, 0, moved);
+
+        const reordered = current.map((p, i) => ({ ...p, sortOrder: i + 1 }));
+        persistProductOrder(reordered);
+        return reordered;
+      });
+
+      setSeedSuccessMessage(`✓ Reordered "${fromItem.name}" to #${toIndex + 1}!`);
+      setTimeout(() => setSeedSuccessMessage(null), 2500);
+    },
+    [sortedProducts, persistProductOrder]
+  );
+
+  // Desktop Drag Handlers with zero-jitter state tracking
+  const handleProductDragStart = useCallback((e: React.DragEvent, index: number) => {
+    isDraggingRef.current = true;
+    setDraggedProductIdx(index);
+    triggerHaptic('medium');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+  }, []);
+
+  const handleProductDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverProductIdx((prev) => (prev !== index ? index : prev));
+  }, []);
+
+  const handleProductDrop = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    isDraggingRef.current = false;
+    if (draggedProductIdx !== null && draggedProductIdx !== index) {
+      handleProductReorder(draggedProductIdx, index);
+      triggerHaptic('success');
+    }
+    setDraggedProductIdx(null);
+    setDragOverProductIdx(null);
+  }, [draggedProductIdx, handleProductReorder]);
+
+  const handleProductDragEnd = useCallback(() => {
+    isDraggingRef.current = false;
+    setDraggedProductIdx(null);
+    setDragOverProductIdx(null);
+  }, []);
+
+  // Mobile Touch Handlers
+  const handleProductTouchStart = useCallback((e: React.TouchEvent, index: number) => {
+    isDraggingRef.current = true;
+    touchActiveProductIdxRef.current = index;
+    setDraggedProductIdx(index);
+    triggerHaptic('medium');
+  }, []);
+
+  const handleProductTouchMove = useCallback((e: React.TouchEvent) => {
+    if (touchActiveProductIdxRef.current === null) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    const rowEl = el?.closest('[data-product-index]');
+    if (rowEl) {
+      const targetIdx = Number(rowEl.getAttribute('data-product-index'));
+      if (!isNaN(targetIdx) && targetIdx !== dragOverProductIdx) {
+        setDragOverProductIdx(targetIdx);
+        triggerHaptic('selection');
+      }
+    }
+  }, [dragOverProductIdx]);
+
+  const handleProductTouchEnd = useCallback(() => {
+    isDraggingRef.current = false;
+    if (touchActiveProductIdxRef.current !== null && dragOverProductIdx !== null && touchActiveProductIdxRef.current !== dragOverProductIdx) {
+      handleProductReorder(touchActiveProductIdxRef.current, dragOverProductIdx);
+      triggerHaptic('success');
+    }
+    touchActiveProductIdxRef.current = null;
+    setDraggedProductIdx(null);
+    setDragOverProductIdx(null);
+  }, [dragOverProductIdx, handleProductReorder]);
 
   const handleMoveProductToFront = useCallback(
     async (product: Product, index: number) => {
@@ -671,8 +821,10 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
         iconsMap={categoryIcons}
         onBack={handleBackToCatalog}
         onCategoriesChange={(newCats, newIcons) => {
-          setCategories(newCats);
-          if (newIcons) setCategoryIcons(newIcons);
+          queueMicrotask(() => {
+            setCategories(newCats);
+            if (newIcons) setCategoryIcons(newIcons);
+          });
         }}
       />
     );
@@ -750,20 +902,30 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
       )}
 
       {/* Filter and Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-stone-200/80 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-stone-200/80 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="relative w-full sm:w-72 md:w-80 shrink-0">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
           <input
             type="text"
             placeholder="Search menu items..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs placeholder:text-stone-400 focus:outline-none focus:bg-white focus:border-slate-400"
+            className="w-full pl-10 pr-9 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:bg-white focus:border-slate-400 font-medium"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-600 rounded-full hover:bg-stone-200/70 transition-colors cursor-pointer"
+              title="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         {/* Category Pills & Filters */}
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto no-scrollbar py-1">
+        <div className="flex items-center gap-1.5 overflow-x-auto flex-1 min-w-0 no-scrollbar py-1">
           <button
             onClick={() => setSelectedCategory('All')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-heading font-bold shrink-0 transition-all cursor-pointer ${
@@ -852,23 +1014,40 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
             <table className="w-full text-left text-xs text-stone-600">
               <thead className="bg-stone-50/80 border-b border-stone-200/80 text-stone-500 font-bold uppercase tracking-wider text-[10px]">
                 <tr>
-                  <th className="py-3.5 px-4 sm:px-6">Product & Position</th>
+                  <th className="py-3.5 px-4 sm:px-6">
+                    <div className="flex items-center gap-2">
+                      <span>Product & Position</span>
+                      <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/80 font-normal normal-case">
+                        <GripVertical className="w-3 h-3 text-amber-600" />
+                        Hold & drag to reorder
+                      </span>
+                    </div>
+                  </th>
                   <th className="py-3.5 px-4">Category</th>
                   <th className="py-3.5 px-4">Pricing / Sizes</th>
                   <th className="py-3.5 px-4">In-Stock Status</th>
                   <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-100">
+              <tbody
+                className="divide-y divide-stone-100"
+                onTouchMove={handleProductTouchMove}
+                onTouchEnd={handleProductTouchEnd}
+                onTouchCancel={handleProductTouchEnd}
+              >
                 {sortedProducts.map((product, idx) => (
                   <ProductTableRow
                     key={product.id}
                     product={product}
                     idx={idx}
                     totalProducts={sortedProducts.length}
-                    onMoveToFront={handleMoveProductToFront}
-                    onMoveUp={handleMoveProductUp}
-                    onMoveDown={handleMoveProductDown}
+                    isDragging={draggedProductIdx === idx}
+                    isDragOver={dragOverProductIdx === idx}
+                    onDragStart={handleProductDragStart}
+                    onDragOver={handleProductDragOver}
+                    onDrop={handleProductDrop}
+                    onDragEnd={handleProductDragEnd}
+                    onTouchStartDrag={handleProductTouchStart}
                     onToggleAvailability={handleToggleAvailability}
                     onToggleFeatured={handleToggleFeatured}
                     onEdit={openEditScreen}

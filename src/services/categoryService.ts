@@ -2,16 +2,82 @@ import { doc, getDoc, setDoc, onSnapshot, updateDoc, writeBatch, collection, get
 import { db } from '../firebase/config';
 
 export const DEFAULT_CATEGORIES = [
-  'Desserts',
-  'Beverages',
-  'Bakery',
-  'Snacks',
-  'Meals',
-  'Choclate',
   'Pizzas',
   'Burgers',
-  'Combos'
+  'Snacks & Samosas',
+  'Fast Food',
+  'Noodles & Pasta',
+  'Cakes',
+  'Pastries',
+  'Artisan Bakery & Breads',
+  'Cookies & Biscuits',
+  'Hot & Cold Coffee',
+  'Tea & Chai',
+  'Milkshakes',
+  'Soft Drinks',
+  'Cold Drinks & Juices',
+  'Energy Drinks',
+  'Ice Creams & Sundaes',
+  'Chocolates',
+  'Traditional Sweets & Mithai',
+  'Desserts',
+  'Party & Decoration',
+  'Birthday & Anniversary',
+  'Gift Hampers & Combos',
+  'Dairy & Paneer',
+  'Momos & Dumplings',
+  'Rolls & Wraps',
+  'Donuts & Muffins',
+  'Waffles & Pancakes',
+  'Healthy Salads & Bowls',
+  'Mocktails & Coolers',
+  'Breakfast & Brunch',
+  'Chef Specials & Gourmet',
+  'Namkeen & Munchies',
+  'Combos & Meal Boxes',
+  'Festive & Seasonal Treats',
+  'Kids Zone Treats',
+  'Custom Theme Cakes'
 ];
+
+export const DEFAULT_CATEGORY_ICONS: Record<string, CategoryDetail> = {
+  'Pizzas': { name: 'Pizzas', iconType: 'lucide', iconValue: 'Pizza' },
+  'Burgers': { name: 'Burgers', iconType: 'lucide', iconValue: 'Sandwich' },
+  'Snacks & Samosas': { name: 'Snacks & Samosas', iconType: 'lucide', iconValue: 'Popcorn' },
+  'Fast Food': { name: 'Fast Food', iconType: 'lucide', iconValue: 'Soup' },
+  'Noodles & Pasta': { name: 'Noodles & Pasta', iconType: 'lucide', iconValue: 'Soup' },
+  'Cakes': { name: 'Cakes', iconType: 'lucide', iconValue: 'Cake' },
+  'Pastries': { name: 'Pastries', iconType: 'lucide', iconValue: 'Cake' },
+  'Artisan Bakery & Breads': { name: 'Artisan Bakery & Breads', iconType: 'lucide', iconValue: 'Croissant' },
+  'Cookies & Biscuits': { name: 'Cookies & Biscuits', iconType: 'lucide', iconValue: 'Cookie' },
+  'Hot & Cold Coffee': { name: 'Hot & Cold Coffee', iconType: 'lucide', iconValue: 'Coffee' },
+  'Tea & Chai': { name: 'Tea & Chai', iconType: 'lucide', iconValue: 'Coffee' },
+  'Milkshakes': { name: 'Milkshakes', iconType: 'lucide', iconValue: 'Milk' },
+  'Soft Drinks': { name: 'Soft Drinks', iconType: 'lucide', iconValue: 'CupSoda' },
+  'Cold Drinks & Juices': { name: 'Cold Drinks & Juices', iconType: 'lucide', iconValue: 'GlassWater' },
+  'Energy Drinks': { name: 'Energy Drinks', iconType: 'lucide', iconValue: 'Zap' },
+  'Ice Creams & Sundaes': { name: 'Ice Creams & Sundaes', iconType: 'lucide', iconValue: 'IceCream' },
+  'Chocolates': { name: 'Chocolates', iconType: 'lucide', iconValue: 'Candy' },
+  'Traditional Sweets & Mithai': { name: 'Traditional Sweets & Mithai', iconType: 'lucide', iconValue: 'Lollipop' },
+  'Desserts': { name: 'Desserts', iconType: 'lucide', iconValue: 'IceCream2' },
+  'Party & Decoration': { name: 'Party & Decoration', iconType: 'lucide', iconValue: 'PartyPopper' },
+  'Birthday & Anniversary': { name: 'Birthday & Anniversary', iconType: 'lucide', iconValue: 'Gift' },
+  'Gift Hampers & Combos': { name: 'Gift Hampers & Combos', iconType: 'lucide', iconValue: 'Package' },
+  'Dairy & Paneer': { name: 'Dairy & Paneer', iconType: 'lucide', iconValue: 'Milk' },
+  'Momos & Dumplings': { name: 'Momos & Dumplings', iconType: 'lucide', iconValue: 'Utensils' },
+  'Rolls & Wraps': { name: 'Rolls & Wraps', iconType: 'lucide', iconValue: 'UtensilsCrossed' },
+  'Donuts & Muffins': { name: 'Donuts & Muffins', iconType: 'lucide', iconValue: 'Cookie' },
+  'Waffles & Pancakes': { name: 'Waffles & Pancakes', iconType: 'lucide', iconValue: 'Layers' },
+  'Healthy Salads & Bowls': { name: 'Healthy Salads & Bowls', iconType: 'lucide', iconValue: 'Salad' },
+  'Mocktails & Coolers': { name: 'Mocktails & Coolers', iconType: 'lucide', iconValue: 'Citrus' },
+  'Breakfast & Brunch': { name: 'Breakfast & Brunch', iconType: 'lucide', iconValue: 'Egg' },
+  'Chef Specials & Gourmet': { name: 'Chef Specials & Gourmet', iconType: 'lucide', iconValue: 'ChefHat' },
+  'Namkeen & Munchies': { name: 'Namkeen & Munchies', iconType: 'lucide', iconValue: 'Popcorn' },
+  'Combos & Meal Boxes': { name: 'Combos & Meal Boxes', iconType: 'lucide', iconValue: 'Sparkles' },
+  'Festive & Seasonal Treats': { name: 'Festive & Seasonal Treats', iconType: 'lucide', iconValue: 'Sparkles' },
+  'Kids Zone Treats': { name: 'Kids Zone Treats', iconType: 'lucide', iconValue: 'Candy' },
+  'Custom Theme Cakes': { name: 'Custom Theme Cakes', iconType: 'lucide', iconValue: 'Cake' }
+};
 
 export interface CategoryDetail {
   name: string;
@@ -82,12 +148,12 @@ export const getCachedCategoryIcons = (): Record<string, CategoryDetail> => {
   try {
     const saved = localStorage.getItem(LOCAL_STORAGE_ICONS_KEY);
     if (saved) {
-      return JSON.parse(saved);
+      return { ...DEFAULT_CATEGORY_ICONS, ...JSON.parse(saved) };
     }
   } catch (e) {
     console.warn('Could not read cached category icons:', e);
   }
-  return {};
+  return DEFAULT_CATEGORY_ICONS;
 };
 
 // Save categories & icons to localStorage & Firestore
@@ -148,10 +214,14 @@ export const subscribeToCategories = (
         }
 
         if (Array.isArray(data?.list) && data.list.length > 0) {
-          const icons = (data.icons as Record<string, CategoryDetail>) || {};
-          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data.list));
+          const rawIcons = (data.icons as Record<string, CategoryDetail>) || {};
+          const icons = { ...DEFAULT_CATEGORY_ICONS, ...rawIcons };
+          const mergedList = Array.from(
+            new Set([...data.list, ...fallbackProductCategories.filter(Boolean)])
+          );
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(mergedList));
           localStorage.setItem(LOCAL_STORAGE_ICONS_KEY, JSON.stringify(icons));
-          callback(data.list, icons, defaultCat);
+          callback(mergedList, icons, defaultCat);
           return;
         }
       }

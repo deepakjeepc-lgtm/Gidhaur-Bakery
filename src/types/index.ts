@@ -114,6 +114,8 @@ export interface Order {
   archivedAt?: string;
   isPreviousDayArchive?: boolean;
   isManualArchive?: boolean;
+  isArchived?: boolean;
+  isDeleted?: boolean;
   cancellationRequested?: boolean;
   cancellationStatus?: 'requested' | 'accepted' | 'rejected';
   cancellationReason?: string;

@@ -12,6 +12,43 @@ export interface EmailSettings {
   smtpPort?: number;
 }
 
+export type OrderCategoryType = 'food_only' | 'non_food_only' | 'mixed';
+
+export function isNonFoodItem(item: any): boolean {
+  if (!item) return false;
+  
+  if (item.product?.isNonFood === true || item.isNonFood === true) return true;
+  if (item.product?.isNonFood === false || item.isNonFood === false) return false;
+
+  const category = String(item.product?.category || item.category || '').toLowerCase();
+  const name = String(item.product?.name || item.name || '').toLowerCase();
+
+  const nonFoodKeywords = [
+    'candle', 'candles', 'balloon', 'balloons', 'party', 'cap', 'caps', 'prop', 'props',
+    'decoration', 'decor', 'gift', 'tag', 'popper', 'spray', 'snow spray',
+    'sparkler', 'knife', 'topper', 'cake topper', 'banner', 'ribbon', 'utensil',
+    'crockery', 'accessories', 'toy', 'card', 'greeting card'
+  ];
+
+  return nonFoodKeywords.some((kw) => category.includes(kw) || name.includes(kw));
+}
+
+export function classifyOrder(order: any): OrderCategoryType {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (items.length === 0) return 'food_only';
+
+  const nonFoodCount = items.filter(isNonFoodItem).length;
+  const foodCount = items.length - nonFoodCount;
+
+  if (nonFoodCount > 0 && foodCount === 0) {
+    return 'non_food_only';
+  }
+  if (nonFoodCount > 0 && foodCount > 0) {
+    return 'mixed';
+  }
+  return 'food_only';
+}
+
 export function buildOrderStatusEmailHtml(params: {
   order: any;
   status: string;
@@ -25,39 +62,106 @@ export function buildOrderStatusEmailHtml(params: {
   const customerName = order.customerName || 'Valued Guest';
   const orderId = order.orderId || order.id || 'ORDER';
 
-  // Original Clean Status Text & Palette
+  // Smart Context-Aware Messaging: Differentiates pure food, pure non-food, and mixed orders
+  const orderType = classifyOrder(order);
+
   let statusTitle = 'Order Placed';
   let statusSubtext = 'We have received your order and the store team is reviewing it.';
 
-  switch (status) {
-    case 'pending':
-      statusTitle = 'Order Placed';
-      statusSubtext = 'We have received your order and the store team is reviewing it.';
-      break;
-    case 'accepted':
-      statusTitle = 'Order Confirmed';
-      statusSubtext = 'Great news! Our chef has accepted your order and is freshly preparing your items.';
-      break;
-    case 'preparing':
-      statusTitle = 'Order in Kitchen';
-      statusSubtext = 'Your delicious delicacies are currently being handcrafted with fresh ingredients.';
-      break;
-    case 'out_for_delivery':
-      statusTitle = 'Out for Delivery';
-      statusSubtext = 'Your piping hot food is packed and our delivery rider is on the way to your address!';
-      break;
-    case 'delivered':
-      statusTitle = 'Delivered Successfully';
-      statusSubtext = 'Your order has been safely delivered. We hope you enjoy your meal! Thank you for choosing Gidhaur Bakery.';
-      break;
-    case 'rejected':
-      statusTitle = 'Order Cancelled';
-      statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
-      break;
-    case 'cancellation_declined':
-      statusTitle = 'Cancellation Declined';
-      statusSubtext = 'Your cancellation request was declined as your food is already being freshly prepared / dispatched. Your meal will arrive shortly!';
-      break;
+  if (orderType === 'non_food_only') {
+    switch (status) {
+      case 'pending':
+        statusTitle = 'Order Placed';
+        statusSubtext = 'We have received your order and our store team is verifying your items.';
+        break;
+      case 'accepted':
+        statusTitle = 'Order Confirmed';
+        statusSubtext = 'Great news! Your order has been confirmed and our store team is preparing your package for dispatch.';
+        break;
+      case 'preparing':
+        statusTitle = 'Packing in Progress';
+        statusSubtext = 'Your items are being carefully inspected, packed, and secured for safe transit.';
+        break;
+      case 'out_for_delivery':
+        statusTitle = 'Out for Delivery';
+        statusSubtext = 'Your package is safely packed and our delivery rider is on the way to your address!';
+        break;
+      case 'delivered':
+        statusTitle = 'Delivered Successfully';
+        statusSubtext = `Your package has been safely delivered! We hope you love your purchase. Thank you for shopping with ${restaurantName}.`;
+        break;
+      case 'rejected':
+        statusTitle = 'Order Cancelled';
+        statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
+        break;
+      case 'cancellation_declined':
+        statusTitle = 'Cancellation Declined';
+        statusSubtext = 'Your cancellation request was declined as your package is already packed and dispatched. It will arrive shortly!';
+        break;
+    }
+  } else if (orderType === 'mixed') {
+    switch (status) {
+      case 'pending':
+        statusTitle = 'Order Placed';
+        statusSubtext = 'We have received your order for both fresh bakery items and celebration essentials. Our team is reviewing it.';
+        break;
+      case 'accepted':
+        statusTitle = 'Order Confirmed';
+        statusSubtext = 'Great news! Your order is confirmed. Our kitchen is preparing your bakery treats while our team packs your party items.';
+        break;
+      case 'preparing':
+        statusTitle = 'Preparing & Packing';
+        statusSubtext = 'Your fresh treats are being handcrafted, and your celebration accessories are being carefully packed.';
+        break;
+      case 'out_for_delivery':
+        statusTitle = 'Out for Delivery';
+        statusSubtext = 'Your complete package has been dispatched and our delivery rider is on the way to your address!';
+        break;
+      case 'delivered':
+        statusTitle = 'Delivered Successfully';
+        statusSubtext = `Your complete order has been safely delivered! We hope you enjoy your treats and have a wonderful celebration. Thank you for choosing ${restaurantName}.`;
+        break;
+      case 'rejected':
+        statusTitle = 'Order Cancelled';
+        statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
+        break;
+      case 'cancellation_declined':
+        statusTitle = 'Cancellation Declined';
+        statusSubtext = 'Your cancellation request was declined as your order is already prepared and packed. It will arrive shortly!';
+        break;
+    }
+  } else {
+    // Pure Food Order (food_only)
+    switch (status) {
+      case 'pending':
+        statusTitle = 'Order Placed';
+        statusSubtext = 'We have received your order and the store team is reviewing it.';
+        break;
+      case 'accepted':
+        statusTitle = 'Order Confirmed';
+        statusSubtext = 'Great news! Our chef has accepted your order and is freshly preparing your items.';
+        break;
+      case 'preparing':
+        statusTitle = 'Order in Kitchen';
+        statusSubtext = 'Your delicious delicacies are currently being handcrafted with fresh ingredients.';
+        break;
+      case 'out_for_delivery':
+        statusTitle = 'Out for Delivery';
+        statusSubtext = 'Your freshly prepared food is packed and our delivery rider is on the way to your address!';
+        break;
+      case 'delivered':
+        statusTitle = 'Delivered Successfully';
+        statusSubtext = `Your order has been safely delivered. We hope you enjoy your meal! Thank you for choosing ${restaurantName}.`;
+        break;
+      case 'rejected':
+        statusTitle = 'Order Cancelled';
+        statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
+        break;
+      case 'cancellation_declined':
+        statusTitle = 'Cancellation Declined';
+        statusSubtext = 'Your cancellation request was declined as your food is already being freshly prepared / dispatched. Your meal will arrive shortly!';
+        break;
+    }
   }
 
   const itemsHtml = Array.isArray(order.items)

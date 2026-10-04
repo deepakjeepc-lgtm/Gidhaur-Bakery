@@ -473,21 +473,21 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
                   e.stopPropagation();
                   onOpenDetail(product);
                 }}
-                className="h-[30px] sm:h-[34px] px-3 bg-slate-950 hover:bg-slate-800 active:scale-95 text-white rounded-full flex items-center justify-center gap-1.5 shadow-xs transition-colors focus:outline-none cursor-pointer"
+                className="h-[30px] sm:h-[34px] pl-1.5 pr-3 sm:pl-2 sm:pr-3.5 bg-white hover:bg-stone-50 active:bg-stone-100 active:scale-95 text-stone-900 border border-black/[0.04] rounded-full flex items-center justify-center gap-1.5 shadow-[0_2px_8px_rgba(0,0,0,0.08)] hover:shadow-[0_3px_10px_rgba(0,0,0,0.12)] transition-all focus:outline-none cursor-pointer"
                 id={`customized-btn-${product.id}`}
                 aria-label="Edit sizes in cart"
               >
-                <span className="w-4 h-4 rounded-full bg-white text-slate-950 text-[10px] font-black flex items-center justify-center leading-none">
+                <span className="w-[18px] h-[18px] rounded-full bg-stone-900 text-white text-[10px] font-black flex items-center justify-center leading-none shrink-0">
                   {totalCartQty}
                 </span>
-                <span className="font-heading font-extrabold text-[11px] sm:text-xs text-white tracking-wide uppercase">
+                <span className="font-heading font-black text-[11px] sm:text-xs text-stone-900 tracking-wide uppercase">
                   ADDED
                 </span>
               </button>
             ) : (
               <button
                 onClick={handleAddClick}
-                className="px-4 py-1.5 sm:px-4.5 sm:py-2 rounded-full bg-slate-950 hover:bg-slate-800 active:scale-95 text-white font-heading font-extrabold text-xs sm:text-xs tracking-wider uppercase shadow-xs transition-colors focus:outline-none flex items-center justify-center min-w-[58px]"
+                className="px-4 py-1.5 sm:px-4.5 sm:py-2 rounded-full bg-white hover:bg-stone-50 active:bg-stone-100 active:scale-95 text-stone-900 border border-black/[0.04] font-heading font-black text-xs sm:text-xs tracking-wider uppercase shadow-[0_2px_8px_rgba(0,0,0,0.08)] hover:shadow-[0_3px_10px_rgba(0,0,0,0.12)] transition-all focus:outline-none flex items-center justify-center min-w-[62px] cursor-pointer"
                 id={`add-btn-${product.id}`}
                 aria-label="Add to cart"
               >
@@ -495,20 +495,20 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
               </button>
             )
           ) : totalCartQty > 0 ? (
-            <div className="h-[30px] sm:h-[34px] px-1 bg-slate-950 text-white rounded-full flex items-center justify-between gap-1 shadow-xs border border-slate-800/60 min-w-[76px]">
+            <div className="h-[30px] sm:h-[34px] px-1 bg-white text-stone-900 rounded-full flex items-center justify-between gap-1 shadow-[0_2px_8px_rgba(0,0,0,0.08)] border border-black/[0.04] min-w-[78px]">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   updateQuantity(cartItemId, totalCartQty - 1);
                 }}
-                className="w-6 h-6 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 active:scale-85 transition-colors focus:outline-none"
+                className="w-6 h-6 rounded-full flex items-center justify-center text-stone-600 hover:text-stone-950 hover:bg-stone-100 active:scale-85 transition-colors focus:outline-none cursor-pointer"
                 id={`decrease-btn-${cartItemId}`}
                 aria-label="Decrease quantity"
               >
                 <Minus className="w-3.5 h-3.5 stroke-[2.5]" />
               </button>
 
-              <span className="font-heading font-extrabold text-xs sm:text-sm min-w-[18px] text-center text-white select-none">
+              <span className="font-heading font-black text-xs sm:text-sm min-w-[18px] text-center text-stone-950 select-none">
                 {totalCartQty}
               </span>
 
@@ -517,7 +517,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
                   e.stopPropagation();
                   addToCart(product, 1, activeVariant);
                 }}
-                className="w-6 h-6 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 active:scale-85 transition-colors focus:outline-none"
+                className="w-6 h-6 rounded-full flex items-center justify-center text-stone-600 hover:text-stone-950 hover:bg-stone-100 active:scale-85 transition-colors focus:outline-none cursor-pointer"
                 id={`increase-btn-${cartItemId}`}
                 aria-label="Increase quantity"
               >
@@ -527,7 +527,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
           ) : (
             <button
               onClick={handleAddClick}
-              className="px-4 py-1.5 sm:px-4.5 sm:py-2 rounded-full bg-slate-950 hover:bg-slate-800 active:scale-95 text-white font-heading font-extrabold text-xs sm:text-xs tracking-wider uppercase shadow-xs transition-colors focus:outline-none flex items-center justify-center min-w-[58px]"
+              className="px-4 py-1.5 sm:px-4.5 sm:py-2 rounded-full bg-white hover:bg-stone-50 active:bg-stone-100 active:scale-95 text-stone-900 border border-black/[0.04] font-heading font-black text-xs sm:text-xs tracking-wider uppercase shadow-[0_2px_8px_rgba(0,0,0,0.08)] hover:shadow-[0_3px_10px_rgba(0,0,0,0.12)] transition-all focus:outline-none flex items-center justify-center min-w-[62px] cursor-pointer"
               id={`add-btn-${product.id}`}
               aria-label="Add to cart"
             >

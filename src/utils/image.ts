@@ -118,7 +118,7 @@ export async function compressAndResizeToWebP(
   file: File,
   maxWidth = 800,
   maxHeight = 800,
-  quality = 0.78,
+  quality = 0.60, // 40% compression level (60% quality retention)
   cropMode?: 'cover' | 'contain' | 'fill'
 ): Promise<ImageOptimizationResult> {
   const originalSize = file.size;
@@ -315,7 +315,7 @@ export async function processAndUploadImage(
     cropMode?: 'cover' | 'contain' | 'fill';
   }
 ): Promise<UploadedImageResult> {
-  const { maxWidth = 800, maxHeight = 800, quality = 0.78, folder = 'products', cropMode } = options || {};
+  const { maxWidth = 800, maxHeight = 800, quality = 0.60, folder = 'products', cropMode } = options || {};
 
   // 1. Instant client-side WebP compression (< 50ms) with optional cropMode fill
   const optimized = await compressAndResizeToWebP(file, maxWidth, maxHeight, quality, cropMode);
@@ -359,7 +359,7 @@ export async function compressImageFile(
   file: File,
   maxWidth = 800,
   maxHeight = 800,
-  quality = 0.78
+  quality = 0.60
 ): Promise<string> {
   const res = await processAndUploadImage(file, { maxWidth, maxHeight, quality });
   return res.url;

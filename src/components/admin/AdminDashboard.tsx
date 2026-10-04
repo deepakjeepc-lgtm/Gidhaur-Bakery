@@ -57,6 +57,7 @@ import { ProductManagement } from './ProductManagement';
 import { DeliveryAgentsManagement } from './DeliveryAgentsManagement';
 import { KitchenStaffManagement } from './KitchenStaffManagement';
 import { PaymentSettings } from './PaymentSettings';
+import { CloudStorageMeter } from './CloudStorageMeter';
 import { OrderHistoryView } from './OrderHistoryView';
 import {
   performDailyOrderRollover,
@@ -239,9 +240,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
     }
   };
 
-  const handleArchiveSingleOrder = (order: Order) => {
+  const handleArchiveSingleOrder = async (order: Order) => {
     archiveSingleOrder(order);
-    setOrders((prev) => prev.filter((o) => (o.orderId || o.id) !== (order.orderId || order.id)));
+    const orderKey = order.orderId || order.id;
+    setOrders((prev) => prev.filter((o) => (o.orderId || o.id) !== orderKey));
+    setArchivedOrders((prev) => {
+      const filtered = prev.filter((o) => (o.orderId || o.id) !== orderKey);
+      return [{ ...order, archivedAt: new Date().toISOString(), isManualArchive: true }, ...filtered];
+    });
+
+    // 1. Delete from active Firestore orders collection so customer view updates in real-time
+    try {
+      const docId = order.id || order.orderId;
+      await deleteDoc(doc(db, 'orders', docId));
+      if (order.orderId && order.orderId !== order.id) {
+        await deleteDoc(doc(db, 'orders', order.orderId)).catch(() => {});
+      }
+    } catch (e) {
+      console.warn('Firestore order archive note:', e);
+    }
+
+    // 2. Delete from server backend
+    try {
+      const docId = order.id || order.orderId;
+      fetch(`/api/orders/${docId}`, { method: 'DELETE' }).catch(() => {});
+      if (order.orderId && order.orderId !== order.id) {
+        fetch(`/api/orders/${order.orderId}`, { method: 'DELETE' }).catch(() => {});
+      }
+    } catch {}
+
+    // 3. Purge from customer recent orders in local storage
+    try {
+      const recent = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
+      const updatedRecent = recent.filter((o: any) => o.orderId !== order.orderId && o.id !== order.id);
+      localStorage.setItem('swadeep_recent_orders', JSON.stringify(updatedRecent));
+      localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updatedRecent));
+      window.dispatchEvent(new CustomEvent('swadeep_order_removed', { detail: { orderId: order.orderId, id: order.id } }));
+    } catch {}
   };
 
   // Initial seed and subscriptions
@@ -412,17 +447,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
   const handleDeleteOrder = async (order: Order) => {
     try {
       setIsDeletingLoading(true);
-      await deleteDoc(doc(db, 'orders', order.id));
+      const docId = order.id || order.orderId;
+      await deleteDoc(doc(db, 'orders', docId));
+      if (order.orderId && order.orderId !== order.id) {
+        await deleteDoc(doc(db, 'orders', order.orderId)).catch(() => {});
+      }
       setOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
       setArchivedOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
       try {
-        fetch(`/api/orders/${order.id}`, { method: 'DELETE' }).catch(() => {});
+        fetch(`/api/orders/${docId}`, { method: 'DELETE' }).catch(() => {});
+        if (order.orderId && order.orderId !== order.id) {
+          fetch(`/api/orders/${order.orderId}`, { method: 'DELETE' }).catch(() => {});
+        }
         deleteArchivedOrder(order.id);
         deleteArchivedOrder(order.orderId);
         const recent = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
         const updatedRecent = recent.filter((o: any) => o.orderId !== order.orderId && o.id !== order.id);
         localStorage.setItem('swadeep_recent_orders', JSON.stringify(updatedRecent));
         localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updatedRecent));
+        window.dispatchEvent(new CustomEvent('swadeep_order_removed', { detail: { orderId: order.orderId, id: order.id } }));
       } catch {}
       setDeletingOrder(null);
     } catch (err: any) {
@@ -430,13 +473,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
       setOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
       setArchivedOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
       try {
-        fetch(`/api/orders/${order.id}`, { method: 'DELETE' }).catch(() => {});
+        const docId = order.id || order.orderId;
+        fetch(`/api/orders/${docId}`, { method: 'DELETE' }).catch(() => {});
+        if (order.orderId && order.orderId !== order.id) {
+          fetch(`/api/orders/${order.orderId}`, { method: 'DELETE' }).catch(() => {});
+        }
         deleteArchivedOrder(order.id);
         deleteArchivedOrder(order.orderId);
         const recent = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
         const updatedRecent = recent.filter((o: any) => o.orderId !== order.orderId && o.id !== order.id);
         localStorage.setItem('swadeep_recent_orders', JSON.stringify(updatedRecent));
         localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updatedRecent));
+        window.dispatchEvent(new CustomEvent('swadeep_order_removed', { detail: { orderId: order.orderId, id: order.id } }));
       } catch {}
       setDeletingOrder(null);
     } finally {
@@ -1516,9 +1564,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
           />
         )}
 
-        {/* Tab 5: Payment & UPI Settings */}
+        {/* Tab 5: Payment & Restaurant Settings */}
         {activeTab === 'settings' && (
-          <PaymentSettings settings={settings} onUpdate={(newSettings) => setSettings(newSettings)} />
+          <div className="space-y-6">
+            <CloudStorageMeter products={products} />
+            <PaymentSettings settings={settings} onUpdate={(newSettings) => setSettings(newSettings)} />
+          </div>
         )}
 
         {/* Tab 6: Analytics & Summary */}

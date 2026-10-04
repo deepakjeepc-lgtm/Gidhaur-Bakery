@@ -11,10 +11,8 @@ import {
   Layers,
   LayoutTemplate,
   Pin,
-  ChevronsUp,
-  ArrowUp,
-  ArrowDown,
-  X
+  X,
+  GripVertical
 } from 'lucide-react';
 import { Product } from '../../types';
 import {
@@ -28,6 +26,7 @@ import {
 } from '../../services/categoryService';
 import { CategoryIconPicker } from './CategoryIconPicker';
 import { renderCategoryIcon, CategoryVisual } from '../../utils/categoryIcons';
+import { triggerHaptic } from '../../utils/haptics';
 
 interface CategoryManagementScreenProps {
   categories: string[];
@@ -50,6 +49,8 @@ interface CategoryRowProps {
   itemCount: number;
   isFirst: boolean;
   isEditing: boolean;
+  isDragging?: boolean;
+  isDragOver?: boolean;
   visual?: CategoryVisual;
   editNameInput: string;
   onEditInputChange: (val: string) => void;
@@ -61,6 +62,11 @@ interface CategoryRowProps {
   onMoveDown: (index: number) => void;
   onOpenIconPicker: (cat: string, index: number) => void;
   onInitDelete: (cat: string) => void;
+  onDragStart: (e: React.DragEvent, index: number) => void;
+  onDragOver: (e: React.DragEvent, index: number) => void;
+  onDrop: (e: React.DragEvent, index: number) => void;
+  onDragEnd: () => void;
+  onTouchStartDrag: (e: React.TouchEvent, index: number) => void;
 }
 
 const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
@@ -70,6 +76,8 @@ const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
   itemCount,
   isFirst,
   isEditing,
+  isDragging,
+  isDragOver,
   visual,
   editNameInput,
   onEditInputChange,
@@ -80,12 +88,31 @@ const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
   onMoveUp,
   onMoveDown,
   onOpenIconPicker,
-  onInitDelete
+  onInitDelete,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onTouchStartDrag
 }) => {
   return (
-    <div className="overflow-x-auto no-scrollbar rounded-2xl">
+    <div
+      data-category-index={index}
+      draggable={!isEditing}
+      onDragStart={(e) => onDragStart(e, index)}
+      onDragOver={(e) => onDragOver(e, index)}
+      onDrop={(e) => onDrop(e, index)}
+      onDragEnd={onDragEnd}
+      className={`overflow-x-auto no-scrollbar rounded-2xl transition-all duration-150 ${
+        isDragging ? 'opacity-35 scale-[0.98] border-2 border-dashed border-amber-400 bg-amber-50/40' : ''
+      } ${
+        isDragOver ? 'border-t-4 border-amber-500 shadow-md ring-2 ring-amber-400/30' : ''
+      }`}
+    >
       <div
-        className="bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-200/90 shadow-2xs hover:border-slate-300 hover:shadow-xs transition-all flex items-center justify-between gap-3 min-w-[390px] sm:min-w-0"
+        className={`bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-200/90 shadow-2xs hover:border-slate-300 hover:shadow-xs transition-all flex items-center justify-between gap-3 min-w-[410px] sm:min-w-0 ${
+          isDragging ? 'bg-amber-50/60' : ''
+        }`}
         style={{ contain: 'content' }}
       >
         {isEditing ? (
@@ -120,7 +147,17 @@ const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2.5 flex-1 min-w-0">
+            <div className="flex items-center gap-2 sm:gap-2.5 flex-1 min-w-0">
+              {/* Drag Handle: Mouse Hold on Desktop / Touch Hold on Mobile */}
+              <div
+                onTouchStart={(e) => onTouchStartDrag(e, index)}
+                className="p-1 sm:p-1.5 rounded-xl text-slate-400 hover:text-amber-700 hover:bg-amber-50 active:bg-amber-100 cursor-grab active:cursor-grabbing shrink-0 transition-colors touch-none select-none"
+                title="Left click hold on Desktop or Long press on Mobile to reorder"
+                aria-label={`Drag ${cat} to reorder`}
+              >
+                <GripVertical className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+              </div>
+
               {/* Position Badge */}
               <span
                 className={`w-6 h-6 sm:w-7 sm:h-7 rounded-xl text-[10px] sm:text-[11px] font-heading font-extrabold flex items-center justify-center shrink-0 ${
@@ -130,37 +167,6 @@ const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
               >
                 #{index + 1}
               </span>
-
-              {/* Reorder Buttons: Move to Front (1st), Up, Down */}
-              <div className="flex items-center gap-0.5 shrink-0 bg-slate-50 p-1 rounded-xl border border-slate-200/80">
-                <button
-                  type="button"
-                  onClick={() => onMoveToFront(index)}
-                  disabled={isFirst}
-                  className="p-1 text-amber-600 hover:text-amber-800 disabled:opacity-20 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer flex items-center"
-                  title="Move to Front (1st Position)"
-                >
-                  <ChevronsUp className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onMoveUp(index)}
-                  disabled={isFirst}
-                  className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-20 hover:bg-slate-200/70 rounded-lg transition-colors cursor-pointer"
-                  title="Move 1 step earlier"
-                >
-                  <ArrowUp className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onMoveDown(index)}
-                  disabled={index === totalCount - 1}
-                  className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-20 hover:bg-slate-200/70 rounded-lg transition-colors cursor-pointer"
-                  title="Move 1 step later"
-                >
-                  <ArrowDown className="w-3 h-3" />
-                </button>
-              </div>
 
               {/* Category SVG / Emoji Icon */}
               <button
@@ -292,6 +298,90 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     };
   }, []);
 
+  // Drag and drop state for desktop & mobile
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const touchActiveIndexRef = useRef<number | null>(null);
+
+  // Smooth Reorder handler (moves item from fromIndex to toIndex)
+  const handleReorder = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    setLocalCategories((prev) => {
+      if (fromIndex >= prev.length || toIndex >= prev.length) return prev;
+      const copy = [...prev];
+      const [item] = copy.splice(fromIndex, 1);
+      copy.splice(toIndex, 0, item);
+      persistCategoryOrder(copy);
+      queueMicrotask(() => {
+        onCategoriesChange?.(copy, categoryIcons, defaultLandingCat);
+      });
+      return copy;
+    });
+    setFeedback('✓ Category order updated!');
+    setTimeout(() => setFeedback(null), 2000);
+  }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
+
+  // Desktop Drag Handlers
+  const handleDragStart = useCallback((e: React.DragEvent, index: number) => {
+    setDraggedIdx(index);
+    triggerHaptic('medium');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIdx((prev) => (prev !== index ? index : prev));
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIdx !== null && draggedIdx !== index) {
+      handleReorder(draggedIdx, index);
+      triggerHaptic('success');
+    }
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  }, [draggedIdx, handleReorder]);
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  }, []);
+
+  // Mobile Touch Hold & Drag Handlers
+  const handleTouchStartDrag = useCallback((e: React.TouchEvent, index: number) => {
+    touchActiveIndexRef.current = index;
+    setDraggedIdx(index);
+    triggerHaptic('medium');
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (touchActiveIndexRef.current === null) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    const rowEl = el?.closest('[data-category-index]');
+    if (rowEl) {
+      const targetIdx = Number(rowEl.getAttribute('data-category-index'));
+      if (!isNaN(targetIdx) && targetIdx !== dragOverIdx) {
+        setDragOverIdx(targetIdx);
+        triggerHaptic('selection');
+      }
+    }
+  }, [dragOverIdx]);
+
+  const handleTouchEnd = useCallback(() => {
+    if (touchActiveIndexRef.current !== null && dragOverIdx !== null && touchActiveIndexRef.current !== dragOverIdx) {
+      handleReorder(touchActiveIndexRef.current, dragOverIdx);
+      triggerHaptic('success');
+    }
+    touchActiveIndexRef.current = null;
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  }, [dragOverIdx, handleReorder]);
+
   // Instant reorder: Move to front (1st position)
   const handleMoveToFront = useCallback((idx: number) => {
     if (idx === 0) return;
@@ -299,8 +389,10 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       const copy = [...prev];
       const [item] = copy.splice(idx, 1);
       copy.unshift(item);
-      onCategoriesChange?.(copy, categoryIcons, defaultLandingCat);
       persistCategoryOrder(copy);
+      queueMicrotask(() => {
+        onCategoriesChange?.(copy, categoryIcons, defaultLandingCat);
+      });
       return copy;
     });
   }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
@@ -313,8 +405,10 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       const temp = copy[idx - 1];
       copy[idx - 1] = copy[idx];
       copy[idx] = temp;
-      onCategoriesChange?.(copy, categoryIcons, defaultLandingCat);
       persistCategoryOrder(copy);
+      queueMicrotask(() => {
+        onCategoriesChange?.(copy, categoryIcons, defaultLandingCat);
+      });
       return copy;
     });
   }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
@@ -327,8 +421,10 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       const temp = copy[idx + 1];
       copy[idx + 1] = copy[idx];
       copy[idx] = temp;
-      onCategoriesChange?.(copy, categoryIcons, defaultLandingCat);
       persistCategoryOrder(copy);
+      queueMicrotask(() => {
+        onCategoriesChange?.(copy, categoryIcons, defaultLandingCat);
+      });
       return copy;
     });
   }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
@@ -353,7 +449,9 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
 
     try {
       await saveCategories(updated, categoryIcons);
-      onCategoriesChange?.(updated, categoryIcons, defaultLandingCat);
+      queueMicrotask(() => {
+        onCategoriesChange?.(updated, categoryIcons, defaultLandingCat);
+      });
     } catch (err: any) {
       setFeedback(`Error adding category: ${err?.message || 'failed'}`);
     } finally {
@@ -415,7 +513,9 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     try {
       await saveCategories(updated, updatedIcons);
       await renameCategoryInProducts(oldName, trimmed);
-      onCategoriesChange?.(updated, updatedIcons, nextLanding);
+      queueMicrotask(() => {
+        onCategoriesChange?.(updated, updatedIcons, nextLanding);
+      });
       setFeedback(`✓ Renamed "${oldName}" to "${trimmed}" across menu!`);
     } catch (err: any) {
       setFeedback(`Error: ${err?.message || 'failed'}`);
@@ -446,7 +546,9 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
 
     try {
       await saveCategories(updated, updatedIcons);
-      onCategoriesChange?.(updated, updatedIcons, nextLanding);
+      queueMicrotask(() => {
+        onCategoriesChange?.(updated, updatedIcons, nextLanding);
+      });
       setFeedback(`✓ Deleted category "${categoryToDelete}"`);
     } catch (err: any) {
       setFeedback(`Error: ${err?.message || 'failed'}`);
@@ -472,7 +574,9 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
 
     try {
       await saveCategories(DEFAULT_CATEGORIES, categoryIcons);
-      onCategoriesChange?.(DEFAULT_CATEGORIES, categoryIcons, defaultLandingCat);
+      queueMicrotask(() => {
+        onCategoriesChange?.(DEFAULT_CATEGORIES, categoryIcons, defaultLandingCat);
+      });
       setFeedback('✓ Restored default category catalog!');
     } catch (err: any) {
       setFeedback(`Error resetting: ${err?.message || 'failed'}`);
@@ -504,7 +608,9 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     setIsIconPickerOpen(false);
 
     saveCategories(localCategories, updatedIcons).catch(() => {});
-    onCategoriesChange?.(localCategories, updatedIcons, defaultLandingCat);
+    queueMicrotask(() => {
+      onCategoriesChange?.(localCategories, updatedIcons, defaultLandingCat);
+    });
 
     setFeedback(`✓ Updated icon for "${activeCategoryForIcon}"!`);
     setTimeout(() => setFeedback(null), 3000);
@@ -517,7 +623,9 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
 
     try {
       await saveDefaultLandingCategory(newLandingCat);
-      onCategoriesChange?.(localCategories, categoryIcons, newLandingCat);
+      queueMicrotask(() => {
+        onCategoriesChange?.(localCategories, categoryIcons, newLandingCat);
+      });
       setFeedback(`✓ Default customer landing set to "${newLandingCat}"!`);
     } catch (err: any) {
       setFeedback(`Error saving default category: ${err?.message || 'failed'}`);
@@ -641,7 +749,20 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
             </span>
           </div>
 
-          <div className="space-y-2.5">
+          {/* Easy Rearrange Tip Banner */}
+          <div className="flex items-center gap-2 px-3 py-2 bg-amber-50/80 border border-amber-200/90 rounded-xl text-[11px] text-amber-900 font-medium select-none">
+            <GripVertical className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>
+              <strong>Easy Rearrange:</strong> Desktop par mouse se hold & drag karein, ya Phone par grip icon (⋮⋮) ko touch-and-hold karke upar/neeche drop karein.
+            </span>
+          </div>
+
+          <div
+            className="space-y-2.5"
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
+          >
             {localCategories.map((cat, idx) => (
               <CategoryItemRow
                 key={cat}
@@ -651,6 +772,8 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
                 itemCount={categoryCounts[cat] || 0}
                 isFirst={idx === 0}
                 isEditing={editingIdx === idx}
+                isDragging={draggedIdx === idx}
+                isDragOver={dragOverIdx === idx}
                 visual={categoryIcons[cat]}
                 editNameInput={editingName}
                 onEditInputChange={setEditingName}
@@ -662,6 +785,11 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
                 onMoveDown={handleMoveDown}
                 onOpenIconPicker={handleOpenIconPicker}
                 onInitDelete={setCategoryToDelete}
+                onDragStart={handleDragStart}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                onDragEnd={handleDragEnd}
+                onTouchStartDrag={handleTouchStartDrag}
               />
             ))}
           </div>

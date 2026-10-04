@@ -207,23 +207,96 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     return results;
   };
 
+  // Helper to purge deleted/archived orders from local storage
+  const purgeOrderFromLocalCache = (identifier: string, extraKeys: string[] = []) => {
+    try {
+      const keys = [identifier, ...extraKeys].map((k) => String(k).toLowerCase());
+      const cleanStored = (storageKey: string) => {
+        const stored = localStorage.getItem(storageKey);
+        if (stored) {
+          const list = JSON.parse(stored);
+          if (Array.isArray(list)) {
+            const updated = list.filter((o: any) => {
+              const oId = String(o.orderId || o.id || '').toLowerCase();
+              return !keys.includes(oId);
+            });
+            localStorage.setItem(storageKey, JSON.stringify(updated));
+            setSavedDeviceOrders(updated);
+          }
+        }
+      };
+      cleanStored('swadeep_recent_orders');
+      cleanStored('gidhaur_recent_orders');
+    } catch (e) {
+      console.warn('Error purging order from cache:', e);
+    }
+  };
+
+  const purgePhoneOrdersFromLocalCache = (phoneDigits: string) => {
+    try {
+      const cleanStored = (storageKey: string) => {
+        const stored = localStorage.getItem(storageKey);
+        if (stored) {
+          const list = JSON.parse(stored);
+          if (Array.isArray(list)) {
+            const updated = list.filter((o: any) => {
+              const oPhone = String(o.phone || '').replace(/\D/g, '');
+              return oPhone !== phoneDigits && !oPhone.endsWith(phoneDigits);
+            });
+            localStorage.setItem(storageKey, JSON.stringify(updated));
+            setSavedDeviceOrders(updated);
+          }
+        }
+      };
+      cleanStored('swadeep_recent_orders');
+      cleanStored('gidhaur_recent_orders');
+    } catch (e) {
+      console.warn('Error purging phone orders from cache:', e);
+    }
+  };
+
   // Real-time SSE live updates from server engine
   useEffect(() => {
     const unsub = subscribeToLiveSync({
       onOrdersUpdate: (incomingOrders) => {
-        if (!Array.isArray(incomingOrders) || incomingOrders.length === 0) return;
+        if (!Array.isArray(incomingOrders)) return;
         setOrders((prev) => {
           if (prev.length === 0) return prev;
-          return prev.map((ord) => {
-            const updated = incomingOrders.find(
-              (io) => io.id === ord.id || io.orderId === ord.orderId
-            );
-            return updated ? normalizeOrder(updated) : ord;
-          });
+          return prev
+            .filter((ord) =>
+              incomingOrders.some(
+                (io) =>
+                  (io.id === ord.id || io.orderId === ord.orderId) &&
+                  !io.isArchived &&
+                  !io.archivedAt &&
+                  (io as any).status !== 'archived'
+              )
+            )
+            .map((ord) => {
+              const updated = incomingOrders.find(
+                (io) => io.id === ord.id || io.orderId === ord.orderId
+              );
+              return updated ? normalizeOrder(updated) : ord;
+            });
         });
       },
     });
-    return () => unsub();
+
+    const handleOrderRemoved = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail) return;
+      const key = detail.orderId || detail.id;
+      if (key) {
+        setOrders((prev) => prev.filter((o) => o.orderId !== key && o.id !== key));
+        setSavedDeviceOrders((prev) => prev.filter((o) => o.orderId !== key && o.id !== key));
+      }
+    };
+    window.addEventListener('swadeep_order_removed', handleOrderRemoved);
+
+    return () => {
+      unsub();
+      window.removeEventListener('swadeep_order_removed', handleOrderRemoved);
+    };
   }, []);
 
   const handleClearTrackingHistory = () => {
@@ -455,26 +528,50 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
             const orderDocRef = doc(db, 'orders', directId);
             getDoc(orderDocRef).then((directSnap) => {
               if (directSnap.exists()) {
+                const data = directSnap.data();
+                if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) {
+                  // Archived or deleted by admin
+                  setOrders([]);
+                  purgeOrderFromLocalCache(rawClean, candidateIds);
+                  setIsSearchBoxOpen(true);
+                  setErrorMessage(`Order #${rawClean} is no longer active.`);
+                  return;
+                }
                 const order = mapDocToOrder(directSnap);
                 setOrders([order]);
                 setExpandedOrders(new Set([order.orderId]));
                 setIsSearchBoxOpen(false);
                 setErrorMessage(null);
-              } else if (localMatches.length === 0) {
-                setErrorMessage(`No order found with ID "${rawClean}".`);
+              } else {
+                // Document deleted by admin
+                setOrders([]);
+                purgeOrderFromLocalCache(rawClean, candidateIds);
+                setIsSearchBoxOpen(true);
+                setErrorMessage(`Order #${rawClean} is no longer active.`);
               }
             }).catch(() => {
-              if (localMatches.length === 0) {
-                setErrorMessage(`No order found with ID "${rawClean}".`);
-              }
+              setOrders([]);
+              purgeOrderFromLocalCache(rawClean, candidateIds);
+              setIsSearchBoxOpen(true);
+              setErrorMessage(`Order #${rawClean} is no longer active.`);
             });
             return;
           }
 
           const fetchedOrders: Order[] = [];
           querySnapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) return;
             fetchedOrders.push(mapDocToOrder(docSnap));
           });
+
+          if (fetchedOrders.length === 0) {
+            setOrders([]);
+            purgeOrderFromLocalCache(rawClean, candidateIds);
+            setIsSearchBoxOpen(true);
+            setErrorMessage(`Order #${rawClean} is no longer active.`);
+            return;
+          }
 
           setOrders(fetchedOrders);
           setExpandedOrders(new Set(fetchedOrders.map((o) => o.orderId)));
@@ -538,16 +635,27 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
         (querySnapshot) => {
           setIsLoading(false);
           if (querySnapshot.empty) {
-            if (localMatches.length === 0) {
-              setErrorMessage(`No orders found for mobile "${cleanPhone}".`);
-            }
+            setOrders([]);
+            purgePhoneOrdersFromLocalCache(cleanPhone);
+            setIsSearchBoxOpen(true);
+            setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
             return;
           }
 
           const fetchedOrders: Order[] = [];
           querySnapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) return;
             fetchedOrders.push(mapDocToOrder(docSnap));
           });
+
+          if (fetchedOrders.length === 0) {
+            setOrders([]);
+            purgePhoneOrdersFromLocalCache(cleanPhone);
+            setIsSearchBoxOpen(true);
+            setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
+            return;
+          }
 
           fetchedOrders.sort((a, b) => {
             const timeA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
