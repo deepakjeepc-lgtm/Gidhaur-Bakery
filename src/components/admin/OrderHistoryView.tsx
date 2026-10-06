@@ -419,6 +419,11 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                         {item.selectedSize && (
                           <span className="text-[10px] text-slate-400 font-semibold shrink-0">({item.selectedSize})</span>
                         )}
+                        {item.selectedExtras && item.selectedExtras.length > 0 && (
+                          <span className="text-[9.5px] text-amber-800 font-bold bg-amber-50 px-1 py-0.5 rounded border border-amber-200/60 shrink-0">
+                            +{item.selectedExtras.map(e => e.name).join(', ')}
+                          </span>
+                        )}
                       </div>
                       <span className="font-mono font-bold text-slate-900 shrink-0 ml-2">₹{item.price * item.quantity}</span>
                     </div>

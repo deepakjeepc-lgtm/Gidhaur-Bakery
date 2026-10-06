@@ -176,23 +176,31 @@ export const ProductLinkModal: React.FC<ProductLinkModalProps> = ({
       for (const id of currentGroupMemberIds) {
         const prodRef = doc(db, 'products', id);
         const shortName = (labelsMap[id] || '').trim();
-        batch.update(prodRef, {
-          groupId: targetGroupId,
-          groupName: cleanLabel,
-          selectedColorName: shortName || undefined,
-          updatedAt: serverTimestamp()
-        });
+        batch.set(
+          prodRef,
+          {
+            groupId: targetGroupId,
+            groupName: cleanLabel,
+            selectedColorName: shortName || undefined,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
 
       // Update Firestore: Clear groupId from unselected products
       for (const p of previouslyInGroup) {
         const prodRef = doc(db, 'products', p.id);
-        batch.update(prodRef, {
-          groupId: null as any,
-          groupName: null as any,
-          selectedColorName: null as any,
-          updatedAt: serverTimestamp()
-        });
+        batch.set(
+          prodRef,
+          {
+            groupId: null as any,
+            groupName: null as any,
+            selectedColorName: null as any,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
 
       await batch.commit();
@@ -250,12 +258,16 @@ export const ProductLinkModal: React.FC<ProductLinkModalProps> = ({
     try {
       const prodRef = doc(db, 'products', targetProduct.id);
       const batch = writeBatch(db);
-      batch.update(prodRef, {
-        groupId: null as any,
-        groupName: null as any,
-        selectedColorName: null as any,
-        updatedAt: serverTimestamp()
-      });
+      batch.set(
+        prodRef,
+        {
+          groupId: null as any,
+          groupName: null as any,
+          selectedColorName: null as any,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
       await batch.commit();
 
       const updatedAll = allProducts.map((p) => {

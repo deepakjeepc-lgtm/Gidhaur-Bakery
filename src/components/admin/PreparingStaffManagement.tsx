@@ -31,7 +31,9 @@ export const PreparingStaffManagement: React.FC<PreparingStaffManagementProps> =
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<PreparingStaff | null>(null);
+  const [deletingStaff, setDeletingStaff] = useState<PreparingStaff | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Form State
   const [name, setName] = useState('');
@@ -111,9 +113,16 @@ export const PreparingStaffManagement: React.FC<PreparingStaffManagementProps> =
     await updatePreparingStaff(staff.id, { status: nextStatus });
   };
 
-  const handleDelete = async (id: string, staffName: string) => {
-    if (window.confirm(`Are you sure you want to remove preparing staff "${staffName}"?`)) {
-      await deletePreparingStaff(id);
+  const handleConfirmDelete = async () => {
+    if (!deletingStaff) return;
+    setIsDeleting(true);
+    try {
+      await deletePreparingStaff(deletingStaff.id);
+      setDeletingStaff(null);
+    } catch (err: any) {
+      setFormError(err?.message || 'Failed to delete preparing staff');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -299,8 +308,8 @@ export const PreparingStaffManagement: React.FC<PreparingStaffManagementProps> =
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => handleDelete(staff.id, staff.name)}
-                      className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-all border border-red-200"
+                      onClick={() => setDeletingStaff(staff)}
+                      className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-all border border-red-200 cursor-pointer"
                       title="Delete staff"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -328,7 +337,7 @@ export const PreparingStaffManagement: React.FC<PreparingStaffManagementProps> =
               </div>
               <button
                 onClick={() => setIsAddModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1"
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
                 ✕
               </button>
@@ -417,19 +426,56 @@ export const PreparingStaffManagement: React.FC<PreparingStaffManagementProps> =
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all disabled:opacity-50"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {isSubmitting ? 'Saving...' : editingStaff ? 'Save Changes' : 'Create Staff Member'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (No window.confirm, iframe safe) */}
+      {deletingStaff && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4 animate-in zoom-in-95 text-center">
+            <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto border border-red-100">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="font-heading font-extrabold text-base text-slate-900">
+                Remove Preparing Staff?
+              </h4>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Are you sure you want to remove <strong>{deletingStaff.name}</strong> ({deletingStaff.role})?
+                This staff member will no longer be able to log in to the packaging & dispatch display.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingStaff(null)}
+                className="flex-1 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Staff'}
+              </button>
+            </div>
           </div>
         </div>
       )}

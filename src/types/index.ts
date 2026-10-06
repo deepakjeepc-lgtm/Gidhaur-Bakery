@@ -15,6 +15,14 @@ export interface ProductColorVariant {
   imageFit?: 'cover' | 'contain';
 }
 
+export interface ProductExtra {
+  id: string;
+  name: string; // e.g. "Extra Cheese", "Extra Corn", "Extra Spicy", "Extra Paneer"
+  price: number; // e.g. 30, 20, 15
+  available?: boolean; // In-stock toggle (default: true)
+  category?: string; // e.g. "Toppings", "Cheese & Dips", "Seasoning", "General"
+}
+
 export interface ProductVariant {
   name: string; // e.g. "Small", "Medium", "Large", "Regular", "King Size", "Number 4"
   price: number;
@@ -57,6 +65,7 @@ export interface Product {
   sortOrder?: number;
   isFeatured?: boolean;
   isPinnedToFront?: boolean;
+  availableExtras?: ProductExtra[];
 }
 
 export type PriceRangePreset = 'all' | 'under-200' | '200-400' | 'above-400' | 'custom';
@@ -72,6 +81,7 @@ export interface OrderItem {
   productId: string;
   name: string;
   selectedSize?: string;
+  selectedExtras?: ProductExtra[];
   price: number;
   quantity: number;
   imageUrl?: string;
@@ -144,6 +154,7 @@ export interface CartItem {
   id: string;
   product: Product;
   selectedVariant?: ProductVariant;
+  selectedExtras?: ProductExtra[];
   quantity: number;
 }
 

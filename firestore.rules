@@ -20,6 +20,9 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow read, write: if true;
     }
+    match /customer_emails/{emailId} {
+      allow read, write: if true;
+    }
     match /{document=**} {
       allow read, write: if true;
     }

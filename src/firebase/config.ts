@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, initializeFirestore, memoryLocalCache, doc, getDocFromServer } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, memoryLocalCache } from 'firebase/firestore';
 import {
   getAuth,
   initializeAuth,
@@ -15,22 +15,28 @@ export const firebaseConfig = {
   projectId: "swadeep-2e33a",
   storageBucket: "swadeep-2e33a.firebasestorage.app",
   messagingSenderId: "107876066770",
-  appId: "1:107876066770:web:e428e27556e542f4f9540b"
+  appId: "1:107876066770:web:7970267951e6dc28f9540b",
+  firestoreDatabaseId: "ai-studio-swadeep-c9f5f4f9-12f6-4ef3-a3b0-884128973d8b"
 };
 
 // Initialize Firebase App safely (singleton)
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Firestore with robust connection handling and memory cache for iframe / background web environments
+export const FIRESTORE_DATABASE_ID = firebaseConfig.firestoreDatabaseId;
+
+// Initialize Firestore targeting the dedicated cloud database
 export const db = (() => {
   try {
-    return initializeFirestore(app, {
-      experimentalForceLongPolling: true,
-      ignoreUndefinedProperties: true,
-      localCache: memoryLocalCache(),
-    });
+    return initializeFirestore(
+      app,
+      {
+        ignoreUndefinedProperties: true,
+        localCache: memoryLocalCache(),
+      },
+      FIRESTORE_DATABASE_ID
+    );
   } catch {
-    return getFirestore(app);
+    return getFirestore(app, FIRESTORE_DATABASE_ID);
   }
 })();
 
@@ -46,20 +52,5 @@ export const auth = (() => {
 })();
 
 export const storage = getStorage(app);
-
-// Defensive connection health test for Firestore
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firebase configuration note: client is offline.');
-    }
-  }
-}
-
-if (typeof window !== 'undefined') {
-  testConnection().catch(() => {});
-}
 
 

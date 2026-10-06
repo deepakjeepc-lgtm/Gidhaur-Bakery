@@ -19,7 +19,7 @@ import {
   Palette,
   Hash
 } from 'lucide-react';
-import { Product, ProductVariant } from '../types';
+import { Product, ProductVariant, ProductExtra } from '../types';
 import { useCart } from '../context/CartContext';
 import { triggerHaptic } from '../utils/haptics';
 
@@ -66,6 +66,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     return product?.variants && product.variants.length === 1 ? 0 : -1;
   });
   const [selectedQty, setSelectedQty] = useState(1);
+  const [selectedExtras, setSelectedExtras] = useState<ProductExtra[]>([]);
   const [isHovered, setIsHovered] = useState(false);
   const [isManualPaused, setIsManualPaused] = useState(false);
   const manualPauseTimerRef = useRef<number | null>(null);
@@ -240,6 +241,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     setIsManualPaused(false);
     setShakeError(false);
     setHighlightMissing(false);
+    setSelectedExtras([]);
   }, [product?.id, product?.defaultVariantIndex]);
 
   const handleSelectVariant = (idx: number) => {
@@ -404,11 +406,29 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   const [highlightMissing, setHighlightMissing] = useState(false);
   const shakeTimerRef = useRef<number | null>(null);
 
-  const currentPrice = activeVariant
+  const selectedExtrasTotal = useMemo(() => {
+    return selectedExtras.reduce((sum, e) => sum + (Number(e.price) || 0), 0);
+  }, [selectedExtras]);
+
+  const basePrice = activeVariant
     ? activeVariant.price
     : selectedColorOption
     ? selectedColorOption.price
     : product.price;
+
+  const currentPrice = basePrice + selectedExtrasTotal;
+
+  const handleToggleExtra = (extra: ProductExtra) => {
+    triggerHaptic('selection');
+    setSelectedExtras((prev) => {
+      const exists = prev.some((e) => e.id === extra.id);
+      if (exists) {
+        return prev.filter((e) => e.id !== extra.id);
+      } else {
+        return [...prev, extra];
+      }
+    });
+  };
 
   const handleAddOrUpdate = () => {
     if (!product.available || !isVariantInStock) return;
@@ -464,7 +484,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       };
     }
 
-    addToCart(product, selectedQty, variantToSave);
+    addToCart(product, selectedQty, variantToSave, selectedExtras);
     setAddedAnimation(true);
     setTimeout(() => {
       setAddedAnimation(false);
@@ -533,12 +553,9 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
         {/* Scrollable Content: Edge-to-Edge Hero Image + Details */}
         <div
-          className="flex-1 overflow-y-auto select-text pb-48 sm:pb-56 transform-gpu will-change-scroll overscroll-y-contain no-scrollbar"
+          className="flex-1 overflow-y-auto select-text pb-48 sm:pb-56 overscroll-y-contain no-scrollbar"
           style={{
             WebkitOverflowScrolling: 'touch',
-            scrollBehavior: 'smooth',
-            transform: 'translate3d(0, 0, 0)',
-            backfaceVisibility: 'hidden',
           }}
         >
           {/* Edge-to-Edge Hero Picture Container */}
@@ -1098,6 +1115,77 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                         {/* Price */}
                         <span className="text-[10px] font-extrabold text-slate-500 mt-0.5">
                           ₹{opt.price}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 4. Add-ons & Extras (Direct Visible Boxes - No Dropdown) */}
+          {product.availableExtras && product.availableExtras.length > 0 && (
+            <div id="product-extras-section" className="space-y-2.5 pt-3 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400 shrink-0" />
+                  <span className="font-heading text-xs font-bold text-slate-900 tracking-tight">
+                    Add-ons & Extras:
+                  </span>
+                </div>
+                {selectedExtras.length > 0 && (
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                    {selectedExtras.length} selected (+₹{selectedExtrasTotal})
+                  </span>
+                )}
+              </div>
+
+              {/* Direct Open Grid of Boxes - ZERO Dropdowns */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {product.availableExtras.map((extra) => {
+                  const isChecked = selectedExtras.some((e) => e.id === extra.id);
+                  const isExtraAvailable = extra.available !== false;
+
+                  return (
+                    <button
+                      key={extra.id}
+                      type="button"
+                      disabled={!isExtraAvailable}
+                      onClick={() => handleToggleExtra(extra)}
+                      className={`relative p-2.5 rounded-2xl text-left flex flex-col justify-between transition-all duration-150 cursor-pointer ${
+                        isChecked
+                          ? 'border border-amber-400 bg-amber-50/80 shadow-[0_4px_14px_rgba(245,158,11,0.18)] ring-1 ring-amber-400/80 scale-[1.02]'
+                          : isExtraAvailable
+                          ? 'border border-slate-200/90 bg-white hover:bg-slate-50/90 hover:border-slate-300 shadow-2xs'
+                          : 'border border-slate-100 bg-slate-50/50 opacity-40 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-1.5 w-full">
+                        <span className={`text-xs font-heading font-extrabold leading-snug line-clamp-2 ${
+                          isChecked ? 'text-amber-950' : 'text-slate-900'
+                        }`}>
+                          {extra.name}
+                        </span>
+                        <div
+                          className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+                            isChecked
+                              ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                              : 'border-2 border-slate-300 bg-white'
+                          }`}
+                        >
+                          {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-1 mt-2 pt-1 border-t border-slate-100/80 w-full">
+                        <span className="text-[10px] font-semibold text-slate-400 truncate">
+                          {extra.category || 'Add-on'}
+                        </span>
+                        <span className={`text-[11px] font-heading font-black shrink-0 ${
+                          isChecked ? 'text-amber-900' : 'text-slate-800'
+                        }`}>
+                          +₹{extra.price}
                         </span>
                       </div>
                     </button>

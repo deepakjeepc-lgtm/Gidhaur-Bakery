@@ -1,11 +1,16 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Product, CartItem, ProductVariant } from '../types';
+import { Product, CartItem, ProductVariant, ProductExtra } from '../types';
 import { useLocation } from './LocationContext';
 import { triggerHaptic } from '../utils/haptics';
 
 interface CartContextType {
   items: CartItem[];
-  addToCart: (product: Product, quantity?: number, selectedVariant?: ProductVariant) => void;
+  addToCart: (
+    product: Product,
+    quantity?: number,
+    selectedVariant?: ProductVariant,
+    selectedExtras?: ProductExtra[]
+  ) => void;
   removeFromCart: (cartItemId: string) => void;
   updateQuantity: (cartItemId: string, quantity: number) => void;
   clearCart: () => void;
@@ -58,10 +63,18 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setIsCartOpen(open);
   };
 
-  const addToCart = (product: Product, quantity: number = 1, selectedVariant?: ProductVariant) => {
+  const addToCart = (
+    product: Product,
+    quantity: number = 1,
+    selectedVariant?: ProductVariant,
+    selectedExtras?: ProductExtra[]
+  ) => {
     triggerHaptic('medium');
     const variant = selectedVariant || (product.variants && product.variants.length > 0 ? product.variants[0] : undefined);
-    const cartItemId = `${product.id}-${variant?.name || 'default'}`;
+    const extrasKey = selectedExtras && selectedExtras.length > 0
+      ? selectedExtras.map((e) => e.id).sort().join('_')
+      : 'no_extras';
+    const cartItemId = `${product.id}-${variant?.name || 'default'}-${extrasKey}`;
 
     setItems((prev) => {
       const existingIndex = prev.findIndex((item) => item.id === cartItemId);
@@ -72,7 +85,16 @@ export function CartProvider({ children }: { children: ReactNode }) {
             : item
         );
       }
-      return [...prev, { id: cartItemId, product, selectedVariant: variant, quantity }];
+      return [
+        ...prev,
+        {
+          id: cartItemId,
+          product,
+          selectedVariant: variant,
+          selectedExtras: selectedExtras && selectedExtras.length > 0 ? selectedExtras : undefined,
+          quantity
+        }
+      ];
     });
   };
 
@@ -112,7 +134,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = items.reduce((sum, item) => {
-    const unitPrice = item.selectedVariant ? item.selectedVariant.price : item.product.price;
+    const basePrice = item.selectedVariant ? item.selectedVariant.price : item.product.price;
+    const extrasTotal = item.selectedExtras && item.selectedExtras.length > 0
+      ? item.selectedExtras.reduce((eSum, ex) => eSum + (Number(ex.price) || 0), 0)
+      : 0;
+    const unitPrice = basePrice + extrasTotal;
     return sum + unitPrice * item.quantity;
   }, 0);
 

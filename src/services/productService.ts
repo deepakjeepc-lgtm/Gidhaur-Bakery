@@ -277,12 +277,16 @@ export async function saveProductGroup({
   const toUnlink = previousProductIds.filter((id) => !activeIdsSet.has(id));
   for (const id of toUnlink) {
     const ref = doc(db, 'products', id);
-    batch.update(ref, {
-      groupId: deleteField(),
-      groupName: deleteField(),
-      groupVariantLabel: deleteField(),
-      updatedAt: serverTimestamp(),
-    });
+    batch.set(
+      ref,
+      {
+        groupId: deleteField(),
+        groupName: deleteField(),
+        groupVariantLabel: deleteField(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
   }
 
   // 2. Link all active products
@@ -296,7 +300,7 @@ export async function saveProductGroup({
     if (itemLabels && itemLabels[id] !== undefined) {
       updateData.groupVariantLabel = itemLabels[id].trim();
     }
-    batch.update(ref, updateData);
+    batch.set(ref, updateData, { merge: true });
   }
 
   await batch.commit();
@@ -358,7 +362,7 @@ export async function linkProductsToGroup(
     if (itemLabels && itemLabels[id] !== undefined) {
       updateData.groupVariantLabel = itemLabels[id].trim();
     }
-    batch.update(ref, updateData);
+    batch.set(ref, updateData, { merge: true });
   }
 
   await batch.commit();
@@ -437,12 +441,16 @@ export async function unlinkEntireGroup(groupId: string, allProducts: Product[])
   const batch = writeBatch(db);
   for (const prod of targets) {
     const ref = doc(db, 'products', prod.id);
-    batch.update(ref, {
-      groupId: deleteField(),
-      groupName: deleteField(),
-      groupVariantLabel: deleteField(),
-      updatedAt: serverTimestamp(),
-    });
+    batch.set(
+      ref,
+      {
+        groupId: deleteField(),
+        groupName: deleteField(),
+        groupVariantLabel: deleteField(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
   }
 
   await batch.commit();

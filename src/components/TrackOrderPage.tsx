@@ -361,12 +361,6 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     let mounted = true;
     const init = async () => {
       try {
-        // Enforce user instruction: clear legacy track history
-        if (localStorage.getItem('gidhaur_track_history_cleared_v2') !== 'true') {
-          clearAllTrackingHistory();
-          localStorage.setItem('gidhaur_track_history_cleared_v2', 'true');
-        }
-
         const savedOrdersStr =
           localStorage.getItem('gidhaur_recent_orders') ||
           localStorage.getItem('swadeep_recent_orders');
@@ -374,13 +368,10 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
         if (savedOrdersStr) {
           const parsed = JSON.parse(savedOrdersStr);
           if (Array.isArray(parsed)) {
-            // Apply rule: only retain orders from today with valid items (purges 0-item ghost orders)
+            // Keep valid orders with valid items
             ordersList = parsed.filter(
-              (o) => o && (o.orderId || o.id) && Array.isArray(o.items) && o.items.length > 0 && isOrderFromToday(o)
+              (o) => o && (o.orderId || o.id) && Array.isArray(o.items) && o.items.length > 0
             );
-            // Auto-persist sanitized list back to storage
-            localStorage.setItem('gidhaur_recent_orders', JSON.stringify(ordersList));
-            localStorage.setItem('swadeep_recent_orders', JSON.stringify(ordersList));
             if (mounted) setSavedDeviceOrders(ordersList);
           }
         }
@@ -405,9 +396,25 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
           await subscribeToPhoneOrders(initialPhone);
         } else if (orderIdToUse && ordersList.length > 0) {
           await subscribeToSingleOrder(orderIdToUse);
-        } else if (phoneToUse && ordersList.length > 0) {
+        } else if (phoneToUse && phoneToUse.length >= 10) {
           await subscribeToPhoneOrders(phoneToUse);
         } else {
+          // If fallback API has recent orders, load them
+          try {
+            const res = await fetch('/api/orders');
+            if (res.ok) {
+              const apiOrders = await res.json();
+              if (Array.isArray(apiOrders) && apiOrders.length > 0) {
+                const norm = apiOrders.map(normalizeOrder);
+                if (mounted) {
+                  setOrders(norm.slice(0, 5));
+                  setExpandedOrders(new Set([norm[0].orderId]));
+                  setIsSearchBoxOpen(false);
+                  return;
+                }
+              }
+            }
+          } catch {}
           if (mounted) setIsSearchBoxOpen(true);
         }
       } catch (e) {
@@ -529,6 +536,7 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     if (!rawClean) return;
 
     const digitsOnly = rawClean.replace(/\D/g, '');
+    const cleanNoHash = rawClean.replace(/^#+/, '').trim();
     let cleanId = rawClean.toUpperCase();
 
     setIsLoading(true);
@@ -546,17 +554,49 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
 
     const candidateIds = Array.from(
       new Set([
-        rawClean,
-        rawClean.replace('#', '').trim(),
+        cleanNoHash,
         digitsOnly,
+        rawClean,
         cleanId,
-        cleanId.replace(/-/g, ''),
-        rawClean.toLowerCase(),
+        cleanNoHash.toUpperCase(),
+        cleanNoHash.toLowerCase(),
       ])
     ).filter(Boolean);
 
     // 2. Also listen to Firestore live document updates or query
     try {
+      // First, try direct document fetch across candidate IDs
+      let foundDirect = false;
+      for (const cId of candidateIds) {
+        try {
+          const directSnap = await getDoc(doc(db, 'orders', cId));
+          if (directSnap.exists()) {
+            const data = directSnap.data();
+            if (!data.isArchived && !data.archived && data.status !== 'archived' && !data.isDeleted) {
+              const mapped = mapDocToOrder(directSnap);
+              setOrders([mapped]);
+              setExpandedOrders(new Set([mapped.orderId]));
+              setIsSearchBoxOpen(false);
+              setIsLoading(false);
+              setErrorMessage(null);
+              foundDirect = true;
+
+              // Subscribe to real-time updates for this document
+              if (unsubscribeRef.current) unsubscribeRef.current();
+              unsubscribeRef.current = onSnapshot(doc(db, 'orders', cId), (snap) => {
+                if (snap.exists()) {
+                  const updatedOrder = mapDocToOrder(snap);
+                  setOrders([updatedOrder]);
+                }
+              });
+              break;
+            }
+          }
+        } catch {}
+      }
+
+      if (foundDirect) return;
+
       const ordersCol = collection(db, 'orders');
       const q = query(ordersCol, where('orderId', 'in', candidateIds.slice(0, 10)));
 
@@ -566,38 +606,14 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
         (querySnapshot) => {
           setIsLoading(false);
           if (querySnapshot.empty) {
-            // Check direct docSnap with candidateIds
-            const directId = candidateIds[0] || rawClean;
-            const orderDocRef = doc(db, 'orders', directId);
-            getDoc(orderDocRef).then((directSnap) => {
-              if (directSnap.exists()) {
-                const data = directSnap.data();
-                if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) {
-                  // Archived or deleted by admin
-                  setOrders([]);
-                  purgeOrderFromLocalCache(rawClean, candidateIds);
-                  setIsSearchBoxOpen(true);
-                  setErrorMessage(`Order #${rawClean} is no longer active.`);
-                  return;
-                }
-                const order = mapDocToOrder(directSnap);
-                setOrders([order]);
-                setExpandedOrders(new Set([order.orderId]));
-                setIsSearchBoxOpen(false);
-                setErrorMessage(null);
-              } else {
-                // Document deleted by admin
-                setOrders([]);
-                purgeOrderFromLocalCache(rawClean, candidateIds);
-                setIsSearchBoxOpen(true);
-                setErrorMessage(`Order #${rawClean} is no longer active.`);
-              }
-            }).catch(() => {
-              setOrders([]);
-              purgeOrderFromLocalCache(rawClean, candidateIds);
-              setIsSearchBoxOpen(true);
-              setErrorMessage(`Order #${rawClean} is no longer active.`);
-            });
+            // Keep localMatches if we already found it
+            if (localMatches.length > 0) {
+              setOrders(localMatches);
+              setExpandedOrders(new Set(localMatches.map((o) => o.orderId)));
+              setIsSearchBoxOpen(false);
+              return;
+            }
+            setErrorMessage(`No order found with ID "${rawClean}". Please verify the 5-digit Order ID.`);
             return;
           }
 
@@ -609,9 +625,12 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
           });
 
           if (fetchedOrders.length === 0) {
-            setOrders([]);
-            purgeOrderFromLocalCache(rawClean, candidateIds);
-            setIsSearchBoxOpen(true);
+            if (localMatches.length > 0) {
+              setOrders(localMatches);
+              setExpandedOrders(new Set(localMatches.map((o) => o.orderId)));
+              setIsSearchBoxOpen(false);
+              return;
+            }
             setErrorMessage(`Order #${rawClean} is no longer active.`);
             return;
           }
@@ -678,8 +697,12 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
         (querySnapshot) => {
           setIsLoading(false);
           if (querySnapshot.empty) {
-            setOrders([]);
-            purgePhoneOrdersFromLocalCache(cleanPhone);
+            if (localMatches.length > 0) {
+              setOrders(localMatches);
+              setExpandedOrders(new Set([localMatches[0].orderId]));
+              setIsSearchBoxOpen(false);
+              return;
+            }
             setIsSearchBoxOpen(true);
             setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
             return;
@@ -693,8 +716,12 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
           });
 
           if (fetchedOrders.length === 0) {
-            setOrders([]);
-            purgePhoneOrdersFromLocalCache(cleanPhone);
+            if (localMatches.length > 0) {
+              setOrders(localMatches);
+              setExpandedOrders(new Set([localMatches[0].orderId]));
+              setIsSearchBoxOpen(false);
+              return;
+            }
             setIsSearchBoxOpen(true);
             setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
             return;

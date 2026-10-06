@@ -733,6 +733,11 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
                                         {item.quantity}x {item.name}
                                         {item.selectedSize && ` (${item.selectedSize})`}
                                       </span>
+                                      {item.selectedExtras && item.selectedExtras.length > 0 && (
+                                        <span className="ml-1.5 text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded font-bold not-italic">
+                                          +{item.selectedExtras.map(e => e.name).join(', ')}
+                                        </span>
+                                      )}
                                       {!inParcel && (
                                         <span className="ml-1.5 text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold not-italic">
                                           Not in parcel

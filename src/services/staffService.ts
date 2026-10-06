@@ -61,70 +61,38 @@ export const DEFAULT_SETTINGS: RestaurantSettings = {
   },
 };
 
-export const INITIAL_DELIVERY_AGENTS: DeliveryAgent[] = [
-  {
-    id: 'agent-1',
-    name: 'Rahul Kumar',
-    phone: '+91 98765 43211',
-    email: 'rahul.rider@gidhaurbakery.com',
-    password: 'password123',
-    vehicleType: 'Bike',
-    vehicleNumber: 'DL 01 AB 1234',
-    status: 'active',
-    activeOrdersCount: 0,
-    totalDeliveredCount: 24,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'agent-2',
-    name: 'Amit Sharma',
-    phone: '+91 98765 43212',
-    email: 'amit.rider@gidhaurbakery.com',
-    password: 'password123',
-    vehicleType: 'Scooter',
-    vehicleNumber: 'DL 04 CD 5678',
-    status: 'active',
-    activeOrdersCount: 0,
-    totalDeliveredCount: 18,
-    createdAt: new Date().toISOString()
-  }
-];
+export const INITIAL_DELIVERY_AGENTS: DeliveryAgent[] = [];
+export const INITIAL_KITCHEN_STAFF: KitchenStaff[] = [];
+export const INITIAL_PREPARING_STAFF: PreparingStaff[] = [];
 
-export const INITIAL_KITCHEN_STAFF: KitchenStaff[] = [
-  {
-    id: 'chef-1',
-    name: 'Chef Vikram Singh',
-    phone: '+91 98765 43221',
-    email: 'vikram.chef@gidhaurbakery.com',
-    password: 'password123',
-    role: 'Head Chef / All Stations',
-    status: 'active',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'chef-2',
-    name: 'Chef Neha Roy',
-    phone: '+91 98765 43222',
-    email: 'neha.chef@gidhaurbakery.com',
-    password: 'password123',
-    role: 'Fast Food & Beverages Specialist',
-    status: 'active',
-    createdAt: new Date().toISOString()
-  }
-];
+// Blacklist of hardcoded demo/dummy staff members that must NEVER be reloaded
+export const HARDCODED_STAFF_IDS = new Set<string>([
+  'agent-1',
+  'agent-2',
+  'chef-1',
+  'chef-2',
+  'prep-1'
+]);
 
-export const INITIAL_PREPARING_STAFF: PreparingStaff[] = [
-  {
-    id: 'prep-1',
-    name: 'Suresh Verma',
-    phone: '+91 98765 43231',
-    email: 'suresh.prep@gidhaurbakery.com',
-    password: 'password123',
-    role: 'Lead Packer & Props Specialist',
-    status: 'active',
-    createdAt: new Date().toISOString()
-  }
-];
+export const HARDCODED_STAFF_EMAILS = new Set<string>([
+  'rahul.rider@gidhaurbakery.com',
+  'rahul.rider@swadeep.com',
+  'amit.rider@gidhaurbakery.com',
+  'amit.rider@swadeep.com',
+  'vikram.chef@gidhaurbakery.com',
+  'vikram.chef@swadeep.com',
+  'neha.chef@gidhaurbakery.com',
+  'neha.chef@swadeep.com',
+  'suresh.prep@gidhaurbakery.com',
+  'suresh.prep@swadeep.com'
+]);
+
+export function isHardcodedStaff(staff: { id?: string; email?: string } | null | undefined): boolean {
+  if (!staff) return false;
+  if (staff.id && HARDCODED_STAFF_IDS.has(staff.id)) return true;
+  if (staff.email && HARDCODED_STAFF_EMAILS.has(staff.email.trim().toLowerCase())) return true;
+  return false;
+}
 
 // Local storage keys for resilient persistence
 const STORAGE_KEYS = {
@@ -209,29 +177,9 @@ export async function deleteAdminAccount(id: string): Promise<boolean> {
   return true;
 }
 
-// Seed Delivery Agents if not present
+// Seed only settings if missing (strictly NO hardcoded/dummy staff seeding)
 export async function seedStaffIfEmpty() {
   try {
-    const agentsSnap = await getDocs(collection(db, 'delivery_agents'));
-    if (agentsSnap.empty) {
-      for (const agent of INITIAL_DELIVERY_AGENTS) {
-        await setDoc(doc(db, 'delivery_agents', agent.id), {
-          ...agent,
-          createdAt: serverTimestamp()
-        });
-      }
-    }
-
-    const kitchenSnap = await getDocs(collection(db, 'kitchen_staff'));
-    if (kitchenSnap.empty) {
-      for (const chef of INITIAL_KITCHEN_STAFF) {
-        await setDoc(doc(db, 'kitchen_staff', chef.id), {
-          ...chef,
-          createdAt: serverTimestamp()
-        });
-      }
-    }
-
     const settingsDoc = await getDoc(doc(db, 'settings', 'restaurant'));
     if (!settingsDoc.exists()) {
       await setDoc(doc(db, 'settings', 'restaurant'), {
@@ -240,13 +188,6 @@ export async function seedStaffIfEmpty() {
       });
     }
   } catch (err) {
-    console.debug('Staff seeding fallback to local cache:', err);
-    if (!localStorage.getItem(STORAGE_KEYS.DELIVERY_AGENTS)) {
-      localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(INITIAL_DELIVERY_AGENTS));
-    }
-    if (!localStorage.getItem(STORAGE_KEYS.KITCHEN_STAFF)) {
-      localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(INITIAL_KITCHEN_STAFF));
-    }
     if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
     }
@@ -259,17 +200,17 @@ export function subscribeToDeliveryAgents(callback: (agents: DeliveryAgent[]) =>
     const unsubscribe = onSnapshot(
       collection(db, 'delivery_agents'),
       (snapshot) => {
-        if (snapshot.empty) {
-          const local = getLocalDeliveryAgents();
-          callback(local);
-        } else {
-          const agents: DeliveryAgent[] = [];
-          snapshot.forEach((d) => {
-            agents.push({ ...(d.data() as DeliveryAgent), id: d.id });
-          });
-          localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(agents));
-          callback(agents);
-        }
+        const agents: DeliveryAgent[] = [];
+        snapshot.forEach((d) => {
+          const item = { ...(d.data() as DeliveryAgent), id: d.id };
+          if (!isHardcodedStaff(item)) {
+            agents.push(item);
+          } else {
+            deleteDoc(doc(db, 'delivery_agents', d.id)).catch(() => {});
+          }
+        });
+        localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(agents));
+        callback(agents);
       },
       (error) => {
         console.warn('Firestore delivery agents listener fallback:', error);
@@ -286,9 +227,17 @@ export function subscribeToDeliveryAgents(callback: (agents: DeliveryAgent[]) =>
 export function getLocalDeliveryAgents(): DeliveryAgent[] {
   try {
     const data = localStorage.getItem(STORAGE_KEYS.DELIVERY_AGENTS);
-    return data ? JSON.parse(data) : INITIAL_DELIVERY_AGENTS;
+    if (data !== null) {
+      const parsed: DeliveryAgent[] = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter((a) => !isHardcodedStaff(a));
+        localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(cleaned));
+        return cleaned;
+      }
+    }
+    return [];
   } catch {
-    return INITIAL_DELIVERY_AGENTS;
+    return [];
   }
 }
 
@@ -315,7 +264,9 @@ export async function addDeliveryAgent(agentData: Omit<DeliveryAgent, 'id' | 'cr
 
   // Update local storage
   const current = getLocalDeliveryAgents();
-  localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify([newAgent, ...current]));
+  const updated = [newAgent, ...current.filter((a) => a.id !== id)];
+  localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(updated));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
   return id;
 }
 
@@ -332,6 +283,7 @@ export async function updateDeliveryAgent(id: string, updates: Partial<DeliveryA
 
   const current = getLocalDeliveryAgents().map((a) => (a.id === id ? { ...a, ...updates } : a));
   localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(current));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
 // Delete Delivery Agent
@@ -344,6 +296,7 @@ export async function deleteDeliveryAgent(id: string): Promise<void> {
 
   const current = getLocalDeliveryAgents().filter((a) => a.id !== id);
   localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(current));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
 // Subscribe to Kitchen Staff
@@ -352,16 +305,17 @@ export function subscribeToKitchenStaff(callback: (staff: KitchenStaff[]) => voi
     const unsubscribe = onSnapshot(
       collection(db, 'kitchen_staff'),
       (snapshot) => {
-        if (snapshot.empty) {
-          callback(getLocalKitchenStaff());
-        } else {
-          const staff: KitchenStaff[] = [];
-          snapshot.forEach((d) => {
-            staff.push({ ...(d.data() as KitchenStaff), id: d.id });
-          });
-          localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(staff));
-          callback(staff);
-        }
+        const staff: KitchenStaff[] = [];
+        snapshot.forEach((d) => {
+          const item = { ...(d.data() as KitchenStaff), id: d.id };
+          if (!isHardcodedStaff(item)) {
+            staff.push(item);
+          } else {
+            deleteDoc(doc(db, 'kitchen_staff', d.id)).catch(() => {});
+          }
+        });
+        localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(staff));
+        callback(staff);
       },
       (error) => {
         console.warn('Firestore kitchen staff listener fallback:', error);
@@ -378,9 +332,17 @@ export function subscribeToKitchenStaff(callback: (staff: KitchenStaff[]) => voi
 export function getLocalKitchenStaff(): KitchenStaff[] {
   try {
     const data = localStorage.getItem(STORAGE_KEYS.KITCHEN_STAFF);
-    return data ? JSON.parse(data) : INITIAL_KITCHEN_STAFF;
+    if (data !== null) {
+      const parsed: KitchenStaff[] = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter((s) => !isHardcodedStaff(s));
+        localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(cleaned));
+        return cleaned;
+      }
+    }
+    return [];
   } catch {
-    return INITIAL_KITCHEN_STAFF;
+    return [];
   }
 }
 
@@ -404,7 +366,9 @@ export async function addKitchenStaff(staffData: Omit<KitchenStaff, 'id' | 'crea
   }
 
   const current = getLocalKitchenStaff();
-  localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify([newStaff, ...current]));
+  const updated = [newStaff, ...current.filter((s) => s.id !== id)];
+  localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(updated));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
   return id;
 }
 
@@ -421,6 +385,7 @@ export async function updateKitchenStaff(id: string, updates: Partial<KitchenSta
 
   const current = getLocalKitchenStaff().map((s) => (s.id === id ? { ...s, ...updates } : s));
   localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(current));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
 // Delete Kitchen Staff
@@ -433,6 +398,7 @@ export async function deleteKitchenStaff(id: string): Promise<void> {
 
   const current = getLocalKitchenStaff().filter((s) => s.id !== id);
   localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(current));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
 // Subscribe to Preparing Staff (Packing Team)
@@ -441,16 +407,17 @@ export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) =>
     const unsubscribe = onSnapshot(
       collection(db, 'preparing_staff'),
       (snapshot) => {
-        if (snapshot.empty) {
-          callback(getLocalPreparingStaff());
-        } else {
-          const staff: PreparingStaff[] = [];
-          snapshot.forEach((d) => {
-            staff.push({ ...(d.data() as PreparingStaff), id: d.id });
-          });
-          localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(staff));
-          callback(staff);
-        }
+        const staff: PreparingStaff[] = [];
+        snapshot.forEach((d) => {
+          const item = { ...(d.data() as PreparingStaff), id: d.id };
+          if (!isHardcodedStaff(item)) {
+            staff.push(item);
+          } else {
+            deleteDoc(doc(db, 'preparing_staff', d.id)).catch(() => {});
+          }
+        });
+        localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(staff));
+        callback(staff);
       },
       (error) => {
         console.warn('Firestore preparing staff listener fallback:', error);
@@ -467,9 +434,17 @@ export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) =>
 export function getLocalPreparingStaff(): PreparingStaff[] {
   try {
     const data = localStorage.getItem(STORAGE_KEYS.PREPARING_STAFF);
-    return data ? JSON.parse(data) : INITIAL_PREPARING_STAFF;
+    if (data !== null) {
+      const parsed: PreparingStaff[] = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.filter((s) => !isHardcodedStaff(s));
+        localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(cleaned));
+        return cleaned;
+      }
+    }
+    return [];
   } catch {
-    return INITIAL_PREPARING_STAFF;
+    return [];
   }
 }
 
@@ -493,7 +468,9 @@ export async function addPreparingStaff(staffData: Omit<PreparingStaff, 'id' | '
   }
 
   const current = getLocalPreparingStaff();
-  localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify([newStaff, ...current]));
+  const updated = [newStaff, ...current.filter((s) => s.id !== id)];
+  localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(updated));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
   return id;
 }
 
@@ -510,6 +487,7 @@ export async function updatePreparingStaff(id: string, updates: Partial<Preparin
 
   const current = getLocalPreparingStaff().map((s) => (s.id === id ? { ...s, ...updates } : s));
   localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(current));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
 // Delete Preparing Staff
@@ -522,6 +500,7 @@ export async function deletePreparingStaff(id: string): Promise<void> {
 
   const current = getLocalPreparingStaff().filter((s) => s.id !== id);
   localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(current));
+  window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
 // Settings (UPI ID etc)

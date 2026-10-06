@@ -27,9 +27,11 @@ import {
   Tag,
   Package
 } from 'lucide-react';
-import { Product, ProductVariant } from '../../types';
+import { Product, ProductVariant, ProductExtra } from '../../types';
+import { triggerHaptic } from '../../utils/haptics';
 import { uploadOptimizedImages } from '../../services/storageService';
 import { findFoodImagesOnline, DetectedFoodImage } from '../../utils/foodImageFinder';
+import { getCachedExtras, subscribeToExtras } from '../../services/extrasService';
 
 interface ProductFormScreenProps {
   product: Product | null; // null when creating new
@@ -75,6 +77,19 @@ export const ProductFormScreen: React.FC<ProductFormScreenProps> = memo(({
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number; stage?: string } | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Extras & Add-ons state
+  const [globalExtras, setGlobalExtras] = useState<ProductExtra[]>(() => getCachedExtras());
+  const [selectedExtras, setSelectedExtras] = useState<ProductExtra[]>(() => product?.availableExtras || []);
+  const [customExtraName, setCustomExtraName] = useState('');
+  const [customExtraPrice, setCustomExtraPrice] = useState<number | ''>(25);
+
+  useEffect(() => {
+    const unsub = subscribeToExtras((items) => {
+      setGlobalExtras(items);
+    });
+    return () => unsub();
+  }, []);
 
   // Auto-Detect Images state
   const [isSearchingImages, setIsSearchingImages] = useState(false);
@@ -152,6 +167,7 @@ export const ProductFormScreen: React.FC<ProductFormScreenProps> = memo(({
         setHasVariants(false);
         setVariants([]);
       }
+      setSelectedExtras(product.availableExtras || []);
     } else {
       // New Product Defaults
       setName('');
@@ -172,6 +188,7 @@ export const ProductFormScreen: React.FC<ProductFormScreenProps> = memo(({
       setVariantMode('single');
       setHasVariants(false);
       setVariants([]);
+      setSelectedExtras([]);
     }
 
     setIsCompressing(false);
@@ -533,6 +550,42 @@ export const ProductFormScreen: React.FC<ProductFormScreenProps> = memo(({
   };
 
   // Submit Handler
+  const handleToggleExtra = (extra: ProductExtra) => {
+    setSelectedExtras((prev) => {
+      const exists = prev.some((e) => e.id === extra.id);
+      if (exists) {
+        return prev.filter((e) => e.id !== extra.id);
+      } else {
+        return [...prev, extra];
+      }
+    });
+  };
+
+  const handleSelectAllExtras = () => {
+    setSelectedExtras([...globalExtras]);
+  };
+
+  const handleClearAllExtras = () => {
+    setSelectedExtras([]);
+  };
+
+  const handleAddCustomProductExtra = () => {
+    const cleanName = customExtraName.trim();
+    const numPrice = Number(customExtraPrice);
+    if (!cleanName || isNaN(numPrice) || numPrice < 0) return;
+
+    const newExtra: ProductExtra = {
+      id: `extra-custom-${Date.now()}`,
+      name: cleanName,
+      price: numPrice,
+      available: true,
+      category: 'Custom Extra'
+    };
+    setSelectedExtras((prev) => [...prev, newExtra]);
+    setCustomExtraName('');
+    setCustomExtraPrice(25);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -601,10 +654,13 @@ export const ProductFormScreen: React.FC<ProductFormScreenProps> = memo(({
       groupId: product?.groupId,
       groupName: product?.groupName,
       groupVariantLabel: product?.groupVariantLabel,
+      availableExtras: selectedExtras,
     };
 
     try {
-      await onSave({
+      triggerHaptic('success');
+      // Fire onSave with optimistic instant transition
+      onSave({
         id: product?.id,
         productPayload,
         isFeatured,
@@ -613,7 +669,6 @@ export const ProductFormScreen: React.FC<ProductFormScreenProps> = memo(({
     } catch (err: any) {
       console.error('Error saving product:', err);
       setFormError(err?.message || 'Failed to save product. Please try again.');
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -1298,12 +1353,143 @@ export const ProductFormScreen: React.FC<ProductFormScreenProps> = memo(({
           )}
         </div>
 
-        {/* SECTION 3: Photos & Gallery Card */}
+        {/* SECTION 3: Add-ons & Extras (Direct Visible Boxes - No Dropdown) */}
+        <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-7 border border-slate-200/80 shadow-xs space-y-4 sm:space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-amber-500/10 text-amber-700 flex items-center justify-center font-extrabold text-xs">
+                3
+              </div>
+              <div>
+                <h3 className="font-heading font-extrabold text-sm sm:text-base text-slate-900 flex items-center gap-2">
+                  <span>Add-ons & Extras (Customizations)</span>
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                    {selectedExtras.length} Selected
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Customers see these directly as open choice boxes on the product page. They can pick one or multiple extras to increase price.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSelectAllExtras}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={handleClearAllExtras}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          {/* Direct Visible Boxes Grid (NO Dropdown) */}
+          <div className="space-y-3">
+            <span className="text-xs font-bold text-slate-700 block">
+              Available Extras Library (Click to attach to this item):
+            </span>
+
+            {globalExtras.length === 0 ? (
+              <p className="text-xs text-slate-500 italic">
+                No extras in library yet. Add one below.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                {globalExtras.map((extra) => {
+                  const isSelected = selectedExtras.some((e) => e.id === extra.id);
+                  return (
+                    <button
+                      key={extra.id}
+                      type="button"
+                      onClick={() => handleToggleExtra(extra)}
+                      className={`p-3 rounded-2xl border text-left flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                        isSelected
+                          ? 'border-amber-400 bg-amber-50/70 shadow-xs ring-1 ring-amber-400'
+                          : 'border-slate-200 bg-slate-50/60 hover:bg-slate-100/60 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        <div
+                          className={`w-5 h-5 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                            isSelected
+                              ? 'bg-amber-500 text-slate-950 font-black shadow-2xs'
+                              : 'border-2 border-slate-300 bg-white'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <span className="font-heading font-bold text-xs text-slate-900 block truncate">
+                            {extra.name}
+                          </span>
+                          <span className="text-[10px] font-semibold text-slate-500 block truncate">
+                            {extra.category || 'Topping'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <span className="shrink-0 font-heading font-extrabold text-xs text-slate-950 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-2xs">
+                        +₹{extra.price}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Quick Inline Add Custom Extra */}
+          <div className="pt-3 border-t border-slate-100 bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/80 space-y-2">
+            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <Plus className="w-3.5 h-3.5 text-amber-600" />
+              <span>Quick Add Custom Extra For This Item:</span>
+            </span>
+            <div className="flex flex-col sm:flex-row items-center gap-2">
+              <input
+                type="text"
+                placeholder="e.g. Extra Peri Peri Fries, Choco Dip"
+                value={customExtraName}
+                onChange={(e) => setCustomExtraName(e.target.value)}
+                className="w-full sm:flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-slate-900"
+              />
+              <div className="flex items-center gap-1 w-full sm:w-32">
+                <span className="text-xs font-bold text-slate-400 pl-1">₹</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="Price"
+                  value={customExtraPrice}
+                  onChange={(e) => setCustomExtraPrice(e.target.value ? Number(e.target.value) : '')}
+                  className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-slate-900"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleAddCustomProductExtra}
+                disabled={!customExtraName.trim()}
+                className="w-full sm:w-auto px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer"
+              >
+                + Add
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 4: Photos & Gallery Card */}
         <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-7 border border-slate-200/80 shadow-xs space-y-4 sm:space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div className="flex items-center gap-2.5">
               <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-slate-100 text-slate-800 flex items-center justify-center font-extrabold text-xs">
-                3
+                4
               </div>
               <h3 className="font-heading font-extrabold text-sm sm:text-base text-slate-900">
                 Photos & Gallery

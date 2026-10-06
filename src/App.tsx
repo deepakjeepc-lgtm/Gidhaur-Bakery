@@ -88,16 +88,13 @@ function MainApp() {
   const [trackingPhone, setTrackingPhone] = useState('');
 
   // Products state & real-time synchronization with offline caching (strictly excluding any hardcoded dummy items)
-  const [products, setProducts] = useState<Product[]>(() => {
-    return getSanitizedCachedProducts();
+  const initialCachedProducts = useMemo(() => getSanitizedCachedProducts(), []);
+  const [products, setProducts] = useState<Product[]>(initialCachedProducts);
+  const [hasInitialLoadCompleted, setHasInitialLoadCompleted] = useState<boolean>(() => {
+    return initialCachedProducts.length > 0;
   });
   const [isLoadingProducts, setIsLoadingProducts] = useState<boolean>(() => {
-    try {
-      const cached = localStorage.getItem('swadeep_cached_products');
-      return !cached;
-    } catch {
-      return true;
-    }
+    return initialCachedProducts.length === 0;
   });
 
   // Search & Category Filter - Persisted cross-session with Landing Screen default support
@@ -363,6 +360,7 @@ function MainApp() {
       q,
       (snapshot) => {
         setIsLoadingProducts(false);
+        setHasInitialLoadCompleted(true);
         if (snapshot.empty) {
           // Empty menu - strictly do NOT auto-seed or inject dummy products
           setProducts([]);
@@ -389,6 +387,7 @@ function MainApp() {
         // Fall back gracefully when Firestore permissions restrict direct queries or network is offline
         console.warn('Products sync note: using cached/local menu catalogue (Firestore offline or restricted).', err?.message || err);
         setIsLoadingProducts(false);
+        setHasInitialLoadCompleted(true);
         const cleanCached = getSanitizedCachedProducts();
         setProducts(cleanCached);
       }
@@ -797,7 +796,7 @@ function MainApp() {
           )}
 
           {/* Loading Skeleton State or Empty State or Product Grid */}
-          {isLoadingProducts && products.length === 0 ? (
+          {(!hasInitialLoadCompleted || isLoadingProducts) && products.length === 0 ? (
             <ProductSkeletonGrid count={8} />
           ) : (
             <div
@@ -805,8 +804,11 @@ function MainApp() {
               className="animate-category-switch w-full"
             >
               {filteredProducts.length === 0 ? (
-                /* Empty State */
-                <div className="text-center py-16 bg-white rounded-3xl border border-slate-200/80 p-8 shadow-xs my-4">
+                (!hasInitialLoadCompleted || isLoadingProducts) ? (
+                  <ProductSkeletonGrid count={8} />
+                ) : (
+                  /* Empty State */
+                  <div className="text-center py-16 bg-white rounded-3xl border border-slate-200/80 p-8 shadow-xs my-4">
                   <div className="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-4">
                     {activeCategory === 'Liked' ? (
                       <Heart className="w-8 h-8 stroke-[1.5]" />
@@ -836,6 +838,7 @@ function MainApp() {
                     </button>
                   )}
                 </div>
+                )
               ) : (
                 /* Product Grid - 2 columns on mobile, 3 on tablet, 4 on desktop directly without background patti */
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-5">

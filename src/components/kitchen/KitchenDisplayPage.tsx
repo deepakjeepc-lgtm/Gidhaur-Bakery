@@ -292,9 +292,15 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
       )
     );
 
+    setSelectedOrderForDispatch(null);
+
+    if (soundEnabled) {
+      playOrderAlertChime();
+    }
+
     try {
       const orderRef = doc(db, 'orders', selectedOrderForDispatch.id);
-      await updateDoc(orderRef, {
+      updateDoc(orderRef, {
         status: 'out_for_delivery',
         kitchenStatus: 'ready',
         kitchenReady: true,
@@ -312,7 +318,7 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
         originalSubtotal: selectedOrderForDispatch.originalSubtotal || selectedOrderForDispatch.subtotal,
         'statusTimestamps.out_for_delivery': serverTimestamp(),
         updatedAt: serverTimestamp()
-      });
+      }).catch((err) => console.warn('Kitchen updateDoc notice:', err));
 
       // Send branded out_for_delivery email to customer with only dispatched items charged!
       if (selectedOrderForDispatch.customerEmail && selectedOrderForDispatch.customerEmail.includes('@')) {
@@ -336,18 +342,8 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
           ).catch(() => {});
         }
       }
-
-      if (soundEnabled) {
-        playOrderAlertChime();
-      }
-
-      setSelectedOrderForDispatch(null);
     } catch (err: any) {
-      console.warn('Failed to dispatch order in Firestore (updated locally):', err?.message || err);
-      if (soundEnabled) {
-        playOrderAlertChime();
-      }
-      setSelectedOrderForDispatch(null);
+      console.error('Kitchen dispatch error:', err);
     } finally {
       setIsDispatching(false);
     }
@@ -691,12 +687,26 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
                                     >
                                       {isDone && <Check className="w-3.5 h-3.5" />}
                                     </div>
-                                    <span className="text-xs font-bold">
-                                      <span className="text-slate-950 font-mono text-sm mr-1">
-                                        {item.quantity}x
-                                      </span>{' '}
-                                      {item.name}
-                                    </span>
+                                    <div className="flex flex-col">
+                                      <span className="text-xs font-bold">
+                                        <span className="text-slate-950 font-mono text-sm mr-1">
+                                          {item.quantity}x
+                                        </span>{' '}
+                                        {item.name}
+                                      </span>
+                                      {item.selectedExtras && item.selectedExtras.length > 0 && (
+                                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                          {item.selectedExtras.map((extra: any) => (
+                                            <span
+                                              key={extra.id}
+                                              className="text-[9px] font-extrabold text-amber-900 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200/80 leading-none not-italic"
+                                            >
+                                              +{extra.name}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
 
                                   {item.selectedSize && (

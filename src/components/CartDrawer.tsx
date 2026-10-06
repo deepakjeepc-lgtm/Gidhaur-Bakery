@@ -46,7 +46,11 @@ const CartItemRow: React.FC<CartItemRowProps> = ({
   const currentXRef = useRef(0);
   const isHorizontalRef = useRef<boolean | null>(null);
 
-  const unitPrice = item.selectedVariant ? item.selectedVariant.price : item.product.price;
+  const baseUnitPrice = item.selectedVariant ? item.selectedVariant.price : item.product.price;
+  const extrasUnitPrice = item.selectedExtras && item.selectedExtras.length > 0
+    ? item.selectedExtras.reduce((sum, ex) => sum + (Number(ex.price) || 0), 0)
+    : 0;
+  const unitPrice = baseUnitPrice + extrasUnitPrice;
   const itemTotal = unitPrice * item.quantity;
   const isContain = item.selectedVariant?.imageFit === 'contain' || item.product.imageFit === 'contain';
 
@@ -199,6 +203,21 @@ const CartItemRow: React.FC<CartItemRowProps> = ({
               </span>
             ) : null}
           </div>
+
+          {/* Extras tags if any */}
+          {item.selectedExtras && item.selectedExtras.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 pt-0.5">
+              {item.selectedExtras.map((extra) => (
+                <span
+                  key={extra.id}
+                  className="text-[9.5px] font-bold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/80 leading-none flex items-center gap-0.5"
+                >
+                  <span>+{extra.name}</span>
+                  <span className="text-amber-700 font-extrabold">(₹{extra.price})</span>
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* Bottom Row: Total Item Price on Left, Stepper Quantity on Right */}
           <div className="flex items-center justify-between gap-2 pt-0.5">

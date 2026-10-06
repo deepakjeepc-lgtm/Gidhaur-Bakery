@@ -267,6 +267,7 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
 
   // Delete modal state
   const [categoryToDelete, setCategoryToDelete] = useState<string | null>(null);
+  const [showResetModal, setShowResetModal] = useState(false);
 
   // Keep localCategories in sync if external initialCategories changes
   useEffect(() => {
@@ -560,15 +561,8 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
   };
 
   // Reset to Defaults
-  const handleResetToDefaults = async () => {
-    if (
-      !window.confirm(
-        'Reset categories to the original restaurant defaults? Existing product assignments will remain intact.'
-      )
-    ) {
-      return;
-    }
-
+  const handleConfirmResetToDefaults = async () => {
+    setShowResetModal(false);
     setIsSaving(true);
     setLocalCategories(DEFAULT_CATEGORIES);
 
@@ -801,7 +795,7 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
             </span>
             <button
               type="button"
-              onClick={handleResetToDefaults}
+              onClick={() => setShowResetModal(true)}
               className="px-3.5 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -810,6 +804,41 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
           </div>
         </div>
       </div>
+
+      {/* Reset Categories Confirmation Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+              <RotateCcw className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-heading font-extrabold text-slate-900 text-lg">
+                Restore Default Categories?
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Reset categories to the original bakery defaults? Existing product assignments will remain intact.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowResetModal(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetToDefaults}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs shadow-md cursor-pointer"
+              >
+                Restore Defaults
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {categoryToDelete && (

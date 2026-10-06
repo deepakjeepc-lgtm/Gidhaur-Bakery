@@ -17,6 +17,7 @@ import { triggerHaptic } from '../../utils/haptics';
 import {
   collection,
   addDoc,
+  setDoc,
   updateDoc,
   deleteDoc,
   doc,
@@ -42,6 +43,7 @@ import {
 import { CategoryManagementScreen } from './CategoryManagementScreen';
 import { ProductFormScreen } from './ProductFormScreen';
 import { ProductLinkGroupScreen } from './ProductLinkGroupScreen';
+import { ExtrasManagementScreen } from './ExtrasManagementScreen';
 import { renderCategoryIcon } from '../../utils/categoryIcons';
 
 interface ProductManagementProps {
@@ -317,8 +319,8 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Full-screen dedicated views: 'catalog' | 'add-edit' | 'categories' | 'link-groups'
-  const [activeSubView, setActiveSubView] = useState<'catalog' | 'add-edit' | 'categories' | 'link-groups'>('catalog');
+  // Full-screen dedicated views: 'catalog' | 'add-edit' | 'categories' | 'link-groups' | 'extras'
+  const [activeSubView, setActiveSubView] = useState<'catalog' | 'add-edit' | 'categories' | 'link-groups' | 'extras'>('catalog');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // Deletion modal state
@@ -331,6 +333,10 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
   const openLinkGroup = useCallback((prod: Product | null) => {
     setLinkGroupProduct(prod);
     setActiveSubView('link-groups');
+  }, []);
+
+  const openExtrasScreen = useCallback(() => {
+    setActiveSubView('extras');
   }, []);
 
   // Toast / feedback message
@@ -402,46 +408,54 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
         }
       });
 
-      if (id) {
-        // Edit existing
-        const prodDoc = doc(db, 'products', id);
-        await updateDoc(prodDoc, {
-          ...cleanPayload,
-          updatedAt: serverTimestamp(),
-        });
-        setSeedSuccessMessage(`✓ "${cleanPayload.name}" updated successfully!`);
-      } else {
-        // Create new
-        const minOrder = products.reduce((min, p) => Math.min(min, p.sortOrder ?? 100), 100);
-        await addDoc(collection(db, 'products'), {
-          ...cleanPayload,
-          sortOrder: isFeatured ? minOrder - 1 : 100,
-          createdAt: serverTimestamp(),
-        });
-        setSeedSuccessMessage(`✓ "${cleanPayload.name}" added to menu catalog!`);
-      }
-
-      // Optimistic local update
+      // 1. Immediate optimistic local update for 0ms perceptible latency
       try {
         const cachedStr = localStorage.getItem('swadeep_cached_products');
         let currentProds: Product[] = cachedStr ? JSON.parse(cachedStr) : [...products];
+        const minOrder = currentProds.reduce((min, p) => Math.min(min, p.sortOrder ?? 100), 100);
+        const resolvedId = id || `item-${Date.now()}`;
+        const updatedItem = {
+          ...cleanPayload,
+          id: resolvedId,
+          sortOrder: isFeatured ? minOrder - 1 : 100,
+        } as Product;
+
         if (id) {
-          currentProds = currentProds.map((p) =>
-            p.id === id ? { ...p, ...productPayload, id } : p
-          );
+          currentProds = currentProds.map((p) => (p.id === id ? { ...p, ...updatedItem } : p));
         } else {
-          const minOrder = currentProds.reduce((min, p) => Math.min(min, p.sortOrder ?? 100), 100);
-          currentProds.unshift({
-            ...productPayload,
-            id: `item-${Date.now()}`,
-            sortOrder: isFeatured ? minOrder - 1 : 100,
-          } as Product);
+          currentProds.unshift(updatedItem);
         }
         localStorage.setItem('swadeep_cached_products', JSON.stringify(currentProds));
         window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: currentProds }));
+        if (onRefresh) onRefresh();
       } catch {}
 
+      setSeedSuccessMessage(`✓ "${cleanPayload.name}" ${id ? 'updated' : 'added'} successfully!`);
       setTimeout(() => setSeedSuccessMessage(null), 3500);
+
+      // 2. Persist to Firestore in background
+      try {
+        if (id) {
+          const prodDoc = doc(db, 'products', id);
+          await setDoc(
+            prodDoc,
+            {
+              ...cleanPayload,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+        } else {
+          const minOrder = products.reduce((min, p) => Math.min(min, p.sortOrder ?? 100), 100);
+          await addDoc(collection(db, 'products'), {
+            ...cleanPayload,
+            sortOrder: isFeatured ? minOrder - 1 : 100,
+            createdAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        console.warn('Firestore product persist notice (saved locally):', err);
+      }
     },
     [categories, products]
   );
@@ -461,10 +475,14 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
 
       try {
         const prodDoc = doc(db, 'products', product.id);
-        await updateDoc(prodDoc, {
-          available: !product.available,
-          updatedAt: serverTimestamp(),
-        });
+        await setDoc(
+          prodDoc,
+          {
+            available: !product.available,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       } catch (err: any) {
         console.warn('Firestore stock update note:', err?.message || err);
       }
@@ -491,11 +509,15 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
 
       try {
         const prodDoc = doc(db, 'products', product.id);
-        await updateDoc(prodDoc, {
-          isFeatured: isNowFeatured,
-          isPinnedToFront: isNowFeatured,
-          updatedAt: serverTimestamp(),
-        });
+        await setDoc(
+          prodDoc,
+          {
+            isFeatured: isNowFeatured,
+            isPinnedToFront: isNowFeatured,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       } catch (err: any) {
         console.warn('Firestore featured update note:', err?.message || err);
       }
@@ -535,10 +557,14 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
       try {
         const batch = writeBatch(db);
         reordered.forEach((p) => {
-          batch.update(doc(db, 'products', p.id), {
-            sortOrder: p.sortOrder,
-            updatedAt: serverTimestamp(),
-          });
+          batch.set(
+            doc(db, 'products', p.id),
+            {
+              sortOrder: p.sortOrder,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
         });
         await batch.commit();
       } catch (err: any) {
@@ -574,10 +600,14 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
         // Firestore batch update in background
         const batch = writeBatch(db);
         updatedList.forEach((p, i) => {
-          batch.update(doc(db, 'products', p.id), {
-            sortOrder: i + 1,
-            updatedAt: serverTimestamp(),
-          });
+          batch.set(
+            doc(db, 'products', p.id),
+            {
+              sortOrder: i + 1,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
         });
         await batch.commit();
       } catch (err: any) {
@@ -877,6 +907,14 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
     );
   }
 
+  if (activeSubView === 'extras') {
+    return (
+      <ExtrasManagementScreen
+        onBack={handleBackToCatalog}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Action and Search Header */}
@@ -912,6 +950,18 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
           >
             <Link2 className="w-4 h-4 text-indigo-600" />
             <span>Link Variants</span>
+          </button>
+
+          {/* Manage Extras & Add-ons Library */}
+          <button
+            type="button"
+            onClick={openExtrasScreen}
+            className="px-4 py-2.5 bg-white hover:bg-amber-50/50 border border-amber-200/90 text-amber-900 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 cursor-pointer"
+            id="admin-manage-extras-btn"
+            title="Manage Extras & Add-ons Library (Cheese, Corn, Spicy, Dips)"
+          >
+            <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
+            <span>+ Extras</span>
           </button>
 
           <button

@@ -333,7 +333,18 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
         updates.assignedAgentVehicleNumber = assignedAgent.vehicleNumber;
       }
 
-      await updateDoc(doc(db, 'orders', dispatchOrder.id), updates);
+      // Optimistic instant update
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === dispatchOrder.id || o.orderId === dispatchOrder.orderId ? { ...o, ...updates } : o
+        )
+      );
+      setDispatchOrder(null);
+
+      // Persist in background
+      updateDoc(doc(db, 'orders', dispatchOrder.id), updates).catch((err) => {
+        console.warn('Dispatch updateDoc notice:', err);
+      });
 
       // Send Customer Out for Delivery Email with only dispatched items charged!
       if (dispatchOrder.customerEmail && dispatchOrder.customerEmail.includes('@')) {
@@ -358,10 +369,9 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
           ).catch(() => {});
         }
       }
-
-      setDispatchOrder(null);
     } catch (err) {
       console.error('Dispatch error:', err);
+      setDispatchOrder(null);
     } finally {
       setIsDispatching(false);
     }

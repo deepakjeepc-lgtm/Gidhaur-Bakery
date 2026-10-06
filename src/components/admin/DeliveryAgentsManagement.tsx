@@ -31,7 +31,9 @@ export const DeliveryAgentsManagement: React.FC<DeliveryAgentsManagementProps> =
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<DeliveryAgent | null>(null);
+  const [deletingAgent, setDeletingAgent] = useState<DeliveryAgent | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Form State
   const [name, setName] = useState('');
@@ -116,9 +118,16 @@ export const DeliveryAgentsManagement: React.FC<DeliveryAgentsManagementProps> =
     await updateDeliveryAgent(agent.id, { status: nextStatus });
   };
 
-  const handleDelete = async (id: string, agentName: string) => {
-    if (window.confirm(`Are you sure you want to remove delivery agent "${agentName}"?`)) {
-      await deleteDeliveryAgent(id);
+  const handleConfirmDelete = async () => {
+    if (!deletingAgent) return;
+    setIsDeleting(true);
+    try {
+      await deleteDeliveryAgent(deletingAgent.id);
+      setDeletingAgent(null);
+    } catch (err: any) {
+      setFormError(err?.message || 'Failed to delete delivery agent');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -338,8 +347,8 @@ export const DeliveryAgentsManagement: React.FC<DeliveryAgentsManagementProps> =
                     <Edit2 className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={() => handleDelete(agent.id, agent.name)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                    onClick={() => setDeletingAgent(agent)}
+                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors cursor-pointer"
                     title="Delete Agent"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -491,6 +500,43 @@ export const DeliveryAgentsManagement: React.FC<DeliveryAgentsManagementProps> =
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (No window.confirm, iframe safe) */}
+      {deletingAgent && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4 animate-in zoom-in-95 text-center">
+            <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto border border-red-100">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="font-heading font-extrabold text-base text-slate-900">
+                Remove Delivery Agent?
+              </h4>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Are you sure you want to remove <strong>{deletingAgent.name}</strong> ({deletingAgent.email})?
+                This rider will no longer be able to log in to the delivery portal.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingAgent(null)}
+                className="flex-1 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Rider'}
+              </button>
+            </div>
           </div>
         </div>
       )}

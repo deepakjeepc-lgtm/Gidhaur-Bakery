@@ -257,7 +257,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
 
     const orderItems = items.map((cartItem) => {
-      const unitPrice = cartItem.selectedVariant ? cartItem.selectedVariant.price : cartItem.product.price;
+      const basePrice = cartItem.selectedVariant ? cartItem.selectedVariant.price : cartItem.product.price;
+      const extrasTotal = cartItem.selectedExtras && cartItem.selectedExtras.length > 0
+        ? cartItem.selectedExtras.reduce((sum, e) => sum + (Number(e.price) || 0), 0)
+        : 0;
+      const unitPrice = basePrice + extrasTotal;
+
       let itemName = cartItem.product.name;
       if (cartItem.selectedVariant && !itemName.toLowerCase().includes(cartItem.selectedVariant.name.toLowerCase())) {
         itemName = `${itemName} (${cartItem.selectedVariant.name})`;
@@ -272,6 +277,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         productId: cartItem.product.id,
         name: itemName,
         selectedSize: cartItem.selectedVariant?.name,
+        selectedExtras: cartItem.selectedExtras && cartItem.selectedExtras.length > 0 ? cartItem.selectedExtras : undefined,
         price: unitPrice,
         quantity: cartItem.quantity,
         imageUrl: cartItem.selectedVariant?.imageUrl || cartItem.product.imageUrl || '',
@@ -315,51 +321,54 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       }
     }
 
+    const sanitizedOrderPayload = JSON.parse(JSON.stringify(orderPayload));
+
+    // Save recent order to localStorage immediately for instant persistence
+    const fullRecentOrder = {
+      id: generatedOrderId,
+      orderId: generatedOrderId,
+      phone: cleanPhone,
+      customerName: cleanName,
+      address: cleanAddress,
+      notes: cleanNotes,
+      createdAt: new Date().toISOString(),
+      totalAmount: grandTotal,
+      subtotal,
+      deliveryFee: 0,
+      paymentMethod: chosenPaymentMethod,
+      paymentStatus: 'unpaid',
+      status: 'pending',
+      items: orderItems,
+      itemCount: items.reduce((s, i) => s + i.quantity, 0),
+    };
+
+    try {
+      const recentOrders = JSON.parse(localStorage.getItem('gidhaur_recent_orders') || localStorage.getItem('swadeep_recent_orders') || '[]');
+      const updated = [fullRecentOrder, ...recentOrders.filter((o: any) => o.orderId !== generatedOrderId && o.id !== generatedOrderId)];
+      localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updated.slice(0, 15)));
+      localStorage.setItem('swadeep_recent_orders', JSON.stringify(updated.slice(0, 15)));
+    } catch (e) {
+      console.warn('LocalStorage recent orders error:', e);
+    }
+
+    // Sync to backend Express server immediately
+    try {
+      fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...sanitizedOrderPayload,
+          id: generatedOrderId,
+        }),
+      }).catch(() => {});
+    } catch {}
+
     try {
       const orderRef = doc(db, 'orders', generatedOrderId);
-      await Promise.all([
-        setDoc(orderRef, orderPayload),
-        new Promise((resolve) => setTimeout(resolve, 450)),
-      ]);
-
-      // Post to Express backend server for multi-device sync
-      try {
-        fetch('/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...orderPayload,
-            id: generatedOrderId,
-          }),
-        }).catch(() => {});
-      } catch {}
-
-      try {
-        const fullRecentOrder = {
-          id: generatedOrderId,
-          orderId: generatedOrderId,
-          phone: cleanPhone,
-          customerName: cleanName,
-          address: cleanAddress,
-          notes: cleanNotes,
-          createdAt: new Date().toISOString(),
-          totalAmount: grandTotal,
-          subtotal,
-          deliveryFee: 0,
-          paymentMethod: chosenPaymentMethod,
-          paymentStatus: 'unpaid',
-          status: 'pending',
-          items: orderItems,
-          itemCount: items.reduce((s, i) => s + i.quantity, 0),
-        };
-
-        const recentOrders = JSON.parse(localStorage.getItem('gidhaur_recent_orders') || localStorage.getItem('swadeep_recent_orders') || '[]');
-        const updated = [fullRecentOrder, ...recentOrders.filter((o: any) => o.orderId !== generatedOrderId && o.id !== generatedOrderId)];
-        localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updated.slice(0, 10)));
-        localStorage.setItem('swadeep_recent_orders', JSON.stringify(updated.slice(0, 10)));
-      } catch (e) {
-        console.warn('LocalStorage recent orders error:', e);
-      }
+      // Persist to Firestore
+      setDoc(orderRef, sanitizedOrderPayload).catch((err) => {
+        console.warn('Firestore background order sync notice:', err);
+      });
 
       const confirmedOrderData: Order = {
         id: generatedOrderId,

@@ -260,9 +260,13 @@ export const renameCategoryInProducts = async (
     productsSnapshot.forEach((docSnap) => {
       const data = docSnap.data();
       if (data.category === oldCategory) {
-        batch.update(doc(db, 'products', docSnap.id), {
-          category: newCategory
-        });
+        batch.set(
+          doc(db, 'products', docSnap.id),
+          {
+            category: newCategory
+          },
+          { merge: true }
+        );
         updatedCount++;
       }
     });

@@ -81,6 +81,8 @@ import {
   subscribeToRestaurantSettings,
   getLocalRestaurantSettings,
   getLocalPreparingStaff,
+  getLocalDeliveryAgents,
+  getLocalKitchenStaff,
   seedStaffIfEmpty
 } from '../../services/staffService';
 import { PreparingStaff } from '../../types';
@@ -393,11 +395,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
       setSettings(data);
     });
 
+    const handleStaffUpdated = () => {
+      setDeliveryAgents(getLocalDeliveryAgents());
+      setKitchenStaff(getLocalKitchenStaff());
+      setPreparingStaff(getLocalPreparingStaff());
+    };
+    window.addEventListener('swadeep_staff_updated', handleStaffUpdated);
+
     return () => {
       unsubAgents();
       unsubKitchen();
       unsubPrep();
       unsubSettings();
+      window.removeEventListener('swadeep_staff_updated', handleStaffUpdated);
     };
   }, []);
 
@@ -437,6 +447,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
     nextStatus: OrderStatus,
     extraUpdates: Record<string, any> = {}
   ) => {
+    // 1. Immediate optimistic UI state update for instant 0ms feedback
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId || o.orderId === orderId ? { ...o, status: nextStatus, ...extraUpdates } : o
+      )
+    );
+
+    // Sync to backend API immediately
+    try {
+      fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus, ...extraUpdates }),
+      }).catch(() => {});
+    } catch {}
+
     try {
       const orderDoc = doc(db, 'orders', orderId);
       const timestampField = 
@@ -1513,6 +1539,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                                         {item.selectedSize}
                                       </span>
                                     )}
+                                    {item.selectedExtras && item.selectedExtras.length > 0 && (
+                                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                        {item.selectedExtras.map((extra) => (
+                                          <span
+                                            key={extra.id}
+                                            className="text-[9px] font-bold text-amber-900 bg-amber-50 px-1 py-0.5 rounded border border-amber-200/80 leading-none"
+                                          >
+                                            +{extra.name} (+₹{extra.price})
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                                 <span className="font-amount font-bold text-slate-900 shrink-0 ml-2 mt-0.5">
@@ -1674,62 +1712,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                           const isNonFood = orderCat === 'non_food_only';
                           const isFood = orderCat === 'food_only';
 
-                          return (
-                            <div className="flex items-center gap-2">
-                              {isNonFood ? (
-                                <button
-                                  onClick={() =>
-                                    handleUpdateStatus(order.id, 'preparing', {
-                                      preparingStatus: 'preparing',
-                                      preparingSentAt: serverTimestamp()
-                                    })
-                                  }
-                                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
-                                  id={`start-preparing-btn-${order.orderId}`}
-                                >
-                                  <PackageCheck className="w-3.5 h-3.5 text-indigo-400" />
-                                  <span>Send to Preparing</span>
-                                </button>
-                              ) : isFood ? (
-                                <button
-                                  onClick={() =>
-                                    handleUpdateStatus(order.id, 'preparing', {
-                                      kitchenStatus: 'preparing',
-                                      kitchenSentAt: serverTimestamp()
-                                    })
-                                  }
-                                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
-                                  id={`start-preparing-btn-${order.orderId}`}
-                                >
-                                  <ChefHat className="w-3.5 h-3.5 text-amber-400" />
-                                  <span>Send to Kitchen</span>
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() =>
-                                    handleUpdateStatus(order.id, 'preparing', {
-                                      kitchenStatus: 'preparing',
-                                      preparingStatus: 'preparing',
-                                      kitchenSentAt: serverTimestamp(),
-                                      preparingSentAt: serverTimestamp()
-                                    })
-                                  }
-                                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
-                                  id={`start-preparing-btn-${order.orderId}`}
-                                >
-                                  <PackageCheck className="w-3.5 h-3.5 text-emerald-400" />
-                                  <span>Send to Kitchen & Prep</span>
-                                </button>
-                              )}
-
+                          if (isNonFood) {
+                            return (
                               <button
-                                onClick={() => handleOpenAdminDispatch(order)}
-                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                onClick={() =>
+                                  handleUpdateStatus(order.id, 'preparing', {
+                                    preparingStatus: 'preparing',
+                                    preparingSentAt: serverTimestamp()
+                                  })
+                                }
+                                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                id={`start-preparing-btn-${order.orderId}`}
                               >
-                                <Bike className="w-3.5 h-3.5" />
-                                <span>Send to Delivery Agent</span>
+                                <PackageCheck className="w-3.5 h-3.5 text-indigo-400" />
+                                <span>Send to Preparing</span>
                               </button>
-                            </div>
+                            );
+                          }
+
+                          if (isFood) {
+                            return (
+                              <button
+                                onClick={() =>
+                                  handleUpdateStatus(order.id, 'preparing', {
+                                    kitchenStatus: 'preparing',
+                                    kitchenSentAt: serverTimestamp()
+                                  })
+                                }
+                                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                id={`start-preparing-btn-${order.orderId}`}
+                              >
+                                <ChefHat className="w-3.5 h-3.5 text-amber-400" />
+                                <span>Send to Kitchen</span>
+                              </button>
+                            );
+                          }
+
+                          return (
+                            <button
+                              onClick={() =>
+                                handleUpdateStatus(order.id, 'preparing', {
+                                  kitchenStatus: 'preparing',
+                                  preparingStatus: 'preparing',
+                                  kitchenSentAt: serverTimestamp(),
+                                  preparingSentAt: serverTimestamp()
+                                })
+                              }
+                              className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                              id={`start-preparing-btn-${order.orderId}`}
+                            >
+                              <PackageCheck className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Send to Kitchen & Prep</span>
+                            </button>
                           );
                         })()}
 
