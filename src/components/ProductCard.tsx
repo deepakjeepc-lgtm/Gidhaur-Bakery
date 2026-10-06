@@ -376,10 +376,10 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
             />
           </button>
 
-          {/* Sold Out Overlay */}
-          {!product.available && (
-            <div className="absolute inset-0 bg-slate-950/70 flex items-center justify-center z-20">
-              <span className="bg-white text-slate-900 font-extrabold text-[10px] px-2.5 py-0.5 rounded-full shadow-md uppercase tracking-wider">
+          {/* Sold Out Overlay: Ultra-translucent glass capsule with crisp white text & gentle pulse */}
+          {!isAvailable && (
+            <div className="absolute inset-0 bg-slate-950/20 flex items-center justify-center z-20 pointer-events-none">
+              <span className="backdrop-blur-md bg-white/20 border border-white/35 text-white font-heading font-black text-[10.5px] sm:text-[11px] px-3.5 py-1 rounded-full shadow-[0_2px_12px_rgba(0,0,0,0.18)] uppercase tracking-wider select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.4)] animate-gentle-pulse">
                 Sold Out
               </span>
             </div>
@@ -463,7 +463,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
         {/* Action Button: ADD Capsule Button, Multi-size Customized Button, or Stepper */}
         <div>
           {!isAvailable ? (
-            <span className="text-[11px] font-bold text-slate-400 px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200">
+            <span className="h-[30px] sm:h-[34px] px-3.5 rounded-full bg-stone-100/90 border border-stone-200/80 text-rose-500/80 font-heading font-black text-[11px] sm:text-xs flex items-center justify-center select-none shadow-2xs tracking-wide uppercase">
               Sold Out
             </span>
           ) : hasVariants ? (

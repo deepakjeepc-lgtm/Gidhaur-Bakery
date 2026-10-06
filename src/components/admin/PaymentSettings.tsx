@@ -2394,10 +2394,10 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
                 </button>
               </div>
 
-              {/* Trigger 3: Send to Kitchen (Default OFF as requested) */}
+              {/* Trigger 3: Order in Preparation (Default OFF as requested) */}
               <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80">
                 <div className="pr-3">
-                  <span className="text-xs font-bold text-slate-900 block">3. Send to Kitchen (Cooking)</span>
+                  <span className="text-xs font-bold text-slate-900 block">3. Order in Preparation (Preparing)</span>
                   <span className="text-[11px] text-slate-500 block">Email sent when order moves to preparing station.</span>
                 </div>
                 <button

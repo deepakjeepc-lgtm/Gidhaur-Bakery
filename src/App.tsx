@@ -35,10 +35,11 @@ import { lazyWithRetry } from './utils/lazyRetry';
 import { PortalErrorBoundary } from './components/PortalErrorBoundary';
 import { AVAILABLE_FONTS } from './utils/fontList';
 
-// Lazy-load Admin, Kitchen, and Delivery views with auto-retry and cache-busting resilience
+// Lazy-load Admin, Kitchen, Preparing, and Delivery views with auto-retry and cache-busting resilience
 const AdminLogin = lazyWithRetry(() => import('./components/admin/AdminLogin'));
 const AdminDashboard = lazyWithRetry(() => import('./components/admin/AdminDashboard'));
 const KitchenDisplayPage = lazyWithRetry(() => import('./components/kitchen/KitchenDisplayPage'));
+const PreparingDisplayPage = lazyWithRetry(() => import('./components/preparing/PreparingDisplayPage'));
 const DeliveryAgentPortal = lazyWithRetry(() => import('./components/delivery/DeliveryAgentPortal'));
 
 import { getSavedStaffSession, clearStaffSession, seedStaffIfEmpty } from './services/staffService';
@@ -474,16 +475,37 @@ function MainApp() {
       );
     });
 
-    // Products strictly follow manual order sequence (sortOrder) set in Admin
+    // Products follow category arrangement order in All view, and manual sortOrder within each category
+    const categoryOrderMap = new Map<string, number>();
+    managedCategories.forEach((cat, idx) => {
+      categoryOrderMap.set(cat.toLowerCase().trim(), idx);
+    });
+
     const sorted = matched.sort((a, b) => {
+      // 1. If viewing 'All', group products strictly by Category Arrangement sequence
+      if (activeCategory === 'All') {
+        const catA = (a.category || '').toLowerCase().trim();
+        const catB = (b.category || '').toLowerCase().trim();
+
+        const catIdxA = categoryOrderMap.has(catA) ? categoryOrderMap.get(catA)! : 9999;
+        const catIdxB = categoryOrderMap.has(catB) ? categoryOrderMap.get(catB)! : 9999;
+
+        if (catIdxA !== catIdxB) {
+          return catIdxA - catIdxB;
+        }
+      }
+
+      // 2. Within each category, sort by manual sortOrder
       const aOrder = typeof a.sortOrder === 'number' ? a.sortOrder : 1000;
       const bOrder = typeof b.sortOrder === 'number' ? b.sortOrder : 1000;
       if (aOrder !== bOrder) return aOrder - bOrder;
+      
       const aPin = Boolean(a.isFeatured || a.isPinnedToFront);
       const bPin = Boolean(b.isFeatured || b.isPinnedToFront);
       if (aPin && !bPin) return -1;
       if (!aPin && bPin) return 1;
-      return 0;
+      
+      return (a.name || '').localeCompare(b.name || '');
     });
 
     // Expand items whose admin setting showVariantsSeparately is enabled
@@ -616,6 +638,11 @@ function MainApp() {
                 currentChef={staffSession.data}
                 onLogout={handleStaffLogout}
                 onBackToStore={() => setCurrentView('home')}
+              />
+            ) : staffSession.role === 'preparing' ? (
+              <PreparingDisplayPage
+                onBackToAdmin={handleStaffLogout}
+                onOpenStore={() => setCurrentView('home')}
               />
             ) : staffSession.role === 'delivery' ? (
               <DeliveryAgentPortal

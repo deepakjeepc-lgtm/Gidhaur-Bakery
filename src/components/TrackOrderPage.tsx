@@ -13,6 +13,7 @@ import { calculateDistanceInMeters, formatDistanceAway } from '../utils/distance
 import { subscribeToLiveSync } from '../services/syncService';
 import { isOrderFromToday, clearAllTrackingHistory } from '../services/orderArchiveService';
 import { triggerHaptic } from '../utils/haptics';
+import { getOrderCategoryClassification } from '../utils/orderCategoryHelper';
 
 interface TrackOrderPageProps {
   initialOrderId?: string;
@@ -21,13 +22,55 @@ interface TrackOrderPageProps {
   onReorder?: (items: any[]) => void;
 }
 
-const STATUS_STEPS = [
-  { key: 'pending', label: 'Order Placed', sublabel: 'Waiting for restaurant', icon: Clock },
-  { key: 'accepted', label: 'Confirmed', sublabel: 'Restaurant accepted', icon: PackageCheck },
-  { key: 'preparing', label: 'Cooking', sublabel: 'Fresh preparation', icon: ChefHat },
-  { key: 'out_for_delivery', label: 'On the Way', sublabel: 'Rider dispatched', icon: Bike },
-  { key: 'delivered', label: 'Delivered', sublabel: 'Order completed', icon: PackageCheck },
-];
+const getOrderTimelineSteps = (ord: Order) => {
+  const cat = getOrderCategoryClassification(ord);
+  let prepLabel = 'Preparing';
+  let prepSublabel = 'Order in preparation';
+  let prepIcon = PackageCheck;
+
+  if (cat === 'food_only') {
+    prepLabel = 'Cooking';
+    prepSublabel = 'Chef is preparing your fresh food';
+    prepIcon = ChefHat;
+  } else if (cat === 'non_food_only') {
+    prepLabel = 'Preparing';
+    prepSublabel = 'Items being packed & verified';
+    prepIcon = PackageCheck;
+  } else {
+    prepLabel = 'Cooking & Prep';
+    prepSublabel = 'Food cooking & items packed';
+    prepIcon = ChefHat;
+  }
+
+  return [
+    { key: 'pending', label: 'Order Placed', sublabel: 'Waiting for restaurant', icon: Clock },
+    { key: 'accepted', label: 'Confirmed', sublabel: 'Restaurant accepted', icon: PackageCheck },
+    { key: 'preparing', label: prepLabel, sublabel: prepSublabel, icon: prepIcon },
+    { key: 'out_for_delivery', label: 'On the Way', sublabel: 'Rider dispatched', icon: Bike },
+    { key: 'delivered', label: 'Delivered', sublabel: 'Order completed', icon: CheckCircle2 },
+  ];
+};
+
+const isItemDispatched = (ord: Order, item: any, idx: number): boolean => {
+  if (ord.status !== 'out_for_delivery') return true;
+  if (Array.isArray(ord.dispatchedItemIndices) && ord.dispatchedItemIndices.length > 0) {
+    return ord.dispatchedItemIndices.includes(idx);
+  }
+  const name = String(item.product?.name || item.name || '').trim().toLowerCase();
+  if (Array.isArray(ord.dispatchedItems) && ord.dispatchedItems.length > 0) {
+    return ord.dispatchedItems.some((d: string) => {
+      const cleanD = String(d).toLowerCase().trim();
+      return name.includes(cleanD) || cleanD.includes(name);
+    });
+  }
+  if (Array.isArray(ord.untickedItems) && ord.untickedItems.length > 0) {
+    return !ord.untickedItems.some((u: string) => {
+      const cleanU = String(u).toLowerCase().trim();
+      return name.includes(cleanU) || cleanU.includes(name);
+    });
+  }
+  return true;
+};
 
 export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
   initialOrderId = '',
@@ -760,7 +803,7 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     switch (status) {
       case 'delivered': return { text: 'Delivered', bg: 'bg-emerald-500/15 text-emerald-600 border-emerald-500/20' };
       case 'out_for_delivery': return { text: 'On the Way', bg: 'bg-sky-500/15 text-sky-600 border-sky-500/20' };
-      case 'preparing': return { text: 'Cooking', bg: 'bg-amber-500/15 text-amber-600 border-amber-500/20' };
+      case 'preparing': return { text: 'Preparing', bg: 'bg-amber-500/15 text-amber-600 border-amber-500/20' };
       case 'accepted': return { text: 'Confirmed', bg: 'bg-indigo-500/15 text-indigo-600 border-indigo-500/20' };
       case 'rejected': return { text: 'Cancelled', bg: 'bg-red-500/15 text-red-600 border-red-500/20' };
       default: return { text: 'Order Placed', bg: 'bg-slate-500/15 text-slate-600 border-slate-500/20' };
@@ -872,7 +915,12 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
           const badge = getStatusBadge(ord.status);
           const isDelivered = ord.status === 'delivered';
           const isCancelled = ord.status === 'rejected';
-          const currentStepIndex = STATUS_STEPS.findIndex((s) => s.key === ord.status);
+          const orderSteps = getOrderTimelineSteps(ord);
+          const currentStepIndex = orderSteps.findIndex((s) => s.key === ord.status);
+          const hasPartialUnticked =
+            ord.status === 'out_for_delivery' &&
+            Array.isArray(ord.untickedItems) &&
+            ord.untickedItems.length > 0;
           
           return (
             <div 
@@ -987,6 +1035,19 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
               {/* Order Tracking Timeline (Clean, unified spacing, scaled 25%) */}
               <div className="border-t border-slate-100 bg-white">
                   
+                  {/* Partial Parcel Delivery Notice */}
+                  {hasPartialUnticked && (
+                    <div className="mx-5 sm:mx-6 mt-4 p-3 bg-amber-50 border border-amber-200/90 rounded-2xl flex items-start gap-2.5 text-xs text-amber-950">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                      <div>
+                        <span className="font-bold block">Parcel Dispatch Notice</span>
+                        <span className="text-[11px] text-amber-900 leading-relaxed">
+                          Your rider is on the way with verified parcel items. Unticked items are pending and will follow. Tap "View Items" to check item-level delivery status.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Stepper Timeline */}
                   <div className="p-5 sm:p-6 bg-white">
                     {isCancelled ? (
@@ -1003,7 +1064,7 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
                       <div className="relative">
                         <div className="absolute left-[23px] sm:left-[27px] top-5 bottom-6 w-0.5 bg-slate-200 rounded-full" />
                         <div className="space-y-5 sm:space-y-6 relative">
-                          {STATUS_STEPS.map((step, index) => {
+                          {orderSteps.map((step, index) => {
                             const isCompleted = currentStepIndex >= index;
                             // When delivered, all steps are completed (green). Active pulse is only for in-progress orders.
                             const isCurrent = !isDelivered && currentStepIndex === index;
@@ -1157,6 +1218,20 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
                             Qty: {item.quantity}
                           </span>
                         </div>
+
+                        {itemsModalOrder.status === 'out_for_delivery' && (
+                          <div className="mt-1.5">
+                            {isItemDispatched(itemsModalOrder, item, idx) ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                ✓ Out for Delivery (In Parcel)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                                ⏳ Pending / Unticked
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                     

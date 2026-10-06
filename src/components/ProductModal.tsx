@@ -94,28 +94,20 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   const [selectedColorOption, setSelectedColorOption] = useState<ColorOption | null>(null);
 
-  // Bulletproof iOS Safari & Android body scroll lock
+  // Ultra-fast zero-layout-shift scroll lock for fluid 120fps scrolling
   useEffect(() => {
-    const scrollY = window.scrollY || window.pageYOffset || 0;
-    const originalPosition = document.body.style.position;
-    const originalTop = document.body.style.top;
-    const originalWidth = document.body.style.width;
-    const originalOverflow = document.body.style.overflow;
-    const originalOverscroll = document.body.style.overscrollBehavior;
+    const origHtmlOverflow = document.documentElement.style.overflow;
+    const origBodyOverflow = document.body.style.overflow;
+    const origOverscroll = document.body.style.overscrollBehavior;
 
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${scrollY}px`;
-    document.body.style.width = '100%';
+    document.documentElement.style.overflow = 'hidden';
     document.body.style.overflow = 'hidden';
     document.body.style.overscrollBehavior = 'none';
 
     return () => {
-      document.body.style.position = originalPosition;
-      document.body.style.top = originalTop;
-      document.body.style.width = originalWidth;
-      document.body.style.overflow = originalOverflow;
-      document.body.style.overscrollBehavior = originalOverscroll;
-      window.scrollTo(0, scrollY);
+      document.documentElement.style.overflow = origHtmlOverflow;
+      document.body.style.overflow = origBodyOverflow;
+      document.body.style.overscrollBehavior = origOverscroll;
     };
   }, []);
 
@@ -276,18 +268,18 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     }
     manualPauseTimerRef.current = window.setTimeout(() => {
       setIsManualPaused(false);
-    }, 6000);
+    }, 8000);
   }, []);
 
   useEffect(() => {
     if (rawImages.length <= 1) return;
-    if (isManualPaused) return;
+    if (isManualPaused || isHovered) return;
 
     const timer = setInterval(() => {
       setActiveImgIdx((prev) => (prev + 1) % rawImages.length);
-    }, 3200);
+    }, 4500);
     return () => clearInterval(timer);
-  }, [rawImages.length, isManualPaused]);
+  }, [rawImages.length, isManualPaused, isHovered]);
 
   // Touch Swipe Handlers for Modal
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -540,7 +532,15 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         </div>
 
         {/* Scrollable Content: Edge-to-Edge Hero Image + Details */}
-        <div className="flex-1 overflow-y-auto overscroll-contain touch-pan-y select-text pb-60 sm:pb-64">
+        <div
+          className="flex-1 overflow-y-auto select-text pb-48 sm:pb-56 transform-gpu will-change-scroll overscroll-y-contain no-scrollbar"
+          style={{
+            WebkitOverflowScrolling: 'touch',
+            scrollBehavior: 'smooth',
+            transform: 'translate3d(0, 0, 0)',
+            backfaceVisibility: 'hidden',
+          }}
+        >
           {/* Edge-to-Edge Hero Picture Container */}
           <div className="relative w-full">
             <div
@@ -548,7 +548,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
               onTouchEnd={handleTouchEnd}
               onMouseEnter={() => setIsHovered(true)}
               onMouseLeave={() => setIsHovered(false)}
-              className="group relative w-full aspect-[4/3] sm:aspect-[4/3] sm:max-h-[500px] overflow-hidden bg-white select-none flex items-center justify-center"
+              className="group relative w-full aspect-[4/3] sm:aspect-[4/3] sm:max-h-[500px] overflow-hidden bg-white select-none flex items-center justify-center transform-gpu"
             >
               {rawImages.length > 0 ? (
                 rawImages.map((imgSrc, idx) => (
@@ -556,13 +556,15 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                     key={idx}
                     src={imgSrc}
                     alt={`${product.name} ${idx + 1}`}
+                    loading="eager"
+                    decoding="async"
                     className={`absolute inset-0 w-full h-full ${getModalImageFitClass(
                       imgSrc,
                       idx
-                    )} transition-all duration-700 ease-in-out ${
+                    )} transition-opacity duration-300 ease-out transform-gpu ${
                       idx === activeImgIdx
-                        ? 'opacity-100 scale-100 z-0'
-                        : 'opacity-0 scale-102 pointer-events-none'
+                        ? 'opacity-100 z-0 pointer-events-auto'
+                        : 'opacity-0 pointer-events-none'
                     }`}
                     referrerPolicy="no-referrer"
                   />
@@ -1107,11 +1109,11 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         </div>
       </div>
 
-      {/* Floating Bottom Action Area with Separate Floating Glass Capsules - 100% Floating Overlay (No Solid Background Banner) */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 pointer-events-none px-3.5 sm:px-4 pb-[max(env(safe-area-inset-bottom,1.5rem),2.25rem)] pt-1 flex flex-col items-center">
+      {/* Floating Bottom Action Area with GPU-Accelerated Capsules - Fluid 120fps Scrolling Performance */}
+      <div className="fixed bottom-0 left-0 right-0 z-40 pointer-events-none px-3.5 sm:px-4 pb-[max(env(safe-area-inset-bottom,1.5rem),2.25rem)] pt-1 flex flex-col items-center transform-gpu">
         {/* Capsule 1: Floating In-Modal Cart Notification & Fast Checkout Shortcut */}
         {totalItems > 0 && (
-          <div className="pointer-events-auto max-w-lg w-full mx-auto mb-2.5 p-1.5 sm:p-2 bg-white/40 hover:bg-white/55 backdrop-blur-xl rounded-full border border-white/50 text-slate-950 flex items-center justify-between shadow-[0_12px_36px_rgba(15,23,42,0.1),0_2px_8px_rgba(15,23,42,0.03)] shrink-0 animate-in fade-in slide-in-from-bottom-2 select-none">
+          <div className="pointer-events-auto max-w-lg w-full mx-auto mb-2.5 p-1.5 sm:p-2 bg-white/95 rounded-full border border-slate-200/90 text-slate-950 flex items-center justify-between shadow-[0_10px_30px_rgba(15,23,42,0.1)] shrink-0 animate-in fade-in slide-in-from-bottom-2 select-none transform-gpu">
             <div className="flex items-center gap-2.5 pl-1">
               <span className="w-8 h-8 sm:w-8.5 sm:h-8.5 rounded-full bg-amber-400 text-slate-950 font-heading font-black text-sm sm:text-base flex items-center justify-center shrink-0 shadow-2xs">
                 {totalItems}
@@ -1126,20 +1128,24 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 onClose();
                 setIsCartOpen(true);
               }}
-              className="h-10 sm:h-11 px-6 sm:px-7 bg-amber-400/90 hover:bg-amber-400 active:scale-95 text-slate-950 font-heading font-black text-xs sm:text-[13px] rounded-full flex items-center justify-center backdrop-blur-md border border-amber-300/60 shadow-none transition-all cursor-pointer shrink-0"
+              className="h-10 sm:h-11 px-6 sm:px-7 bg-amber-400 hover:bg-amber-500 active:scale-95 text-slate-950 font-heading font-black text-xs sm:text-[13px] rounded-full flex items-center justify-center border border-amber-300 shadow-none transition-all cursor-pointer shrink-0"
             >
               <span>View Cart</span>
             </button>
           </div>
         )}
 
-        {/* Capsule 2: Action Footer - Matching Home Screen Floating Navigation Dock Frosted Glass Style */}
-        <div className="pointer-events-auto max-w-lg w-full mx-auto p-1.5 sm:p-2 bg-white/55 backdrop-blur-xl rounded-full border border-white/60 flex items-center gap-2.5 shadow-[0_12px_36px_rgba(15,23,42,0.1),0_2px_8px_rgba(15,23,42,0.03)]">
-          {/* Stepper with Glossy & Transparent Blur Effect */}
-          <div className="flex items-center gap-2 bg-white/70 backdrop-blur-xl border border-white/80 rounded-full px-3 h-12.5 shadow-[0_2px_8px_rgba(15,23,42,0.04)] shrink-0">
+        {/* Capsule 2: Action Footer - GPU-Accelerated Crisp Design */}
+        <div className={`pointer-events-auto max-w-lg w-full mx-auto p-1.5 sm:p-2 bg-white/95 rounded-full flex items-center gap-2.5 transition-all duration-200 transform-gpu ${
+          isSelectionComplete
+            ? 'border border-slate-300 shadow-[0_14px_38px_rgba(15,23,42,0.12)]'
+            : 'border border-slate-200/90 shadow-[0_10px_30px_rgba(15,23,42,0.08)]'
+        }`}>
+          {/* Stepper */}
+          <div className="flex items-center gap-2 bg-slate-100/90 border border-slate-200/80 rounded-full px-3 h-12.5 shadow-2xs shrink-0">
             <button
               onClick={() => setSelectedQty((q) => Math.max(1, q - 1))}
-              className="w-7 h-7 rounded-full bg-white/85 hover:bg-white text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-all cursor-pointer shadow-2xs border border-white/80"
+              className="w-7 h-7 rounded-full bg-white hover:bg-slate-50 text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-all cursor-pointer shadow-2xs border border-slate-200/80"
               aria-label="Decrease"
             >
               <Minus className="w-3.5 h-3.5" />
@@ -1149,28 +1155,28 @@ export const ProductModal: React.FC<ProductModalProps> = ({
             </span>
             <button
               onClick={() => setSelectedQty((q) => q + 1)}
-              className="w-7 h-7 rounded-full bg-white/85 hover:bg-white text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-all cursor-pointer shadow-2xs border border-white/80"
+              className="w-7 h-7 rounded-full bg-white hover:bg-slate-50 text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-all cursor-pointer shadow-2xs border border-slate-200/80"
               aria-label="Increase"
             >
               <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {/* Add Button - Light Theme with Transparent Blur & Glossy Styling */}
+          {/* Add Button */}
           <button
             type="button"
             onClick={handleAddOrUpdate}
             disabled={!product.available || !isVariantInStock}
             className={`flex-1 h-12.5 px-6 rounded-full font-heading font-black text-sm sm:text-base flex items-center justify-center gap-2 transition-all duration-200 active:scale-[0.98] whitespace-nowrap ${
               !product.available || !isVariantInStock
-                ? 'bg-white/40 backdrop-blur-xl text-slate-400 cursor-not-allowed border border-white/40 shadow-xs'
+                ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-xs'
                 : addedAnimation
                 ? 'bg-emerald-600 text-white shadow-emerald-600/20 cursor-pointer'
                 : !isSelectionComplete
                 ? shakeError
-                  ? 'bg-red-50/80 text-red-600 border-2 border-red-500 animate-shake-alert cursor-pointer'
-                  : 'bg-white/65 hover:bg-white/85 text-slate-800 border border-white/70 backdrop-blur-xl shadow-[0_2px_8px_rgba(15,23,42,0.04)] cursor-pointer'
-                : 'bg-white/85 hover:bg-white text-slate-950 border border-white/90 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl cursor-pointer'
+                  ? 'bg-red-50 text-red-600 border-2 border-red-500 animate-shake-alert cursor-pointer'
+                  : 'bg-slate-900 hover:bg-slate-800 text-white shadow-[0_4px_16px_rgba(15,23,42,0.18)] cursor-pointer'
+                : 'bg-slate-900 hover:bg-slate-800 text-white shadow-[0_4px_18px_rgba(15,23,42,0.22)] cursor-pointer'
             }`}
             id="modal-add-to-cart-btn"
           >
@@ -1180,19 +1186,19 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 <span>Added to Cart!</span>
               </div>
             ) : !product.available ? (
-              <span>Sold Out</span>
+              <span className="text-rose-500 font-heading font-black">Sold Out</span>
             ) : !isVariantInStock ? (
-              <span>Out of Stock</span>
+              <span className="text-rose-500 font-heading font-black">Out of Stock</span>
             ) : !isSelectionComplete ? (
               <div className="flex items-center gap-1.5 font-heading font-black tracking-tight">
                 <span>Add to Cart</span>
               </div>
             ) : (
-              <div className="flex items-center gap-2 font-heading font-black tracking-tight text-slate-950">
+              <div className="flex items-center gap-2 font-heading font-black tracking-tight text-white">
                 <span>Add{selectedQty > 1 ? ` (${selectedQty})` : ''}</span>
                 <span className="text-slate-400 font-normal select-none">•</span>
                 <div className="flex items-baseline gap-0.5">
-                  <span className="text-xs text-slate-500 select-none">₹</span>
+                  <span className="text-xs text-slate-300 select-none">₹</span>
                   <span className="font-heading font-black text-base">{currentPrice * selectedQty}</span>
                 </div>
               </div>

@@ -56,6 +56,7 @@ import { OperationType, handleFirestoreError } from '../../firebase/errors';
 import { ProductManagement } from './ProductManagement';
 import { DeliveryAgentsManagement } from './DeliveryAgentsManagement';
 import { KitchenStaffManagement } from './KitchenStaffManagement';
+import { PreparingStaffManagement } from './PreparingStaffManagement';
 import { PaymentSettings } from './PaymentSettings';
 import { CloudStorageMeter } from './CloudStorageMeter';
 import { OrderHistoryView } from './OrderHistoryView';
@@ -69,16 +70,27 @@ import {
   isOrderFromToday
 } from '../../services/orderArchiveService';
 import { KitchenDisplayPage } from '../kitchen/KitchenDisplayPage';
+import { PreparingDisplayPage } from '../preparing/PreparingDisplayPage';
 import { DeliveryAgentPortal } from '../delivery/DeliveryAgentPortal';
 import { SoundSettingsModal } from './SoundSettingsModal';
 import { useOrderSoundAlert } from '../../hooks/useOrderSoundAlert';
 import {
   subscribeToDeliveryAgents,
   subscribeToKitchenStaff,
+  subscribeToPreparingStaff,
   subscribeToRestaurantSettings,
   getLocalRestaurantSettings,
+  getLocalPreparingStaff,
   seedStaffIfEmpty
 } from '../../services/staffService';
+import { PreparingStaff } from '../../types';
+import {
+  getOrderCategoryClassification,
+  getOrderFoodItems,
+  getOrderNonFoodItems,
+  isFoodItem,
+  isNonFoodItem
+} from '../../utils/orderCategoryHelper';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
 import {
   playOrderAlertChime,
@@ -102,10 +114,10 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBackToStore, onLogout }) => {
   const { user, signOut } = useAuth();
   const [activeTab, setActiveTabState] = useState<
-    'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'settings' | 'stats'
-  >(() => getSavedActiveAdminTab('orders'));
+    'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats'
+  >(() => getSavedActiveAdminTab('orders') as any);
 
-  const handleTabChange = (newTab: 'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'settings' | 'stats') => {
+  const handleTabChange = (newTab: 'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats') => {
     if (newTab === activeTab) return;
     saveScrollPosition(`admin_${activeTab}`, window.scrollY);
     setActiveTabState(newTab);
@@ -174,11 +186,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
 
   const [deliveryAgents, setDeliveryAgents] = useState<DeliveryAgent[]>([]);
   const [kitchenStaff, setKitchenStaff] = useState<KitchenStaff[]>([]);
+  const [preparingStaff, setPreparingStaff] = useState<PreparingStaff[]>(() => getLocalPreparingStaff());
   const [settings, setSettings] = useState<RestaurantSettings>(getLocalRestaurantSettings());
 
   // Direct Live Screen Preview Mode for Admin
   const [previewAgent, setPreviewAgent] = useState<DeliveryAgent | null>(null);
   const [previewChef, setPreviewChef] = useState<KitchenStaff | null>(null);
+  const [previewPreparingStaff, setPreviewPreparingStaff] = useState<PreparingStaff | null>(null);
   const [isScreenSwitcherOpen, setIsScreenSwitcherOpen] = useState(false);
 
   const [isLoadingOrders, setIsLoadingOrders] = useState(true);
@@ -189,6 +203,86 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
   const soundAlert = useOrderSoundAlert(todayOrders);
 
   const [dispatchingOrder, setDispatchingOrder] = useState<Order | null>(null);
+  const [adminCheckedItems, setAdminCheckedItems] = useState<Record<string, boolean>>({});
+  const [adminSelectedRiderId, setAdminSelectedRiderId] = useState<string>('');
+
+  const handleOpenAdminDispatch = (order: Order) => {
+    setDispatchingOrder(order);
+    const active = deliveryAgents.filter((a) => a.status === 'active');
+    setAdminSelectedRiderId(active.length > 0 ? active[0].id : '');
+
+    const initialChecked: Record<string, boolean> = {};
+    const items = order.items || [];
+
+    const hasAnyStationProgress =
+      order.kitchenReady ||
+      order.preparingReady ||
+      (Array.isArray(order.kitchenTickedItems) && order.kitchenTickedItems.length > 0) ||
+      (Array.isArray(order.preparingTickedItems) && order.preparingTickedItems.length > 0);
+
+    items.forEach((item, idx) => {
+      const isKitchen = isFoodItem(item);
+      const isPrep = isNonFoodItem(item);
+      const itemName = String(item.name || (item as any).product?.name || '').toLowerCase().trim();
+
+      if (hasAnyStationProgress) {
+        if (isKitchen) {
+          if (order.kitchenReady) {
+            initialChecked[`${order.id}-${idx}`] = true;
+          } else if (Array.isArray(order.kitchenTickedItems)) {
+            initialChecked[`${order.id}-${idx}`] = order.kitchenTickedItems.some(
+              (k) => String(k).toLowerCase().trim() === itemName
+            );
+          } else {
+            initialChecked[`${order.id}-${idx}`] = false;
+          }
+        } else if (isPrep) {
+          if (order.preparingReady) {
+            initialChecked[`${order.id}-${idx}`] = true;
+          } else if (Array.isArray(order.preparingTickedItems)) {
+            initialChecked[`${order.id}-${idx}`] = order.preparingTickedItems.some(
+              (p) => String(p).toLowerCase().trim() === itemName
+            );
+          } else {
+            initialChecked[`${order.id}-${idx}`] = false;
+          }
+        } else {
+          initialChecked[`${order.id}-${idx}`] = true;
+        }
+      } else {
+        initialChecked[`${order.id}-${idx}`] = true;
+      }
+    });
+
+    setAdminCheckedItems((prev) => ({ ...prev, ...initialChecked }));
+  };
+
+  const toggleAdminItemCheck = (orderId: string, itemIdx: number) => {
+    setAdminCheckedItems((prev) => ({
+      ...prev,
+      [`${orderId}-${itemIdx}`]: !prev[`${orderId}-${itemIdx}`]
+    }));
+  };
+
+  const handleAdminTickAllItems = (orderId: string, count: number) => {
+    setAdminCheckedItems((prev) => {
+      const next = { ...prev };
+      for (let i = 0; i < count; i++) {
+        next[`${orderId}-${i}`] = true;
+      }
+      return next;
+    });
+  };
+
+  const handleAdminUntickAllItems = (orderId: string, count: number) => {
+    setAdminCheckedItems((prev) => {
+      const next = { ...prev };
+      for (let i = 0; i < count; i++) {
+        next[`${orderId}-${i}`] = false;
+      }
+      return next;
+    });
+  };
 
   // Deletion and confirmation modals state
   const [deletingOrder, setDeletingOrder] = useState<Order | null>(null);
@@ -291,6 +385,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
       setKitchenStaff(staff);
     });
 
+    const unsubPrep = subscribeToPreparingStaff((staff) => {
+      setPreparingStaff(staff);
+    });
+
     const unsubSettings = subscribeToRestaurantSettings((data) => {
       setSettings(data);
     });
@@ -298,6 +396,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
     return () => {
       unsubAgents();
       unsubKitchen();
+      unsubPrep();
       unsubSettings();
     };
   }, []);
@@ -762,6 +861,74 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
     );
   }
 
+  // 3. Direct Preparing & Packing Screen View Mode for Admin
+  if (previewPreparingStaff) {
+    return (
+      <div className="min-h-screen bg-[#f8fafc] text-slate-900">
+        {/* Fixed Top Admin Live Preparing Simulator Banner */}
+        <div className="sticky top-0 z-50 bg-slate-950 text-white px-3 sm:px-6 py-2 shadow-md border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center justify-between sm:justify-start gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-indigo-400 shrink-0 animate-pulse" />
+              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
+                <span className="text-slate-400 hidden xs:inline">LIVE PREPARING:</span>
+                <span className="text-white bg-slate-800/90 px-2 py-0.5 rounded-full font-extrabold text-[11px] truncate">
+                  {previewPreparingStaff.name}
+                </span>
+                <span className="text-slate-400 text-[10px] hidden sm:inline">
+                  ({previewPreparingStaff.role})
+                </span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setPreviewPreparingStaff(null)}
+              className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg hover:bg-slate-800/80 transition-colors"
+            >
+              Exit Live Mode
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between sm:justify-end gap-2">
+            <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-full border border-slate-700/80 text-[11px]">
+              <span className="text-[10px] text-slate-400 font-bold uppercase">Switch:</span>
+              <select
+                value={previewPreparingStaff.id}
+                onChange={(e) => {
+                  const st = preparingStaff.find((s) => s.id === e.target.value);
+                  if (st) setPreviewPreparingStaff(st);
+                }}
+                className="bg-transparent text-white text-[11px] font-bold focus:outline-none cursor-pointer pr-1"
+              >
+                {preparingStaff.map((st) => (
+                  <option key={st.id} value={st.id} className="bg-slate-900 text-white">
+                    {st.name} ({st.role})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={() => setPreviewPreparingStaff(null)}
+              className="hidden sm:flex px-3 py-1 bg-white hover:bg-slate-100 text-slate-950 rounded-full text-xs font-extrabold transition-all shadow-xs active:scale-95 items-center gap-1.5"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Admin Console</span>
+            </button>
+          </div>
+        </div>
+
+        <PreparingDisplayPage
+          onBackToAdmin={() => setPreviewPreparingStaff(null)}
+          onOpenStore={() => {
+            setPreviewPreparingStaff(null);
+            onBackToStore();
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 pt-[max(env(safe-area-inset-top,0px),0px)]">
 
@@ -822,6 +989,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                     }`}
                   >
                     {kitchenStaff.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setActiveTab('preparing_staff')}
+                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  activeTab === 'preparing_staff'
+                    ? 'bg-slate-900 text-white shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                }`}
+                id="admin-tab-preparing"
+              >
+                <PackageCheck className="w-3.5 h-3.5" />
+                <span>Preparing</span>
+                {preparingStaff.length > 0 && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
+                      activeTab === 'preparing_staff'
+                        ? 'bg-slate-800 text-slate-300'
+                        : 'bg-slate-200/80 text-slate-600'
+                    }`}
+                  >
+                    {preparingStaff.length}
                   </span>
                 )}
               </button>
@@ -936,6 +1127,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                         >
                           <div className="flex items-center gap-2">
                             <ChefHat className="w-3.5 h-3.5 text-slate-500" />
+                            <span>{st.name}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-mono truncate max-w-[80px]">
+                            {st.role}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-1.5 border-t border-slate-100">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block px-2 py-0.5">
+                      Preparing & Packing ({preparingStaff.length})
+                    </span>
+                    <div className="space-y-0.5 mt-1">
+                      {preparingStaff.map((st) => (
+                        <button
+                          key={st.id}
+                          onClick={() => {
+                            setPreviewPreparingStaff(st);
+                            setIsScreenSwitcherOpen(false);
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-slate-100 text-xs font-bold text-slate-800 flex items-center justify-between transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2">
+                            <PackageCheck className="w-3.5 h-3.5 text-slate-500" />
                             <span>{st.name}</span>
                           </div>
                           <span className="text-[10px] text-slate-400 font-mono truncate max-w-[80px]">
@@ -1452,38 +1669,77 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                           </>
                         )}
 
-                        {order.status === 'accepted' && (
-                          <button
-                            onClick={() =>
-                              handleUpdateStatus(order.id, 'preparing', {
-                                kitchenStatus: 'preparing',
-                                kitchenSentAt: serverTimestamp()
-                              })
-                            }
-                            className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95"
-                            id={`send-to-kitchen-btn-${order.orderId}`}
-                          >
-                            <ChefHat className="w-3.5 h-3.5" />
-                            <span>Send to Kitchen</span>
-                          </button>
-                        )}
+                        {order.status === 'accepted' && (() => {
+                          const orderCat = getOrderCategoryClassification(order);
+                          const isNonFood = orderCat === 'non_food_only';
+                          const isFood = orderCat === 'food_only';
+
+                          return (
+                            <div className="flex items-center gap-2">
+                              {isNonFood ? (
+                                <button
+                                  onClick={() =>
+                                    handleUpdateStatus(order.id, 'preparing', {
+                                      preparingStatus: 'preparing',
+                                      preparingSentAt: serverTimestamp()
+                                    })
+                                  }
+                                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                  id={`start-preparing-btn-${order.orderId}`}
+                                >
+                                  <PackageCheck className="w-3.5 h-3.5 text-indigo-400" />
+                                  <span>Send to Preparing</span>
+                                </button>
+                              ) : isFood ? (
+                                <button
+                                  onClick={() =>
+                                    handleUpdateStatus(order.id, 'preparing', {
+                                      kitchenStatus: 'preparing',
+                                      kitchenSentAt: serverTimestamp()
+                                    })
+                                  }
+                                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                  id={`start-preparing-btn-${order.orderId}`}
+                                >
+                                  <ChefHat className="w-3.5 h-3.5 text-amber-400" />
+                                  <span>Send to Kitchen</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() =>
+                                    handleUpdateStatus(order.id, 'preparing', {
+                                      kitchenStatus: 'preparing',
+                                      preparingStatus: 'preparing',
+                                      kitchenSentAt: serverTimestamp(),
+                                      preparingSentAt: serverTimestamp()
+                                    })
+                                  }
+                                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                  id={`start-preparing-btn-${order.orderId}`}
+                                >
+                                  <PackageCheck className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>Send to Kitchen & Prep</span>
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => handleOpenAdminDispatch(order)}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                              >
+                                <Bike className="w-3.5 h-3.5" />
+                                <span>Send to Delivery Agent</span>
+                              </button>
+                            </div>
+                          );
+                        })()}
 
                         {order.status === 'preparing' && (
                           <button
-                            onClick={() => {
-                              if (deliveryAgents.length > 0) {
-                                setDispatchingOrder(order);
-                              } else {
-                                handleUpdateStatus(order.id, 'out_for_delivery', {
-                                  kitchenStatus: 'ready',
-                                  dispatchedAt: serverTimestamp()
-                                });
-                              }
-                            }}
-                            className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95"
+                            onClick={() => handleOpenAdminDispatch(order)}
+                            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
                           >
                             <Bike className="w-3.5 h-3.5" />
-                            <span>Dispatch with Rider</span>
+                            <span>Send to Delivery Agent</span>
                           </button>
                         )}
 
@@ -1556,7 +1812,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
           />
         )}
 
-        {/* Tab 4: Delivery Agents Management */}
+        {/* Tab 4: Preparing Staff Management */}
+        {activeTab === 'preparing_staff' && (
+          <PreparingStaffManagement
+            staffList={preparingStaff}
+            onDirectViewPrep={(st) => setPreviewPreparingStaff(st)}
+          />
+        )}
+
+        {/* Tab 5: Delivery Agents Management */}
         {activeTab === 'delivery_agents' && (
           <DeliveryAgentsManagement
             agents={deliveryAgents}
@@ -1728,112 +1992,342 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
         )}
       </main>
 
-      {/* Select Rider Dispatch Modal */}
-      {dispatchingOrder && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full p-5 sm:p-6 space-y-4 animate-scaleUp">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center">
-                  <Bike className="w-5 h-5 text-slate-900 stroke-[2.2]" />
+      {/* Select Rider & Item Verification Dispatch Modal */}
+      {dispatchingOrder && (() => {
+        const orderItems = dispatchingOrder.items || [];
+        const totalItems = orderItems.length;
+        const checkedCount = orderItems.filter((_, idx) => adminCheckedItems[`${dispatchingOrder.id}-${idx}`]).length;
+        const allDone = totalItems > 0 && checkedCount === totalItems;
+        const untickedCount = totalItems - checkedCount;
+
+        let liveAdminSubtotal = 0;
+        orderItems.forEach((item, idx) => {
+          const isTicked = checkedCount > 0 ? !!adminCheckedItems[`${dispatchingOrder.id}-${idx}`] : true;
+          if (isTicked) {
+            const price = (item as any).selectedVariant?.price ?? (item as any).product?.price ?? item.price ?? 0;
+            liveAdminSubtotal += price * (item.quantity || 1);
+          }
+        });
+        const deliveryFee = Number(dispatchingOrder.deliveryFee) || 0;
+        const liveAdminTotal = liveAdminSubtotal + deliveryFee;
+
+        const executeAdminDispatch = (agent?: DeliveryAgent) => {
+          const tickedItems = orderItems.filter((_, idx) => adminCheckedItems[`${dispatchingOrder.id}-${idx}`]);
+          const untickedItems = orderItems.filter((_, idx) => !adminCheckedItems[`${dispatchingOrder.id}-${idx}`]);
+
+          const dispatchedList = tickedItems.length > 0 ? tickedItems : orderItems;
+          const excludedList = tickedItems.length > 0 ? untickedItems : [];
+
+          const dispatchedItemNames = dispatchedList.map((i) => i.name || (i as any).product?.name || 'Item');
+          const untickedItemNames = excludedList.map((i) => i.name || (i as any).product?.name || 'Item');
+          const dispatchedIndices = orderItems
+            .map((_, idx) => idx)
+            .filter((idx) => (tickedItems.length > 0 ? !!adminCheckedItems[`${dispatchingOrder.id}-${idx}`] : true));
+
+          // Calculate subtotal of ONLY dispatched items (unticked items excluded from bill!)
+          let dispatchedSubtotal = 0;
+          dispatchedList.forEach((item: any) => {
+            const price = item.selectedVariant?.price ?? (item as any).product?.price ?? item.price ?? 0;
+            const qty = item.quantity || 1;
+            dispatchedSubtotal += price * qty;
+          });
+
+          const deliveryFee = Number(dispatchingOrder.deliveryFee) || 0;
+          const dispatchedTotalAmount = dispatchedSubtotal + deliveryFee;
+
+          const payload: any = {
+            kitchenStatus: 'ready',
+            preparingStatus: 'dispatched',
+            kitchenReady: true,
+            preparingReady: true,
+            subtotal: dispatchedSubtotal,
+            totalAmount: dispatchedTotalAmount,
+            originalTotalAmount: dispatchingOrder.originalTotalAmount || dispatchingOrder.totalAmount,
+            originalSubtotal: dispatchingOrder.originalSubtotal || dispatchingOrder.subtotal,
+            dispatchedItems: dispatchedItemNames,
+            untickedItems: untickedItemNames,
+            dispatchedItemIndices: dispatchedIndices,
+            dispatchedAt: serverTimestamp(),
+          };
+
+          if (agent) {
+            payload.assignedAgentId = agent.id;
+            payload.assignedAgentName = agent.name;
+            payload.assignedAgentPhone = agent.phone || '';
+            payload.assignedAgentVehicle = agent.vehicleType || 'Bike';
+            payload.assignedAgentVehicleNumber = agent.vehicleNumber || '';
+          } else {
+            payload.assignedAgentId = 'unassigned';
+            payload.assignedAgentName = 'Available Delivery Partner';
+          }
+
+          handleUpdateStatus(dispatchingOrder.id, 'out_for_delivery', payload);
+          setDispatchingOrder(null);
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-5 sm:p-6 space-y-4 animate-scaleUp max-h-[92vh] flex flex-col justify-between">
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-700">
+                    <Bike className="w-5 h-5 stroke-[2.2]" />
+                  </div>
+                  <div>
+                    <h3 className="font-heading font-extrabold text-base text-slate-900">
+                      Send to Delivery Agent
+                    </h3>
+                    <span className="text-xs text-slate-500 font-mono">
+                      Order #{dispatchingOrder.orderId} • {dispatchingOrder.customerName}
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-heading font-extrabold text-base text-slate-900">
-                    Assign Delivery Rider
-                  </h3>
-                  <span className="text-xs text-slate-500 font-mono">
-                    Order #{dispatchingOrder.orderId} • {dispatchingOrder.customerName}
-                  </span>
-                </div>
+
+                <button
+                  onClick={() => setDispatchingOrder(null)}
+                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              <button
-                onClick={() => setDispatchingOrder(null)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-600">
-              Choose a delivery partner to dispatch this order. Their name, vehicle number, and call button will be visible to the customer on live tracking.
-            </p>
-
-            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-              {deliveryAgents.map((agent) => (
-                <button
-                  key={agent.id}
-                  onClick={() => {
-                    handleUpdateStatus(dispatchingOrder.id, 'out_for_delivery', {
-                      kitchenStatus: 'ready',
-                      assignedAgentId: agent.id,
-                      assignedAgentName: agent.name,
-                      assignedAgentPhone: agent.phone || '',
-                      assignedAgentVehicle: agent.vehicleType || 'Bike',
-                      assignedAgentVehicleNumber: agent.vehicleNumber || '',
-                      dispatchedAt: serverTimestamp(),
-                    });
-                    setDispatchingOrder(null);
-                  }}
-                  className="w-full p-3 rounded-2xl border border-slate-200 hover:border-slate-900 hover:bg-slate-50/80 transition-all flex items-center justify-between text-left group"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
-                      <Bike className="w-4 h-4 text-slate-800" />
-                    </div>
+              {/* Scrollable Content */}
+              <div className="space-y-3.5 overflow-y-auto pr-1 flex-1">
+                {/* Confirmation Status Alert Banner */}
+                {allDone ? (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
                     <div>
-                      <h4 className="font-bold text-xs sm:text-sm text-slate-900 group-hover:text-black">
-                        {agent.name}
+                      <h4 className="text-xs font-black text-emerald-950">
+                        All Items Verified & Packed ({checkedCount}/{totalItems})
                       </h4>
-                      <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                        <span>{agent.vehicleType || 'Bike'}</span>
-                        {agent.vehicleNumber && (
-                          <>
-                            <span>•</span>
-                            <span className="font-mono font-bold text-slate-700 bg-slate-100 px-1 rounded">
-                              {agent.vehicleNumber}
-                            </span>
-                          </>
-                        )}
+                      <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
+                        Every item is ticked. The full order is ready to hand over to the delivery partner.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    <div className="space-y-1.5 w-full">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-black text-amber-950">
+                          {checkedCount === 0 ? 'No Items Ticked Yet' : `Partial Order Packing (${checkedCount}/${totalItems} Packed)`}
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => handleAdminTickAllItems(dispatchingOrder.id, totalItems)}
+                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] rounded-lg transition-all shadow-2xs cursor-pointer"
+                        >
+                          ✓ Tick All Items
+                        </button>
                       </div>
+                      <p className="text-[11px] text-amber-900 leading-relaxed">
+                        {checkedCount === 0
+                          ? 'Zero items are ticked. If you proceed now, all items will be assumed packed. Otherwise, tick individual items or click "Tick All Items".'
+                          : `${untickedCount} item(s) are NOT ticked. Unticked items will NOT be dispatched with this rider. The customer will be informed that only ticked items are in this delivery parcel.`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Live Bill Amount Box */}
+                <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Bill Amount to Collect</span>
+                    <span className="font-extrabold text-slate-900 text-base font-mono">₹{liveAdminTotal}</span>
+                    {untickedCount > 0 && checkedCount > 0 && (
+                      <span className="text-[10px] text-amber-700 block font-semibold mt-0.5">
+                        (Unticked items excluded from bill & not charged)
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-bold text-slate-500 font-mono">
+                    {checkedCount}/{totalItems} items in parcel
+                  </span>
+                </div>
+
+                {/* Items Checklist Breakdown */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                      Parcel Item Verification ({checkedCount}/{totalItems})
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {checkedCount < totalItems && totalItems > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleAdminTickAllItems(dispatchingOrder.id, totalItems)}
+                          className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200 transition-colors cursor-pointer"
+                        >
+                          ✓ Tick All
+                        </button>
+                      )}
+                      {checkedCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleAdminUntickAllItems(dispatchingOrder.id, totalItems)}
+                          className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2.5 py-0.5 rounded-full border border-slate-200 transition-colors cursor-pointer"
+                        >
+                          Untick All
+                        </button>
+                      )}
                     </div>
                   </div>
 
-                  <span className="text-xs font-bold text-slate-900 bg-slate-100 group-hover:bg-slate-950 group-hover:text-white px-3 py-1.5 rounded-full transition-colors">
-                    Assign
+                  <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                    {orderItems.map((item, idx) => {
+                      const isTicked = adminCheckedItems[`${dispatchingOrder.id}-${idx}`];
+                      const isKitchen = isFoodItem(item);
+                      const prepTime = Number(item.prepTimeMinutes || (item as any).product?.prepTimeMinutes || 0);
+
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => toggleAdminItemCheck(dispatchingOrder.id, idx)}
+                          className={`p-2.5 rounded-2xl border flex items-center justify-between text-xs cursor-pointer transition-all ${
+                            isTicked
+                              ? 'bg-emerald-50/70 border-emerald-200 text-slate-900 font-semibold'
+                              : 'bg-slate-50 border-slate-200/80 text-slate-500'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${
+                                isTicked ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-300'
+                              }`}
+                            >
+                              {isTicked && <Check className="w-3 h-3 stroke-[3]" />}
+                            </div>
+                            <div className="min-w-0">
+                              <span className="truncate block max-w-[200px] sm:max-w-[240px]">
+                                {item.quantity}x {item.name || (item as any).product?.name}
+                              </span>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                {isKitchen ? (
+                                  <span className="text-[9px] font-bold text-amber-700 bg-amber-100/80 px-1.5 py-0.2 rounded border border-amber-200/60">
+                                    🍳 Kitchen {prepTime > 0 ? `(${prepTime}m)` : ''}
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] font-bold text-indigo-700 bg-indigo-100/80 px-1.5 py-0.2 rounded border border-indigo-200/60">
+                                    📦 Prep Section
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <span
+                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full shrink-0 ${
+                              isTicked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                            }`}
+                          >
+                            {isTicked ? '✓ In Parcel' : 'Excluded'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Rider Assignment List */}
+                <div className="space-y-2 pt-2 border-t border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Choose Delivery Rider ({deliveryAgents.length} available)
                   </span>
+
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {deliveryAgents.map((agent) => {
+                      const isSelected = adminSelectedRiderId === agent.id;
+                      return (
+                        <div
+                          key={agent.id}
+                          onClick={() => setAdminSelectedRiderId(agent.id)}
+                          className={`p-2.5 rounded-2xl border transition-all flex items-center justify-between text-left cursor-pointer ${
+                            isSelected
+                              ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-600/10'
+                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="radio"
+                              name="adminDeliveryAgent"
+                              checked={isSelected}
+                              onChange={() => setAdminSelectedRiderId(agent.id)}
+                              className="w-3.5 h-3.5 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <div>
+                              <h4 className="font-bold text-xs sm:text-sm text-slate-900">
+                                {agent.name}
+                              </h4>
+                              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                                <span>{agent.vehicleType || 'Bike'}</span>
+                                {agent.vehicleNumber && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="font-mono font-bold text-slate-700 bg-slate-100 px-1 rounded">
+                                      {agent.vehicleNumber}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              executeAdminDispatch(agent);
+                            }}
+                            className="text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-full transition-colors cursor-pointer shadow-xs active:scale-95"
+                          >
+                            Assign & Send
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions Footer */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
+                <button
+                  type="button"
+                  onClick={() => executeAdminDispatch(undefined)}
+                  className="text-xs text-slate-500 hover:text-slate-900 font-semibold underline cursor-pointer"
+                >
+                  Dispatch without specific rider
                 </button>
-              ))}
-            </div>
 
-            <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => {
-                  handleUpdateStatus(dispatchingOrder.id, 'out_for_delivery', {
-                    kitchenStatus: 'ready',
-                    assignedAgentId: 'unassigned',
-                    assignedAgentName: 'Available Delivery Partner',
-                    dispatchedAt: serverTimestamp(),
-                  });
-                  setDispatchingOrder(null);
-                }}
-                className="text-xs text-slate-500 hover:text-slate-900 font-semibold underline"
-              >
-                Dispatch without specific rider
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setDispatchingOrder(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-full"
-              >
-                Cancel
-              </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDispatchingOrder(null)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const matchedAgent = deliveryAgents.find((a) => a.id === adminSelectedRiderId);
+                      executeAdminDispatch(matchedAgent);
+                    }}
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  >
+                    <Bike className="w-3.5 h-3.5" />
+                    <span>Confirm & Send to Delivery Agent</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Delete Single Order Confirmation Modal */}
       {deletingOrder && (

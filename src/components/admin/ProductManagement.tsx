@@ -609,13 +609,44 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
     });
   }, [localProducts, searchQuery, selectedCategory]);
 
+  const categoryOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    categories.forEach((cat, idx) => {
+      map.set(cat.toLowerCase().trim(), idx);
+    });
+    return map;
+  }, [categories]);
+
   const sortedProducts = useMemo(() => {
     return [...filteredProducts].sort((a, b) => {
+      // 1. In 'All' view or multi-category searches, strictly order by the arranged Category sequence
+      if (selectedCategory === 'All') {
+        const catA = (a.category || '').toLowerCase().trim();
+        const catB = (b.category || '').toLowerCase().trim();
+
+        const catIdxA = categoryOrderMap.has(catA) ? categoryOrderMap.get(catA)! : 9999;
+        const catIdxB = categoryOrderMap.has(catB) ? categoryOrderMap.get(catB)! : 9999;
+
+        if (catIdxA !== catIdxB) {
+          return catIdxA - catIdxB;
+        }
+      }
+
+      // 2. Within each category (or when a single category tab is selected), sort by manual order
       const aOrder = typeof a.sortOrder === 'number' ? a.sortOrder : 1000;
       const bOrder = typeof b.sortOrder === 'number' ? b.sortOrder : 1000;
-      return aOrder - bOrder;
+      if (aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
+
+      const aPin = Boolean(a.isFeatured || a.isPinnedToFront);
+      const bPin = Boolean(b.isFeatured || b.isPinnedToFront);
+      if (aPin && !bPin) return -1;
+      if (!aPin && bPin) return 1;
+
+      return (a.name || '').localeCompare(b.name || '');
     });
-  }, [filteredProducts]);
+  }, [filteredProducts, selectedCategory, categoryOrderMap]);
 
   // Drag and drop state for products
   const [draggedProductIdx, setDraggedProductIdx] = useState<number | null>(null);

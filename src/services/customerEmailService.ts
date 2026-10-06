@@ -171,14 +171,48 @@ export async function clearAllCustomerEmails(): Promise<void> {
   }
 }
 
+export function shouldSendEmailForStatus(
+  status: OrderStatus | string,
+  settings?: RestaurantSettings
+): boolean {
+  if (!settings) return true;
+  if (settings.enableEmailNotifications === false) return false;
+
+  const toggles = settings.emailEventToggles || {};
+  switch (status) {
+    case 'pending':
+      return toggles.notifyOrderPlaced === true;
+    case 'accepted':
+      return toggles.notifyOrderConfirmed !== false;
+    case 'preparing':
+      return toggles.notifyKitchenSent === true;
+    case 'out_for_delivery':
+      return toggles.notifyOutForDelivery !== false;
+    case 'delivered':
+      return toggles.notifyDelivered !== false;
+    case 'rejected':
+      return toggles.notifyCancellationAccepted !== false;
+    case 'cancellation_declined':
+      return toggles.notifyCancellationDeclined !== false;
+    default:
+      return true;
+  }
+}
+
 export async function sendOrderStatusEmail(
   order: Order,
   status: OrderStatus,
   settings?: RestaurantSettings
-): Promise<{ success: boolean; message?: string }> {
+): Promise<{ success: boolean; message?: string; skipped?: boolean }> {
   const recipientEmail = order.customerEmail?.trim();
   if (!recipientEmail || !recipientEmail.includes('@')) {
     return { success: false, message: 'No customer email provided for this order' };
+  }
+
+  // Pre-check client settings toggles before making network request
+  if (!shouldSendEmailForStatus(status, settings)) {
+    console.log(`[sendOrderStatusEmail] Skipped sending "${status}" email because toggle is OFF in Admin Settings.`);
+    return { success: true, skipped: true, message: `Notification for "${status}" is disabled in settings.` };
   }
 
   try {

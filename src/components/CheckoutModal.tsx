@@ -263,6 +263,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         itemName = `${itemName} (${cartItem.selectedVariant.name})`;
       }
 
+      const prepTime =
+        typeof cartItem.product.prepTimeMinutes === 'number' && cartItem.product.prepTimeMinutes > 0
+          ? cartItem.product.prepTimeMinutes
+          : undefined;
+
       return {
         productId: cartItem.product.id,
         name: itemName,
@@ -270,6 +275,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         price: unitPrice,
         quantity: cartItem.quantity,
         imageUrl: cartItem.selectedVariant?.imageUrl || cartItem.product.imageUrl || '',
+        category: cartItem.product.category,
+        prepTimeMinutes: prepTime,
+        hasKitchenPrepTime: typeof prepTime === 'number' && prepTime > 0,
+        isNonFood: !(typeof prepTime === 'number' && prepTime > 0),
       };
     });
 

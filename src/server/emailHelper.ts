@@ -10,43 +10,75 @@ export interface EmailSettings {
   senderName?: string;
   smtpHost?: string;
   smtpPort?: number;
+  enableEmailNotifications?: boolean;
+  emailEventToggles?: {
+    notifyOrderPlaced?: boolean;
+    notifyOrderConfirmed?: boolean;
+    notifyKitchenSent?: boolean;
+    notifyOutForDelivery?: boolean;
+    notifyDelivered?: boolean;
+    notifyCancellationAccepted?: boolean;
+    notifyCancellationDeclined?: boolean;
+  };
 }
 
 export type OrderCategoryType = 'food_only' | 'non_food_only' | 'mixed';
 
-export function isNonFoodItem(item: any): boolean {
+export function isMilestoneEmailEnabled(status: string, settings?: EmailSettings): boolean {
+  if (!settings) return true;
+  if (settings.enableEmailNotifications === false) return false;
+
+  const toggles = settings.emailEventToggles || {};
+  switch (status) {
+    case 'pending':
+      return toggles.notifyOrderPlaced === true;
+    case 'accepted':
+      return toggles.notifyOrderConfirmed !== false;
+    case 'preparing':
+      return toggles.notifyKitchenSent === true;
+    case 'out_for_delivery':
+      return toggles.notifyOutForDelivery !== false;
+    case 'delivered':
+      return toggles.notifyDelivered !== false;
+    case 'rejected':
+      return toggles.notifyCancellationAccepted !== false;
+    case 'cancellation_declined':
+      return toggles.notifyCancellationDeclined !== false;
+    default:
+      return true;
+  }
+}
+
+export function isKitchenItem(item: any): boolean {
   if (!item) return false;
-  
-  if (item.product?.isNonFood === true || item.isNonFood === true) return true;
-  if (item.product?.isNonFood === false || item.isNonFood === false) return false;
+  if (item.hasKitchenPrepTime === true || item.product?.hasKitchenPrepTime === true) {
+    return true;
+  }
+  const prepTime = Number(item.prepTimeMinutes ?? item.product?.prepTimeMinutes ?? 0);
+  return prepTime > 0;
+}
 
-  const category = String(item.product?.category || item.category || '').toLowerCase();
-  const name = String(item.product?.name || item.name || '').toLowerCase();
-
-  const nonFoodKeywords = [
-    'candle', 'candles', 'balloon', 'balloons', 'party', 'cap', 'caps', 'prop', 'props',
-    'decoration', 'decor', 'gift', 'tag', 'popper', 'spray', 'snow spray',
-    'sparkler', 'knife', 'topper', 'cake topper', 'banner', 'ribbon', 'utensil',
-    'crockery', 'accessories', 'toy', 'card', 'greeting card'
-  ];
-
-  return nonFoodKeywords.some((kw) => category.includes(kw) || name.includes(kw));
+export function isNonFoodItem(item: any): boolean {
+  return !isKitchenItem(item);
 }
 
 export function classifyOrder(order: any): OrderCategoryType {
   const items = Array.isArray(order?.items) ? order.items : [];
-  if (items.length === 0) return 'food_only';
+  if (items.length === 0) return 'non_food_only';
 
-  const nonFoodCount = items.filter(isNonFoodItem).length;
-  const foodCount = items.length - nonFoodCount;
+  const kitchenCount = items.filter(isKitchenItem).length;
+  const prepCount = items.length - kitchenCount;
 
-  if (nonFoodCount > 0 && foodCount === 0) {
+  if (kitchenCount > 0 && prepCount === 0) {
+    return 'food_only';
+  }
+  if (kitchenCount === 0 && prepCount > 0) {
     return 'non_food_only';
   }
-  if (nonFoodCount > 0 && foodCount > 0) {
+  if (kitchenCount > 0 && prepCount > 0) {
     return 'mixed';
   }
-  return 'food_only';
+  return 'non_food_only';
 }
 
 export function buildOrderStatusEmailHtml(params: {
@@ -61,133 +93,186 @@ export function buildOrderStatusEmailHtml(params: {
   const fssaiLic = settings.fssaiLicenseNumber || '20426191000010';
   const customerName = order.customerName || 'Valued Guest';
   const orderId = order.orderId || order.id || 'ORDER';
-
-  // Smart Context-Aware Messaging: Differentiates pure food, pure non-food, and mixed orders
   const orderType = classifyOrder(order);
 
+  // Universal, Professional Messaging for All Products (Food & Non-Food alike)
   let statusTitle = 'Order Placed';
-  let statusSubtext = 'We have received your order and the store team is reviewing it.';
+  let statusSubtext = 'We have received your order and our store team is reviewing it.';
 
-  if (orderType === 'non_food_only') {
-    switch (status) {
-      case 'pending':
-        statusTitle = 'Order Placed';
-        statusSubtext = 'We have received your order and our store team is verifying your items.';
-        break;
-      case 'accepted':
-        statusTitle = 'Order Confirmed';
-        statusSubtext = 'Great news! Your order has been confirmed and our store team is preparing your package for dispatch.';
-        break;
-      case 'preparing':
-        statusTitle = 'Packing in Progress';
-        statusSubtext = 'Your items are being carefully inspected, packed, and secured for safe transit.';
-        break;
-      case 'out_for_delivery':
-        statusTitle = 'Out for Delivery';
-        statusSubtext = 'Your package is safely packed and our delivery rider is on the way to your address!';
-        break;
-      case 'delivered':
-        statusTitle = 'Delivered Successfully';
-        statusSubtext = `Your package has been safely delivered! We hope you love your purchase. Thank you for shopping with ${restaurantName}.`;
-        break;
-      case 'rejected':
-        statusTitle = 'Order Cancelled';
-        statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
-        break;
-      case 'cancellation_declined':
-        statusTitle = 'Cancellation Declined';
-        statusSubtext = 'Your cancellation request was declined as your package is already packed and dispatched. It will arrive shortly!';
-        break;
-    }
-  } else if (orderType === 'mixed') {
-    switch (status) {
-      case 'pending':
-        statusTitle = 'Order Placed';
-        statusSubtext = 'We have received your order for both fresh bakery items and celebration essentials. Our team is reviewing it.';
-        break;
-      case 'accepted':
-        statusTitle = 'Order Confirmed';
-        statusSubtext = 'Great news! Your order is confirmed. Our kitchen is preparing your bakery treats while our team packs your party items.';
-        break;
-      case 'preparing':
-        statusTitle = 'Preparing & Packing';
-        statusSubtext = 'Your fresh treats are being handcrafted, and your celebration accessories are being carefully packed.';
-        break;
-      case 'out_for_delivery':
-        statusTitle = 'Out for Delivery';
-        statusSubtext = 'Your complete package has been dispatched and our delivery rider is on the way to your address!';
-        break;
-      case 'delivered':
-        statusTitle = 'Delivered Successfully';
-        statusSubtext = `Your complete order has been safely delivered! We hope you enjoy your treats and have a wonderful celebration. Thank you for choosing ${restaurantName}.`;
-        break;
-      case 'rejected':
-        statusTitle = 'Order Cancelled';
-        statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
-        break;
-      case 'cancellation_declined':
-        statusTitle = 'Cancellation Declined';
-        statusSubtext = 'Your cancellation request was declined as your order is already prepared and packed. It will arrive shortly!';
-        break;
-    }
-  } else {
-    // Pure Food Order (food_only)
-    switch (status) {
-      case 'pending':
-        statusTitle = 'Order Placed';
-        statusSubtext = 'We have received your order and the store team is reviewing it.';
-        break;
-      case 'accepted':
-        statusTitle = 'Order Confirmed';
-        statusSubtext = 'Great news! Our chef has accepted your order and is freshly preparing your items.';
-        break;
-      case 'preparing':
-        statusTitle = 'Order in Kitchen';
-        statusSubtext = 'Your delicious delicacies are currently being handcrafted with fresh ingredients.';
-        break;
-      case 'out_for_delivery':
-        statusTitle = 'Out for Delivery';
-        statusSubtext = 'Your freshly prepared food is packed and our delivery rider is on the way to your address!';
-        break;
-      case 'delivered':
-        statusTitle = 'Delivered Successfully';
-        statusSubtext = `Your order has been safely delivered. We hope you enjoy your meal! Thank you for choosing ${restaurantName}.`;
-        break;
-      case 'rejected':
-        statusTitle = 'Order Cancelled';
-        statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
-        break;
-      case 'cancellation_declined':
-        statusTitle = 'Cancellation Declined';
-        statusSubtext = 'Your cancellation request was declined as your food is already being freshly prepared / dispatched. Your meal will arrive shortly!';
-        break;
-    }
+  switch (status) {
+    case 'pending':
+      statusTitle = 'Order Placed';
+      statusSubtext = 'We have received your order and our store team is reviewing it.';
+      break;
+    case 'accepted':
+      statusTitle = 'Order Confirmed';
+      statusSubtext = 'Great news! Your order has been confirmed and our store team is getting your items ready.';
+      break;
+    case 'preparing':
+      statusTitle = 'Order in Preparation';
+      statusSubtext = 'Your items are being carefully prepared, inspected, and packed for safe transit.';
+      break;
+    case 'out_for_delivery':
+      statusTitle = 'Out for Delivery';
+      if (
+        (Array.isArray(order.untickedItems) && order.untickedItems.length > 0) ||
+        (Array.isArray(order.dispatchedItems) && Array.isArray(order.items) && order.dispatchedItems.length < order.items.length)
+      ) {
+        statusSubtext = 'Your packed items are on the way with our delivery rider! Note: Only verified & ticked items shown below are dispatched in this delivery parcel.';
+      } else {
+        statusSubtext = 'Your order has been safely packed and our delivery rider is on the way to your address!';
+      }
+      break;
+    case 'delivered':
+      statusTitle = 'Delivered Successfully';
+      if (
+        (Array.isArray(order.untickedItems) && order.untickedItems.length > 0) ||
+        (Array.isArray(order.dispatchedItems) && Array.isArray(order.items) && order.dispatchedItems.length < order.items.length)
+      ) {
+        statusSubtext = `Your order has been safely delivered! Note: Only the verified items shown below were delivered and charged. Thank you for choosing ${restaurantName}.`;
+      } else {
+        statusSubtext = `Your order has been safely delivered! Thank you for your order. We hope you love your purchase. Thank you for choosing ${restaurantName}.`;
+      }
+      break;
+    case 'rejected':
+      statusTitle = 'Order Cancelled';
+      statusSubtext = 'Your order cancellation request has been accepted. If you made an online payment, a full refund will be processed.';
+      break;
+    case 'cancellation_declined':
+      statusTitle = 'Cancellation Declined';
+      statusSubtext = 'Your cancellation request was declined as your order is already prepared and dispatched. It will arrive shortly!';
+      break;
   }
 
-  const itemsHtml = Array.isArray(order.items)
-    ? order.items
-        .map((item: any) => {
-          const itemName = item.product?.name || item.name || 'Item';
-          const variant = item.selectedVariant?.name ? `(${item.selectedVariant.name})` : '';
-          const qty = item.quantity || 1;
-          const price = item.selectedVariant?.price ?? item.product?.price ?? item.price ?? 0;
-          const itemTotal = price * qty;
-          return `
-            <tr>
-              <td style="padding: 11px 0; border-bottom: 1px solid #e2e8f0; color: #1e293b; font-size: 14px; font-weight: 600;">
-                ${itemName} <span style="font-size: 12px; color: #64748b; font-weight: normal;">${variant}</span>
-              </td>
-              <td style="padding: 11px 0; border-bottom: 1px solid #e2e8f0; text-align: center; color: #64748b; font-size: 13px; font-weight: 700;">
-                × ${qty}
-              </td>
-              <td style="padding: 11px 0; border-bottom: 1px solid #e2e8f0; text-align: right; color: #0f172a; font-size: 14px; font-weight: 700; font-family: monospace;">
-                ₹${itemTotal}
-              </td>
-            </tr>
+  // Check if order has item-level dispatch details
+  const hasPartialDispatchInfo =
+    (status === 'out_for_delivery' || status === 'delivered') &&
+    (Array.isArray(order.dispatchedItems) ||
+      Array.isArray(order.dispatchedItemIndices) ||
+      Array.isArray(order.untickedItems));
+
+  const isItemDispatched = (item: any, idx: number): boolean => {
+    if (status !== 'out_for_delivery' && status !== 'delivered') return true;
+    if (!hasPartialDispatchInfo) return true;
+
+    if (Array.isArray(order.dispatchedItemIndices) && order.dispatchedItemIndices.length > 0) {
+      return order.dispatchedItemIndices.includes(idx);
+    }
+
+    const name = String(item.product?.name || item.name || '').trim().toLowerCase();
+    if (Array.isArray(order.dispatchedItems) && order.dispatchedItems.length > 0) {
+      return order.dispatchedItems.some((d: string) => {
+        const cleanD = String(d).toLowerCase().trim();
+        return name.includes(cleanD) || cleanD.includes(name);
+      });
+    }
+    if (Array.isArray(order.untickedItems) && order.untickedItems.length > 0) {
+      return !order.untickedItems.some((u: string) => {
+        const cleanU = String(u).toLowerCase().trim();
+        return name.includes(cleanU) || cleanU.includes(name);
+      });
+    }
+    return true;
+  };
+
+  // Recalculate effective subtotal and bill totals:
+  // Dispatched items get charged; unticked items are NOT charged (price = 0, excluded from subtotal)
+  let fullSubtotal = 0;
+  let effectiveSubtotal = 0;
+
+  if (Array.isArray(order.items)) {
+    order.items.forEach((item: any, idx: number) => {
+      const qty = item.quantity || 1;
+      const price = item.selectedVariant?.price ?? item.product?.price ?? item.price ?? 0;
+      const itemTotal = price * qty;
+      fullSubtotal += itemTotal;
+      if (isItemDispatched(item, idx)) {
+        effectiveSubtotal += itemTotal;
+      }
+    });
+  }
+
+  const deliveryFee = Number(order.deliveryFee) || 0;
+  const isPartialOrder = hasPartialDispatchInfo && effectiveSubtotal < fullSubtotal;
+  // If partial dispatch exists, strictly charge ONLY the dispatched/ticked items (unticked items = 0)
+  const displaySubtotal = (status === 'out_for_delivery' || status === 'delivered')
+    ? (hasPartialDispatchInfo ? effectiveSubtotal : (order.subtotal || fullSubtotal))
+    : (order.subtotal || fullSubtotal);
+  const displayTotal = displaySubtotal + deliveryFee;
+
+  // Filter items for email display:
+  // For 'delivered' status, unselected/unticked products must NOT appear in the delivered receipt!
+  const allOrderItems = Array.isArray(order.items) ? order.items : [];
+  const itemsToRender = (status === 'delivered' && hasPartialDispatchInfo)
+    ? allOrderItems
+        .map((item: any, idx: number) => ({ item, idx }))
+        .filter(({ item, idx }) => isItemDispatched(item, idx))
+    : allOrderItems.map((item: any, idx: number) => ({ item, idx }));
+
+  const itemsHtml = itemsToRender
+    .map(({ item, idx }) => {
+      const itemName = item.product?.name || item.name || 'Item';
+      const variant = item.selectedVariant?.name ? `(${item.selectedVariant.name})` : '';
+      const qty = item.quantity || 1;
+      const price = item.selectedVariant?.price ?? item.product?.price ?? item.price ?? 0;
+      const itemTotal = price * qty;
+      const inThisParcel = isItemDispatched(item, idx);
+
+      let statusBadge = '';
+      let priceDisplay = `₹${itemTotal}`;
+
+      if (status === 'out_for_delivery') {
+        if (inThisParcel) {
+          statusBadge = `
+            <div style="margin-top: 4px;">
+              <span style="display: inline-block; font-size: 10px; font-weight: 800; background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; border-radius: 9999px; padding: 2px 8px;">
+                ✓ Out for Delivery
+              </span>
+            </div>
           `;
-        })
-        .join('')
-    : '';
+          priceDisplay = `₹${itemTotal}`;
+        } else {
+          statusBadge = `
+            <div style="margin-top: 4px;">
+              <span style="display: inline-block; font-size: 10px; font-weight: 800; background-color: #fffbeb; color: #b45309; border: 1px solid #fde68a; border-radius: 9999px; padding: 2px 8px;">
+                ⏳ Not in this parcel (Unticked / Excluded)
+              </span>
+            </div>
+          `;
+          priceDisplay = `
+            <div>
+              <span style="text-decoration: line-through; color: #94a3b8; font-size: 11px;">₹${itemTotal}</span>
+              <div style="color: #b45309; font-weight: 800; font-size: 12px;">₹0 (Not Charged)</div>
+            </div>
+          `;
+        }
+      } else if (status === 'delivered') {
+        statusBadge = `
+          <div style="margin-top: 4px;">
+            <span style="display: inline-block; font-size: 10px; font-weight: 800; background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; border-radius: 9999px; padding: 2px 8px;">
+              ✓ Delivered Successfully
+            </span>
+          </div>
+        `;
+        priceDisplay = `₹${itemTotal}`;
+      }
+
+      return `
+        <tr style="${!inThisParcel && status === 'out_for_delivery' ? 'background-color: #fffdf5; opacity: 0.85;' : ''}">
+          <td style="padding: 11px 0; border-bottom: 1px solid #e2e8f0; color: #1e293b; font-size: 14px; font-weight: 600;">
+            <div>${itemName} <span style="font-size: 12px; color: #64748b; font-weight: normal;">${variant}</span></div>
+            ${statusBadge}
+          </td>
+          <td style="padding: 11px 0; border-bottom: 1px solid #e2e8f0; text-align: center; color: #64748b; font-size: 13px; font-weight: 700;">
+            × ${qty}
+          </td>
+          <td style="padding: 11px 0; border-bottom: 1px solid #e2e8f0; text-align: right; color: #0f172a; font-size: 14px; font-weight: 700; font-family: monospace;">
+            ${priceDisplay}
+          </td>
+        </tr>
+      `;
+    })
+    .join('');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -292,16 +377,19 @@ export function buildOrderStatusEmailHtml(params: {
                 <!-- Bill Totals -->
                 <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 12px; border-top: 1px dashed #cbd5e1; padding-top: 12px;">
                   <tr>
-                    <td style="font-size: 13px; color: #64748b; padding: 3px 0;">Items Subtotal</td>
-                    <td align="right" style="font-size: 13px; font-weight: 600; color: #1e293b; padding: 3px 0; font-family: monospace;">₹${order.subtotal || order.totalAmount || 0}</td>
+                    <td style="font-size: 13px; color: #64748b; padding: 3px 0;">
+                      Items Subtotal
+                      ${isPartialOrder ? '<div style="font-size: 10px; color: #059669; font-weight: 700;">(Only dispatched items included)</div>' : ''}
+                    </td>
+                    <td align="right" style="font-size: 13px; font-weight: 600; color: #1e293b; padding: 3px 0; font-family: monospace;">₹${displaySubtotal}</td>
                   </tr>
                   <tr>
                     <td style="font-size: 13px; color: #64748b; padding: 3px 0;">Delivery Fee</td>
-                    <td align="right" style="font-size: 13px; font-weight: 700; color: #059669; padding: 3px 0;">FREE</td>
+                    <td align="right" style="font-size: 13px; font-weight: 700; color: #059669; padding: 3px 0;">${deliveryFee > 0 ? `₹${deliveryFee}` : 'FREE'}</td>
                   </tr>
                   <tr>
                     <td style="font-size: 16px; font-weight: 900; color: #0f172a; padding: 8px 0 0 0;">Total Amount</td>
-                    <td align="right" style="font-size: 18px; font-weight: 900; color: #0f172a; padding: 8px 0 0 0; font-family: monospace;">₹${order.totalAmount || 0}</td>
+                    <td align="right" style="font-size: 18px; font-weight: 900; color: #0f172a; padding: 8px 0 0 0; font-family: monospace;">₹${displayTotal}</td>
                   </tr>
                   <tr>
                     <td style="font-size: 11px; color: #64748b; padding-top: 4px;">Payment Method</td>
@@ -337,6 +425,14 @@ export function buildOrderStatusEmailHtml(params: {
           <tr>
             <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 22px 24px; text-align: center; border-radius: 0 0 40px 40px;">
               
+              ${orderType === 'non_food_only' ? `
+              <!-- Genuine Quality Badge for Non-Food Items -->
+              <div style="display: inline-block; padding: 7px 18px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 16px; margin-bottom: 12px;">
+                <span style="font-size: 11px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px;">
+                  ★ 100% Genuine Quality Products & Safe Delivery Assured ★
+                </span>
+              </div>
+              ` : `
               <!-- Official FSSAI Badge with Soft Rounded Corners -->
               <div style="display: inline-block; padding: 7px 16px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 16px; margin-bottom: 12px;">
                 <table role="presentation" border="0" cellspacing="0" cellpadding="0">
@@ -357,13 +453,17 @@ export function buildOrderStatusEmailHtml(params: {
                   </tr>
                 </table>
               </div>
+              `}
 
               <!-- Store Support Info -->
               <p style="margin: 0 0 4px 0; font-size: 11px; color: #64748b;">
                 ${settings.address || 'Main Market Road, Gidhaur'} • Helpline: <a href="tel:${settings.contactPhone || '+919876543210'}" style="color: #0284c7; text-decoration: none; font-weight: 700;">${settings.contactPhone || '+91 98765 43210'}</a>
               </p>
               <p style="margin: 0; font-size: 10px; color: #94a3b8;">
-                100% Quality & Hygiene Assured • Thank you for choosing ${restaurantName}
+                ${orderType === 'non_food_only'
+                  ? `100% Quality & Safe Transit Assured • Thank you for shopping with ${restaurantName}`
+                  : `100% Quality & Hygiene Assured • Thank you for choosing ${restaurantName}`
+                }
               </p>
             </td>
           </tr>
@@ -383,36 +483,49 @@ export async function sendOrderNotificationEmail(params: {
   recipientEmail: string;
   settings?: EmailSettings;
   appUrl?: string;
-}): Promise<{ success: boolean; message: string; previewMode?: boolean }> {
+}): Promise<{ success: boolean; message: string; previewMode?: boolean; skipped?: boolean }> {
   const { order, status, recipientEmail, settings = {}, appUrl = '' } = params;
 
   if (!recipientEmail || !recipientEmail.includes('@')) {
     return { success: false, message: 'Invalid recipient email address' };
   }
 
+  // 1. Strictly enforce Admin Milestone Toggles (If toggle is OFF, NEVER send email)
+  if (!isMilestoneEmailEnabled(status, settings)) {
+    console.log(`[Email Skipped] Milestone "${status}" notification is turned OFF in Admin Settings.`);
+    return {
+      success: true,
+      skipped: true,
+      message: `Notification for "${status}" is disabled in Admin Settings toggles.`
+    };
+  }
+
   const restaurantName = settings.restaurantName || 'Gidhaur Bakery';
   const orderId = order.orderId || order.id || 'ORDER';
 
+  // 2. Universal, Professional Subject Lines for All Products (Food & Non-Food alike)
   let subject = `Order #${orderId} - ${restaurantName}`;
   switch (status) {
     case 'pending':
-      subject = `🍽️ Order Placed Successfully! #${orderId} - ${restaurantName}`;
+      subject = `📦 Order Placed Successfully! #${orderId} - ${restaurantName}`;
       break;
     case 'accepted':
+      subject = `✅ Order Confirmed! #${orderId} - ${restaurantName}`;
+      break;
     case 'preparing':
-      subject = `👨‍🍳 Order Confirmed & In Kitchen! #${orderId} - ${restaurantName}`;
+      subject = `📦 Order in Preparation! #${orderId} - ${restaurantName}`;
       break;
     case 'out_for_delivery':
       subject = `🛵 Out for Delivery! #${orderId} is on the way`;
       break;
     case 'delivered':
-      subject = `🎉 Delivered! Enjoy your delicious meal #${orderId}`;
+      subject = `🎉 Order Delivered Successfully! #${orderId} - ${restaurantName}`;
       break;
     case 'rejected':
-      subject = `⚠️ Order #${orderId} Status Update - ${restaurantName}`;
+      subject = `⚠️ Order #${orderId} Cancelled - ${restaurantName}`;
       break;
     case 'cancellation_declined':
-      subject = `ℹ️ Order #${orderId} Update: Cancellation Request Declined - ${restaurantName}`;
+      subject = `ℹ️ Order #${orderId} Cancellation Declined - ${restaurantName}`;
       break;
   }
 

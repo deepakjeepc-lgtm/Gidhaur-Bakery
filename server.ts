@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import sharp from 'sharp';
 import { createServer as createViteServer } from 'vite';
-import { sendOrderNotificationEmail, buildOrderStatusEmailHtml } from './src/server/emailHelper';
+import { sendOrderNotificationEmail, buildOrderStatusEmailHtml, isMilestoneEmailEnabled } from './src/server/emailHelper';
 
 const app = express();
 const PORT = 3000;
@@ -322,9 +322,17 @@ app.post('/api/send-order-email', async (req, res) => {
       return res.status(400).json({ success: false, message: 'No recipient email specified' });
     }
 
+    const eventStatus = status || order?.status || 'pending';
+
+    // Strictly check if notification for this milestone event is turned ON in Admin Settings
+    if (!isMilestoneEmailEnabled(eventStatus, effectiveSettings)) {
+      console.log(`[Server /api/send-order-email] Milestone "${eventStatus}" is toggled OFF in Admin Settings. Skipping email.`);
+      return res.json({ success: true, skipped: true, message: `Notification for "${eventStatus}" is disabled in settings.` });
+    }
+
     const result = await sendOrderNotificationEmail({
       order,
-      status: status || order?.status || 'pending',
+      status: eventStatus,
       recipientEmail: targetEmail,
       settings: effectiveSettings,
       appUrl,
@@ -340,7 +348,7 @@ app.post('/api/send-order-email', async (req, res) => {
 // Admin Test Email Endpoint
 app.post('/api/test-email', async (req, res) => {
   try {
-    const { recipientEmail, settings } = req.body || {};
+    const { recipientEmail, settings, orderType = 'food' } = req.body || {};
     const appUrl = `${req.protocol}://${req.get('host')}`;
     const effectiveSettings = { ...store.settings, ...(settings || {}) };
 
@@ -348,17 +356,26 @@ app.post('/api/test-email', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Recipient email is required for test' });
     }
 
+    const isNonFoodTest = orderType === 'non_food';
     const dummyOrder = {
       orderId: 'TEST-' + Math.floor(1000 + Math.random() * 9000),
       customerName: 'Store Administrator',
-      totalAmount: 299,
-      subtotal: 299,
+      totalAmount: isNonFoodTest ? 149 : 299,
+      subtotal: isNonFoodTest ? 149 : 299,
       address: 'Main Market, Gidhaur (Sample Delivery Address)',
       paymentMethod: 'UPI',
       paymentStatus: 'paid',
       items: [
         {
-          product: { name: 'Fresh Artisan Cake / Pizza', price: 299 },
+          name: isNonFoodTest ? 'Birthday Celebration Candles & Party Caps' : 'Fresh Artisan Cake / Pizza',
+          isNonFood: isNonFoodTest,
+          category: isNonFoodTest ? 'Party Accessories' : 'Cakes & Bakery',
+          product: {
+            name: isNonFoodTest ? 'Birthday Celebration Candles & Party Caps' : 'Fresh Artisan Cake / Pizza',
+            price: isNonFoodTest ? 149 : 299,
+            isNonFood: isNonFoodTest,
+            category: isNonFoodTest ? 'Party Accessories' : 'Cakes & Bakery',
+          },
           quantity: 1,
         },
       ],

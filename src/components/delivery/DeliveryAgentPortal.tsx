@@ -240,19 +240,45 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
     setExpandedOrderIds((prev) => ({ ...prev, [orderId]: !prev[orderId] }));
   };
 
+  // Check if item was included in this parcel by the prep/kitchen station
+  const isItemInParcel = (order: Order, item: any, idx: number): boolean => {
+    if (Array.isArray(order.dispatchedItemIndices) && order.dispatchedItemIndices.length > 0) {
+      return order.dispatchedItemIndices.includes(idx);
+    }
+    if (Array.isArray(order.untickedItems) && order.untickedItems.length > 0) {
+      const name = String(item.product?.name || item.name || '').trim().toLowerCase();
+      return !order.untickedItems.some((u: string) => {
+        const cleanU = String(u).toLowerCase().trim();
+        return name.includes(cleanU) || cleanU.includes(name);
+      });
+    }
+    if (Array.isArray(order.dispatchedItems) && order.dispatchedItems.length > 0) {
+      const name = String(item.product?.name || item.name || '').trim().toLowerCase();
+      return order.dispatchedItems.some((d: string) => {
+        const cleanD = String(d).toLowerCase().trim();
+        return name.includes(cleanD) || cleanD.includes(name);
+      });
+    }
+    return true;
+  };
+
+  const isItemDelivering = (order: Order, item: any, idx: number): boolean => {
+    if (selectedItemsMap[order.id]?.[idx] !== undefined) {
+      return !!selectedItemsMap[order.id][idx];
+    }
+    return isItemInParcel(order, item, idx);
+  };
+
   // Toggle item selection for a specific order
-  const toggleItemSelection = (orderId: string, itemIdx: number) => {
-    setSelectedItemsMap((prev) => {
-      const orderItems = prev[orderId] || {};
-      const currentVal = orderItems[itemIdx] !== false; // default true
-      return {
-        ...prev,
-        [orderId]: {
-          ...orderItems,
-          [itemIdx]: !currentVal
-        }
-      };
-    });
+  const toggleItemSelection = (order: Order, itemIdx: number) => {
+    const currentVal = isItemDelivering(order, order.items?.[itemIdx], itemIdx);
+    setSelectedItemsMap((prev) => ({
+      ...prev,
+      [order.id]: {
+        ...(prev[order.id] || {}),
+        [itemIdx]: !currentVal
+      }
+    }));
   };
 
   // Select all or Deselect all items
@@ -270,20 +296,15 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
   // Calculate base dishes amount from selected items
   const getOrderDishesAmount = (order: Order) => {
     if (!order.items || order.items.length === 0) return order.subtotal || order.totalAmount || 0;
-    const orderSelections = selectedItemsMap[order.id] || {};
     
     let sum = 0;
-    let anyExplicit = false;
-
     order.items.forEach((item, idx) => {
-      const isSelected = orderSelections[idx] !== false; // default true
-      if (orderSelections[idx] !== undefined) anyExplicit = true;
-      if (isSelected) {
-        sum += (item.price || 0) * (item.quantity || 1);
+      if (isItemDelivering(order, item, idx)) {
+        const price = (item as any).selectedVariant?.price ?? (item as any).product?.price ?? item.price ?? 0;
+        sum += price * (item.quantity || 1);
       }
     });
 
-    if (!anyExplicit) return order.subtotal || order.totalAmount || 0;
     return sum;
   };
 
@@ -291,26 +312,42 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
   const getOrderDeliveryAmount = (order: Order) => {
     const dishesAmount = getOrderDishesAmount(order);
     const customChargeStr = riderDeliveryCharges[order.id];
-    const customCharge = customChargeStr !== undefined && customChargeStr !== '' ? Math.max(0, parseInt(customChargeStr, 10) || 0) : 0;
+    const customCharge = customChargeStr !== undefined && customChargeStr !== ''
+      ? Math.max(0, parseInt(customChargeStr, 10) || 0)
+      : (Number(order.deliveryFee) || 0);
     return dishesAmount + customCharge;
   };
 
   const getSelectedItemsCount = (order: Order) => {
     if (!order.items || order.items.length === 0) return 0;
-    const orderSelections = selectedItemsMap[order.id] || {};
-    return order.items.filter((_, idx) => orderSelections[idx] !== false).length;
+    return order.items.filter((item, idx) => isItemDelivering(order, item, idx)).length;
   };
 
   const handleMarkDelivered = async (order: Order, paymentType: 'upi' | 'cash') => {
+    const dishesAmount = getOrderDishesAmount(order);
     const finalAmount = getOrderDeliveryAmount(order);
     const customChargeStr = riderDeliveryCharges[order.id];
-    const customDeliveryFee = customChargeStr !== undefined && customChargeStr !== '' ? Math.max(0, parseInt(customChargeStr, 10) || 0) : 0;
+    const customDeliveryFee = customChargeStr !== undefined && customChargeStr !== ''
+      ? Math.max(0, parseInt(customChargeStr, 10) || 0)
+      : (Number(order.deliveryFee) || 0);
     const selectedCount = getSelectedItemsCount(order);
     
     if (selectedCount === 0) {
       alert('Please select at least 1 item to deliver.');
       return;
     }
+
+    const deliveredItemIndices = (order.items || [])
+      .map((_, idx) => idx)
+      .filter((idx) => isItemDelivering(order, order.items[idx], idx));
+
+    const deliveredItems = (order.items || [])
+      .filter((_, idx) => deliveredItemIndices.includes(idx))
+      .map((i) => i.name || (i as any).product?.name || 'Item');
+
+    const undeliveredItems = (order.items || [])
+      .filter((_, idx) => !deliveredItemIndices.includes(idx))
+      .map((i) => i.name || (i as any).product?.name || 'Item');
 
     setIsProcessingDelivery(order.id);
     try {
@@ -321,7 +358,11 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
         paymentMethod: paymentType,
         deliveredAmount: finalAmount,
         deliveryFee: customDeliveryFee,
+        subtotal: dishesAmount,
         totalAmount: finalAmount,
+        dispatchedItems: deliveredItems,
+        dispatchedItemIndices: deliveredItemIndices,
+        untickedItems: undeliveredItems,
         deliveredAt: serverTimestamp(),
         'statusTimestamps.delivered': serverTimestamp(),
         assignedAgentId: currentAgent.id,
@@ -336,7 +377,20 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
       if (order.customerEmail && order.customerEmail.includes('@')) {
         const curSettings = getLocalRestaurantSettings();
         if (curSettings?.emailEventToggles?.notifyDelivered !== false) {
-          sendOrderStatusEmail({ ...order, status: 'delivered' }, 'delivered', curSettings).catch(() => {});
+          sendOrderStatusEmail(
+            {
+              ...order,
+              status: 'delivered',
+              subtotal: dishesAmount,
+              totalAmount: finalAmount,
+              deliveredAmount: finalAmount,
+              dispatchedItems: deliveredItems,
+              dispatchedItemIndices: deliveredItemIndices,
+              untickedItems: undeliveredItems
+            },
+            'delivered',
+            curSettings
+          ).catch(() => {});
         }
       }
 
@@ -655,7 +709,9 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
                           {/* Items Checklist Rows */}
                           <div className="space-y-1.5">
                             {order.items?.map((item, idx) => {
-                              const isChecked = selectedItemsMap[order.id]?.[idx] !== false; // default true
+                              const inParcel = isItemInParcel(order, item, idx);
+                              const isChecked = isItemDelivering(order, item, idx);
+                              const price = (item as any).selectedVariant?.price ?? (item as any).product?.price ?? item.price ?? 0;
                               return (
                                 <label
                                   key={idx}
@@ -669,16 +725,27 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
                                     <input
                                       type="checkbox"
                                       checked={isChecked}
-                                      onChange={() => toggleItemSelection(order.id, idx)}
+                                      onChange={() => toggleItemSelection(order, idx)}
                                       className="w-4 h-4 text-slate-900 rounded focus:ring-0 cursor-pointer"
                                     />
-                                    <span className="font-semibold truncate">
-                                      {item.quantity}x {item.name}
-                                      {item.selectedSize && ` (${item.selectedSize})`}
-                                    </span>
+                                    <div className="truncate">
+                                      <span className="font-semibold">
+                                        {item.quantity}x {item.name}
+                                        {item.selectedSize && ` (${item.selectedSize})`}
+                                      </span>
+                                      {!inParcel && (
+                                        <span className="ml-1.5 text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold not-italic">
+                                          Not in parcel
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                   <span className="font-amount font-bold shrink-0 ml-2">
-                                    ₹{item.price * item.quantity}
+                                    {isChecked ? (
+                                      `₹${price * item.quantity}`
+                                    ) : (
+                                      <span className="line-through text-slate-400">₹{price * item.quantity}</span>
+                                    )}
                                   </span>
                                 </label>
                               );

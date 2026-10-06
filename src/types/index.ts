@@ -75,6 +75,10 @@ export interface OrderItem {
   price: number;
   quantity: number;
   imageUrl?: string;
+  category?: string;
+  isNonFood?: boolean;
+  prepTimeMinutes?: number;
+  hasKitchenPrepTime?: boolean;
 }
 
 export interface Order {
@@ -96,6 +100,18 @@ export interface Order {
   assignedAgentVehicle?: string;
   assignedAgentVehicleNumber?: string;
   kitchenStatus?: 'queued' | 'preparing' | 'ready' | 'dispatched';
+  preparingStatus?: 'queued' | 'preparing' | 'ready' | 'dispatched';
+  preparingSentAt?: any;
+  preparedItems?: string[];
+  dispatchedItems?: string[];
+  dispatchedItemIndices?: number[];
+  untickedItems?: string[];
+  kitchenReady?: boolean;
+  preparingReady?: boolean;
+  kitchenTickedItems?: string[];
+  preparingTickedItems?: string[];
+  originalTotalAmount?: number;
+  originalSubtotal?: number;
   paymentStatus?: 'unpaid' | 'paid';
   paymentMethod?: 'cod' | 'cash' | 'upi';
   upiTransactionRef?: string;
@@ -175,6 +191,17 @@ export interface KitchenStaff {
   createdAt?: any;
 }
 
+export interface PreparingStaff {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  password?: string;
+  role: string; // e.g. "Lead Packer", "Party Props Specialist", "Packing Agent"
+  status: 'active' | 'inactive';
+  createdAt?: any;
+}
+
 export interface FestivalSettings {
   isEnabled: boolean;
   activeFestival?: string;
@@ -241,7 +268,7 @@ export interface RestaurantSettings extends WebsiteBrandingSettings {
   };
 }
 
-export type StaffRole = 'admin' | 'kitchen' | 'delivery';
+export type StaffRole = 'admin' | 'kitchen' | 'preparing' | 'delivery';
 
 export interface StaffSession {
   role: StaffRole;

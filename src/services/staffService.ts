@@ -10,7 +10,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { DeliveryAgent, KitchenStaff, RestaurantSettings, StaffSession } from '../types';
+import { DeliveryAgent, KitchenStaff, PreparingStaff, RestaurantSettings, StaffSession } from '../types';
 
 export const DEFAULT_SETTINGS: RestaurantSettings = {
   enableOnlinePayment: true,
@@ -113,10 +113,24 @@ export const INITIAL_KITCHEN_STAFF: KitchenStaff[] = [
   }
 ];
 
+export const INITIAL_PREPARING_STAFF: PreparingStaff[] = [
+  {
+    id: 'prep-1',
+    name: 'Suresh Verma',
+    phone: '+91 98765 43231',
+    email: 'suresh.prep@gidhaurbakery.com',
+    password: 'password123',
+    role: 'Lead Packer & Props Specialist',
+    status: 'active',
+    createdAt: new Date().toISOString()
+  }
+];
+
 // Local storage keys for resilient persistence
 const STORAGE_KEYS = {
   DELIVERY_AGENTS: 'swadeep_delivery_agents',
   KITCHEN_STAFF: 'swadeep_kitchen_staff',
+  PREPARING_STAFF: 'swadeep_preparing_staff',
   SETTINGS: 'swadeep_restaurant_settings',
   ACTIVE_STAFF_SESSION: 'swadeep_active_staff_session',
   ADMIN_ACCOUNTS: 'gidhaur_admin_accounts'
@@ -419,6 +433,95 @@ export async function deleteKitchenStaff(id: string): Promise<void> {
 
   const current = getLocalKitchenStaff().filter((s) => s.id !== id);
   localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(current));
+}
+
+// Subscribe to Preparing Staff (Packing Team)
+export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) => void) {
+  try {
+    const unsubscribe = onSnapshot(
+      collection(db, 'preparing_staff'),
+      (snapshot) => {
+        if (snapshot.empty) {
+          callback(getLocalPreparingStaff());
+        } else {
+          const staff: PreparingStaff[] = [];
+          snapshot.forEach((d) => {
+            staff.push({ ...(d.data() as PreparingStaff), id: d.id });
+          });
+          localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(staff));
+          callback(staff);
+        }
+      },
+      (error) => {
+        console.warn('Firestore preparing staff listener fallback:', error);
+        callback(getLocalPreparingStaff());
+      }
+    );
+    return unsubscribe;
+  } catch {
+    callback(getLocalPreparingStaff());
+    return () => {};
+  }
+}
+
+export function getLocalPreparingStaff(): PreparingStaff[] {
+  try {
+    const data = localStorage.getItem(STORAGE_KEYS.PREPARING_STAFF);
+    return data ? JSON.parse(data) : INITIAL_PREPARING_STAFF;
+  } catch {
+    return INITIAL_PREPARING_STAFF;
+  }
+}
+
+// Add Preparing Staff
+export async function addPreparingStaff(staffData: Omit<PreparingStaff, 'id' | 'createdAt'>): Promise<string> {
+  const id = `prep-${Date.now()}`;
+  const newStaff: PreparingStaff = {
+    ...staffData,
+    id,
+    status: 'active',
+    createdAt: new Date().toISOString()
+  };
+
+  try {
+    await setDoc(doc(db, 'preparing_staff', id), {
+      ...newStaff,
+      createdAt: serverTimestamp()
+    });
+  } catch (err) {
+    console.debug('Direct local save for preparing staff:', err);
+  }
+
+  const current = getLocalPreparingStaff();
+  localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify([newStaff, ...current]));
+  return id;
+}
+
+// Update Preparing Staff
+export async function updatePreparingStaff(id: string, updates: Partial<PreparingStaff>): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'preparing_staff', id), {
+      ...updates,
+      updatedAt: serverTimestamp()
+    });
+  } catch (err) {
+    console.debug('Direct local update for preparing staff:', err);
+  }
+
+  const current = getLocalPreparingStaff().map((s) => (s.id === id ? { ...s, ...updates } : s));
+  localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(current));
+}
+
+// Delete Preparing Staff
+export async function deletePreparingStaff(id: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'preparing_staff', id));
+  } catch (err) {
+    console.debug('Direct local delete for preparing staff:', err);
+  }
+
+  const current = getLocalPreparingStaff().filter((s) => s.id !== id);
+  localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(current));
 }
 
 // Settings (UPI ID etc)

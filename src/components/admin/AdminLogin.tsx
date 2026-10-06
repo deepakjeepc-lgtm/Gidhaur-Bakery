@@ -9,6 +9,7 @@ import {
   Shield,
   ChefHat,
   Bike,
+  PackageCheck,
   Sparkles,
   CheckCircle2
 } from 'lucide-react';
@@ -17,6 +18,7 @@ import { StaffSession } from '../../types';
 import {
   getLocalDeliveryAgents,
   getLocalKitchenStaff,
+  getLocalPreparingStaff,
   getLocalAdminAccounts,
   saveStaffSession
 } from '../../services/staffService';
@@ -98,7 +100,33 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
       return;
     }
 
-    // 3. Check for Master Admin credentials or registered Admin accounts
+    // 3. Check if matches Preparing & Packing Staff registered accounts
+    const preparingStaff = getLocalPreparingStaff();
+    const matchedPrep = preparingStaff.find(
+      (s) =>
+        (s.email.toLowerCase() === cleanEmail ||
+          s.email.toLowerCase().replace('@swadeep.com', '@gidhaurbakery.com') === cleanEmail ||
+          s.email.toLowerCase().replace('@gidhaurbakery.com', '@swadeep.com') === cleanEmail) &&
+        (s.password || 'password123') === cleanPassword
+    );
+
+    if (matchedPrep) {
+      setIsLoading(false);
+      const session: StaffSession = {
+        role: 'preparing',
+        data: {
+          id: matchedPrep.id,
+          name: matchedPrep.name,
+          email: matchedPrep.email,
+          phone: matchedPrep.phone
+        }
+      };
+      saveStaffSession(session);
+      onStaffLoginSuccess(session);
+      return;
+    }
+
+    // 4. Check for Master Admin credentials or registered Admin accounts
     const adminAccounts = getLocalAdminAccounts();
     const matchedAdmin = adminAccounts.find(
       (a) => a.email.toLowerCase() === cleanEmail && (a.password || 'admin123') === cleanPassword
@@ -254,7 +282,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
               Quick Role Test Fill
             </span>
 
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
               <button
                 type="button"
                 onClick={() => handleQuickFill('admin@gidhaurbakery.com', 'admin123')}
@@ -271,6 +299,15 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
               >
                 <ChefHat className="w-3.5 h-3.5 text-slate-700 group-hover:scale-110 transition-transform" />
                 <span className="text-[10px] font-bold text-slate-800">Chef</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleQuickFill('suresh.prep@gidhaurbakery.com', 'password123')}
+                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-center transition-all flex flex-col items-center gap-1 group"
+              >
+                <PackageCheck className="w-3.5 h-3.5 text-slate-700 group-hover:scale-110 transition-transform" />
+                <span className="text-[10px] font-bold text-slate-800">Prep / Pack</span>
               </button>
 
               <button
