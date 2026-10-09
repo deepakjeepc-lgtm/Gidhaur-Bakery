@@ -1,6 +1,7 @@
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { BannerSettings, PromotionalBanner } from '../types';
+import { readThrottler } from './readThrottler';
 
 export const DEFAULT_BANNER_SETTINGS: BannerSettings = {
   isEnabled: true,
@@ -180,12 +181,11 @@ export const subscribeToBannerSettings = (
       });
   }
 
-  // Also maintain Firestore subscription as secondary layer
-  let unsubscribeFirestore = () => {};
-  try {
-    unsubscribeFirestore = onSnapshot(
-      BANNER_DOC_REF,
-      (snapshot) => {
+  // Single throttled getDoc check with 120s cooldown (no real-time leak)
+  if (readThrottler.canFetch('banners', 120000)) {
+    readThrottler.markFetched('banners');
+    getDoc(BANNER_DOC_REF)
+      .then((snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
           const loadedSettings: BannerSettings = {
@@ -196,18 +196,14 @@ export const subscribeToBannerSettings = (
           cacheBannerSettings(loadedSettings);
           onUpdate(loadedSettings);
         }
-      },
-      (error) => {
-        console.warn('Banner Firestore subscription note (using cached/server state):', error);
-      }
-    );
-  } catch (err) {
-    console.warn('Failed to subscribe to banner settings via Firestore:', err);
+      })
+      .catch((err) => {
+        console.warn('Banner fetch note (serving cached state):', err?.message || err);
+      });
   }
 
   return () => {
     localSubscribers.delete(onUpdate);
-    unsubscribeFirestore();
   };
 };
 

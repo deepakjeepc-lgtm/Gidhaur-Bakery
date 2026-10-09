@@ -17,6 +17,8 @@ import { db } from '../firebase/config';
 import { Order, RestaurantSettings } from '../types';
 import { getLocalRestaurantSettings, subscribeToRestaurantSettings } from '../services/staffService';
 import { triggerHaptic } from '../utils/haptics';
+import { registerCustomerOrderForNotifications } from '../services/customerNotificationService';
+import { requestNotificationPermission } from '../utils/sound';
 
 interface OrderSuccessModalProps {
   order: Order | null;
@@ -83,6 +85,9 @@ export const OrderSuccessModal: React.FC<OrderSuccessModalProps> = ({
 
   useEffect(() => {
     if (order) {
+      registerCustomerOrderForNotifications(order.orderId);
+      // Gently request notification permission so customer receives status alerts
+      requestNotificationPermission().catch(() => {});
       setIsPaidLocally(order.paymentStatus === 'paid');
       triggerHaptic('success');
       try {

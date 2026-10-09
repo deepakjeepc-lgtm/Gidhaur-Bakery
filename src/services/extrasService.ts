@@ -1,6 +1,7 @@
-import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { ProductExtra } from '../types';
+import { readThrottler } from './readThrottler';
 
 export const STORAGE_KEY_EXTRAS = 'swadeep_product_extras';
 
@@ -120,6 +121,10 @@ export function saveCachedExtras(extras: ProductExtra[]) {
  */
 export async function saveExtras(extras: ProductExtra[]): Promise<void> {
   saveCachedExtras(extras);
+  readThrottler.invalidate('product_extras');
+  try {
+    window.dispatchEvent(new CustomEvent('swadeep_extras_updated'));
+  } catch {}
   try {
     const ref = doc(db, 'settings', 'product_extras');
     await setDoc(
@@ -136,36 +141,40 @@ export async function saveExtras(extras: ProductExtra[]): Promise<void> {
 }
 
 /**
- * Subscribes to real-time extras updates from Firestore
+ * Fetches extras with memory/localStorage caching and rate-limiting (no onSnapshot leak)
  */
 export function subscribeToExtras(callback: (extras: ProductExtra[]) => void): () => void {
-  try {
+  // 1. Immediately provide cached data for 0ms render
+  callback(getCachedExtras());
+
+  // 2. Listen to local update events
+  const handleUpdate = () => {
+    callback(getCachedExtras());
+  };
+  window.addEventListener('swadeep_extras_updated', handleUpdate);
+
+  // 3. Single throttled check (120s cooldown)
+  if (readThrottler.canFetch('product_extras', 120000)) {
+    readThrottler.markFetched('product_extras');
     const ref = doc(db, 'settings', 'product_extras');
-    const unsub = onSnapshot(
-      ref,
-      (docSnap) => {
+    getDoc(ref)
+      .then((docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
           if (Array.isArray(data?.items)) {
             saveCachedExtras(data.items);
             callback(data.items);
-            return;
           }
         }
-        // If not in firestore yet, seed or use cached
-        const current = getCachedExtras();
-        callback(current);
-      },
-      (error) => {
-        console.warn('Extras subscription fallback:', error);
-        callback(getCachedExtras());
-      }
-    );
-    return unsub;
-  } catch {
-    callback(getCachedExtras());
-    return () => {};
+      })
+      .catch((err) => {
+        console.warn('Extras fetch note (using local cache):', err?.message || err);
+      });
   }
+
+  return () => {
+    window.removeEventListener('swadeep_extras_updated', handleUpdate);
+  };
 }
 
 /**

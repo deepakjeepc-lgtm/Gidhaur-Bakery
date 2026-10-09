@@ -212,11 +212,12 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
     ? Math.min(...product.colorVariants!.map((c) => c.price))
     : product.price;
 
-  const isAvailable = isSeparatedVariant
+  const isStockZero = typeof product.stockQuantity === 'number' && product.stockQuantity <= 0;
+  const isAvailable = !isStockZero && (isSeparatedVariant
     ? product.available !== false && (separatedVariant ? separatedVariant.available !== false : true)
     : hasVariants
     ? product.available !== false && !product.variants!.every((v) => v.available === false)
-    : product.available !== false;
+    : product.available !== false);
 
   const effectiveSelected = Boolean(isSelected || isHovered);
 

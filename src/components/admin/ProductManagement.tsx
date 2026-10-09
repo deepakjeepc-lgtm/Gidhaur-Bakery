@@ -428,6 +428,13 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
         localStorage.setItem('swadeep_cached_products', JSON.stringify(currentProds));
         window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: currentProds }));
         if (onRefresh) onRefresh();
+
+        // Sync to local server for zero-latency offline persistence
+        fetch('/api/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedItem),
+        }).catch(() => {});
       } catch {}
 
       setSeedSuccessMessage(`✓ "${cleanPayload.name}" ${id ? 'updated' : 'added'} successfully!`);
@@ -453,6 +460,14 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
             createdAt: serverTimestamp(),
           });
         }
+        // Also sync to local server API fallback
+        try {
+          fetch('/api/products', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...cleanPayload, id: id || `item-${Date.now()}` }),
+          }).catch(() => {});
+        } catch {}
       } catch (err) {
         console.warn('Firestore product persist notice (saved locally):', err);
       }
@@ -832,6 +847,9 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
       const updated = sanitizeProducts(currentProds.filter((p) => p.id !== targetId));
       localStorage.setItem('swadeep_cached_products', JSON.stringify(updated));
       window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: updated }));
+
+      // Also remove from local server
+      fetch(`/api/products/${encodeURIComponent(targetId)}`, { method: 'DELETE' }).catch(() => {});
     } catch {}
 
     // 3. Automatically remove all associated images from Firebase Storage (no orphaned files)

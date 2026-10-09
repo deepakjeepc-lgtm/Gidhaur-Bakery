@@ -42,6 +42,10 @@ export interface Product {
   imageUrl: string;
   images?: string[];
   available: boolean;
+  stockQuantity?: number;
+  lowStockThreshold?: number;
+  trackStock?: boolean;
+  lastStockUpdated?: string;
   createdAt?: any;
   updatedAt?: any;
   isVegetarian?: boolean;

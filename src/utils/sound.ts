@@ -296,26 +296,93 @@ export function markInitialOrdersAsSeen(orderIds: string[]) {
   orderIds.forEach((id) => notifiedOrderIds.add(id));
 }
 
-// Request and fire browser notification if allowed
-export async function sendNativeNotification(title: string, body: string) {
-  if (typeof window === 'undefined' || !('Notification' in window)) return;
+// Request and fire browser notification if allowed (with lock-screen & background Service Worker support)
+export async function sendNativeNotification(
+  title: string,
+  body: string,
+  options?: {
+    tag?: string;
+    url?: string;
+    vibrate?: number[];
+  }
+) {
+  if (typeof window === 'undefined') return;
+
+  const vibratePattern = options?.vibrate || [500, 250, 500, 250, 500];
+
+  // Hardware vibration on mobile devices
+  try {
+    if ('vibrate' in navigator) {
+      navigator.vibrate(vibratePattern);
+    }
+  } catch {}
+
+  if (!('Notification' in window)) return;
 
   try {
-    if (Notification.permission === 'granted') {
-      new Notification(title, {
-        body,
-        icon: '/icon-192.svg',
-      });
-    } else if (Notification.permission !== 'denied') {
-      const perm = await Notification.requestPermission();
-      if (perm === 'granted') {
-        new Notification(title, {
-          body,
-          icon: '/icon-192.svg',
-        });
+    let perm = Notification.permission;
+    if (perm !== 'granted' && perm !== 'denied') {
+      perm = await Notification.requestPermission();
+    }
+    if (perm !== 'granted') return;
+
+    // Use ServiceWorker registration when available (shows on lock-screen & when app is background/closed)
+    if ('serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg && reg.showNotification) {
+          await reg.showNotification(title, {
+            body,
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: options?.tag || 'gidhaur-order-alert',
+            vibrate: vibratePattern,
+            requireInteraction: true,
+            data: { url: options?.url || '/' },
+          } as any);
+          return;
+        }
+      } catch (swErr) {
+        console.warn('SW notification fallback to window Notification:', swErr);
       }
     }
+
+    // Standard Notification fallback
+    new Notification(title, {
+      body,
+      icon: '/icon-192.png',
+      tag: options?.tag || 'gidhaur-order-alert',
+    });
   } catch (e) {
     console.warn('Browser notification error:', e);
+  }
+}
+
+export function getNotificationPermissionStatus(): 'granted' | 'denied' | 'default' | 'unsupported' {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return 'unsupported';
+  }
+  return Notification.permission;
+}
+
+export async function requestNotificationPermission(): Promise<'granted' | 'denied' | 'default' | 'unsupported'> {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return 'unsupported';
+  }
+  try {
+    const res = await Notification.requestPermission();
+    return res;
+  } catch {
+    return Notification.permission;
+  }
+}
+
+export function stopCurrentlyPlayingAudio() {
+  if (currentPlayingAudio) {
+    try {
+      currentPlayingAudio.pause();
+      currentPlayingAudio.currentTime = 0;
+    } catch {}
+    currentPlayingAudio = null;
   }
 }

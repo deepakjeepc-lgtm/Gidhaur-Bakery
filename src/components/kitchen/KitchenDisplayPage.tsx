@@ -18,17 +18,15 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import {
-  collection,
-  query,
-  orderBy,
-  onSnapshot,
   doc,
   updateDoc,
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { subscribeToSharedOrders } from '../../services/orderListenerService';
 import { Order, DeliveryAgent, KitchenStaff } from '../../types';
 import { subscribeToDeliveryAgents, getLocalRestaurantSettings } from '../../services/staffService';
+import { deductStockForAcceptedOrder } from '../../services/inventoryService';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
 import { playOrderAlertChime } from '../../utils/sound';
 import {
@@ -98,33 +96,12 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
   // Checked items checklist state per order
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
 
-  // Real-time Orders Sync
+  // Real-time Orders Sync via Singleton Shared Listener
   useEffect(() => {
-    const ordersCol = collection(db, 'orders');
-    const q = query(ordersCol, orderBy('createdAt', 'desc'));
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setIsLoading(false);
-        const fetched: Order[] = [];
-        snapshot.forEach((d) => {
-          const data = d.data() as Order;
-          fetched.push({ ...data, id: d.id, orderId: data.orderId || d.id });
-        });
-        setOrders(fetched);
-      },
-      (err) => {
-        console.warn('Kitchen orders fetch note (using local cache):', err?.message || err);
-        setIsLoading(false);
-        try {
-          const localOrders = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
-          if (Array.isArray(localOrders)) {
-            setOrders(localOrders);
-          }
-        } catch {}
-      }
-    );
+    const unsubscribe = subscribeToSharedOrders((fetched) => {
+      setIsLoading(false);
+      setOrders(fetched);
+    });
 
     return () => unsubscribe();
   }, []);
@@ -142,6 +119,11 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
   }, []);
 
   const handleStartCooking = async (orderId: string) => {
+    const targetOrder = orders.find((o) => o.id === orderId || o.orderId === orderId);
+    if (targetOrder) {
+      deductStockForAcceptedOrder(targetOrder);
+    }
+
     setOrders((prev) =>
       prev.map((o) => (o.id === orderId || o.orderId === orderId ? { ...o, status: 'preparing' as const, kitchenStatus: 'preparing' as const } : o))
     );

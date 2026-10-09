@@ -366,8 +366,9 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   if (!product) return null;
 
+  const isStockZero = typeof product.stockQuantity === 'number' && product.stockQuantity <= 0;
   const isVariantInStock = rawActiveVariant ? rawActiveVariant.available !== false : true;
-  const isProductInStock = product.available !== false && isVariantInStock;
+  const isProductInStock = !isStockZero && product.available !== false && isVariantInStock;
 
   const getModalImageFitClass = (imgSrc: string, idx: number) => {
     // 1. If active variant has its own image and explicit fit

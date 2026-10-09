@@ -5,13 +5,13 @@ import {
   deleteDoc,
   writeBatch,
   getDocs,
-  onSnapshot,
   query,
   orderBy,
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { CustomerEmailRecord, Order, OrderStatus, RestaurantSettings } from '../types';
+import { readThrottler } from './readThrottler';
 
 const STORAGE_KEY = 'swadeep_customer_emails';
 
@@ -30,43 +30,46 @@ export function saveLocalCustomerEmails(records: CustomerEmailRecord[]) {
   } catch {}
 }
 
-export function subscribeToCustomerEmails(callback: (records: CustomerEmailRecord[]) => void) {
-  try {
-    const colRef = collection(db, 'customer_emails');
-    const q = query(colRef, orderBy('lastOrderDate', 'desc'));
+export function subscribeToCustomerEmails(callback: (records: CustomerEmailRecord[]) => void): () => void {
+  // 1. Immediately provide cached records
+  callback(getLocalCustomerEmails());
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const records: CustomerEmailRecord[] = [];
-        snapshot.forEach((d) => {
-          records.push({ ...(d.data() as CustomerEmailRecord), id: d.id });
-        });
-        saveLocalCustomerEmails(records);
-        callback(records);
-      },
-      (err) => {
-        console.warn('Customer emails firestore subscription note:', err);
-        // Fallback to local storage or backend
-        fetch('/api/customer-emails')
-          .then((r) => r.json())
-          .then((data) => {
-            if (Array.isArray(data)) {
-              saveLocalCustomerEmails(data);
-              callback(data);
-            } else {
-              callback(getLocalCustomerEmails());
-            }
-          })
-          .catch(() => callback(getLocalCustomerEmails()));
-      }
-    );
-    return unsubscribe;
-  } catch (err) {
-    console.warn('subscribeToCustomerEmails error:', err);
+  const handleUpdate = () => {
     callback(getLocalCustomerEmails());
-    return () => {};
+  };
+  window.addEventListener('swadeep_emails_updated', handleUpdate);
+
+  // 2. Fetch once if throttler permits (120s cooldown)
+  if (readThrottler.canFetch('customer_emails', 120000)) {
+    readThrottler.markFetched('customer_emails');
+    fetch('/api/customer-emails')
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          saveLocalCustomerEmails(data);
+          callback(data);
+        } else {
+          // If server api is empty, try single getDocs
+          const colRef = collection(db, 'customer_emails');
+          const q = query(colRef, orderBy('lastOrderDate', 'desc'));
+          getDocs(q)
+            .then((snap) => {
+              const records: CustomerEmailRecord[] = [];
+              snap.forEach((d) => {
+                records.push({ ...(d.data() as CustomerEmailRecord), id: d.id });
+              });
+              saveLocalCustomerEmails(records);
+              callback(records);
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
   }
+
+  return () => {
+    window.removeEventListener('swadeep_emails_updated', handleUpdate);
+  };
 }
 
 export async function recordCustomerEmail(data: {
@@ -101,6 +104,10 @@ export async function recordCustomerEmail(data: {
   const filtered = currentList.filter((r) => r.email.toLowerCase() !== cleanEmail);
   const nextList = [updatedRecord, ...filtered];
   saveLocalCustomerEmails(nextList);
+  readThrottler.invalidate('customer_emails');
+  try {
+    window.dispatchEvent(new CustomEvent('swadeep_emails_updated'));
+  } catch {}
 
   // 2. Sync to Backend
   try {

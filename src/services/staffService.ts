@@ -6,11 +6,11 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
-  onSnapshot,
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { DeliveryAgent, KitchenStaff, PreparingStaff, RestaurantSettings, StaffSession } from '../types';
+import { readThrottler } from './readThrottler';
 
 export const DEFAULT_SETTINGS: RestaurantSettings = {
   enableOnlinePayment: true,
@@ -194,34 +194,40 @@ export async function seedStaffIfEmpty() {
   }
 }
 
-// Subscribe to Delivery Agents
-export function subscribeToDeliveryAgents(callback: (agents: DeliveryAgent[]) => void) {
-  try {
-    const unsubscribe = onSnapshot(
-      collection(db, 'delivery_agents'),
-      (snapshot) => {
+// Subscribe to Delivery Agents with memory/localStorage caching and throttle protection (no onSnapshot leak)
+export function subscribeToDeliveryAgents(callback: (agents: DeliveryAgent[]) => void): () => void {
+  // 1. Immediately provide cached data
+  callback(getLocalDeliveryAgents());
+
+  // 2. Listen to local updates
+  const handleUpdate = () => {
+    callback(getLocalDeliveryAgents());
+  };
+  window.addEventListener('swadeep_staff_updated', handleUpdate);
+
+  // 3. Single throttled fetch (180s cooldown)
+  if (readThrottler.canFetch('delivery_agents', 180000)) {
+    readThrottler.markFetched('delivery_agents');
+    getDocs(collection(db, 'delivery_agents'))
+      .then((snapshot) => {
         const agents: DeliveryAgent[] = [];
         snapshot.forEach((d) => {
           const item = { ...(d.data() as DeliveryAgent), id: d.id };
           if (!isHardcodedStaff(item)) {
             agents.push(item);
-          } else {
-            deleteDoc(doc(db, 'delivery_agents', d.id)).catch(() => {});
           }
         });
         localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(agents));
         callback(agents);
-      },
-      (error) => {
-        console.warn('Firestore delivery agents listener fallback:', error);
-        callback(getLocalDeliveryAgents());
-      }
-    );
-    return unsubscribe;
-  } catch {
-    callback(getLocalDeliveryAgents());
-    return () => {};
+      })
+      .catch((error) => {
+        console.warn('Delivery agents fetch note (using local cache):', error?.message || error);
+      });
   }
+
+  return () => {
+    window.removeEventListener('swadeep_staff_updated', handleUpdate);
+  };
 }
 
 export function getLocalDeliveryAgents(): DeliveryAgent[] {
@@ -299,34 +305,40 @@ export async function deleteDeliveryAgent(id: string): Promise<void> {
   window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
-// Subscribe to Kitchen Staff
-export function subscribeToKitchenStaff(callback: (staff: KitchenStaff[]) => void) {
-  try {
-    const unsubscribe = onSnapshot(
-      collection(db, 'kitchen_staff'),
-      (snapshot) => {
+// Subscribe to Kitchen Staff with memory/localStorage caching and throttle protection (no onSnapshot leak)
+export function subscribeToKitchenStaff(callback: (staff: KitchenStaff[]) => void): () => void {
+  // 1. Immediately provide cached data
+  callback(getLocalKitchenStaff());
+
+  // 2. Listen to local updates
+  const handleUpdate = () => {
+    callback(getLocalKitchenStaff());
+  };
+  window.addEventListener('swadeep_staff_updated', handleUpdate);
+
+  // 3. Single throttled fetch (180s cooldown)
+  if (readThrottler.canFetch('kitchen_staff', 180000)) {
+    readThrottler.markFetched('kitchen_staff');
+    getDocs(collection(db, 'kitchen_staff'))
+      .then((snapshot) => {
         const staff: KitchenStaff[] = [];
         snapshot.forEach((d) => {
           const item = { ...(d.data() as KitchenStaff), id: d.id };
           if (!isHardcodedStaff(item)) {
             staff.push(item);
-          } else {
-            deleteDoc(doc(db, 'kitchen_staff', d.id)).catch(() => {});
           }
         });
         localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(staff));
         callback(staff);
-      },
-      (error) => {
-        console.warn('Firestore kitchen staff listener fallback:', error);
-        callback(getLocalKitchenStaff());
-      }
-    );
-    return unsubscribe;
-  } catch {
-    callback(getLocalKitchenStaff());
-    return () => {};
+      })
+      .catch((error) => {
+        console.warn('Kitchen staff fetch note (using local cache):', error?.message || error);
+      });
   }
+
+  return () => {
+    window.removeEventListener('swadeep_staff_updated', handleUpdate);
+  };
 }
 
 export function getLocalKitchenStaff(): KitchenStaff[] {
@@ -401,34 +413,40 @@ export async function deleteKitchenStaff(id: string): Promise<void> {
   window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
-// Subscribe to Preparing Staff (Packing Team)
-export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) => void) {
-  try {
-    const unsubscribe = onSnapshot(
-      collection(db, 'preparing_staff'),
-      (snapshot) => {
+// Subscribe to Preparing Staff (Packing Team) with memory/localStorage caching and throttle protection (no onSnapshot leak)
+export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) => void): () => void {
+  // 1. Immediately provide cached data
+  callback(getLocalPreparingStaff());
+
+  // 2. Listen to local updates
+  const handleUpdate = () => {
+    callback(getLocalPreparingStaff());
+  };
+  window.addEventListener('swadeep_staff_updated', handleUpdate);
+
+  // 3. Single throttled fetch (180s cooldown)
+  if (readThrottler.canFetch('preparing_staff', 180000)) {
+    readThrottler.markFetched('preparing_staff');
+    getDocs(collection(db, 'preparing_staff'))
+      .then((snapshot) => {
         const staff: PreparingStaff[] = [];
         snapshot.forEach((d) => {
           const item = { ...(d.data() as PreparingStaff), id: d.id };
           if (!isHardcodedStaff(item)) {
             staff.push(item);
-          } else {
-            deleteDoc(doc(db, 'preparing_staff', d.id)).catch(() => {});
           }
         });
         localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(staff));
         callback(staff);
-      },
-      (error) => {
-        console.warn('Firestore preparing staff listener fallback:', error);
-        callback(getLocalPreparingStaff());
-      }
-    );
-    return unsubscribe;
-  } catch {
-    callback(getLocalPreparingStaff());
-    return () => {};
+      })
+      .catch((error) => {
+        console.warn('Preparing staff fetch note (using local cache):', error?.message || error);
+      });
   }
+
+  return () => {
+    window.removeEventListener('swadeep_staff_updated', handleUpdate);
+  };
 }
 
 export function getLocalPreparingStaff(): PreparingStaff[] {
@@ -503,30 +521,36 @@ export async function deletePreparingStaff(id: string): Promise<void> {
   window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
-// Settings (UPI ID etc)
-export function subscribeToRestaurantSettings(callback: (settings: RestaurantSettings) => void) {
-  try {
-    const unsubscribe = onSnapshot(
-      doc(db, 'settings', 'restaurant'),
-      (snapshot) => {
+// Settings (UPI ID etc) with memory/localStorage caching and throttle protection (no onSnapshot leak)
+export function subscribeToRestaurantSettings(callback: (settings: RestaurantSettings) => void): () => void {
+  // 1. Immediately provide cached settings
+  callback(getLocalRestaurantSettings());
+
+  // 2. Listen to local updates
+  const handleUpdate = () => {
+    callback(getLocalRestaurantSettings());
+  };
+  window.addEventListener('swadeep_settings_updated', handleUpdate);
+
+  // 3. Single throttled fetch (180s cooldown)
+  if (readThrottler.canFetch('restaurant_settings', 180000)) {
+    readThrottler.markFetched('restaurant_settings');
+    getDoc(doc(db, 'settings', 'restaurant'))
+      .then((snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data() as RestaurantSettings;
           localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(data));
           callback(data);
-        } else {
-          callback(getLocalRestaurantSettings());
         }
-      },
-      (error) => {
-        console.warn('Firestore settings listener fallback:', error);
-        callback(getLocalRestaurantSettings());
-      }
-    );
-    return unsubscribe;
-  } catch {
-    callback(getLocalRestaurantSettings());
-    return () => {};
+      })
+      .catch((error) => {
+        console.warn('Restaurant settings fetch note (using local cache):', error?.message || error);
+      });
   }
+
+  return () => {
+    window.removeEventListener('swadeep_settings_updated', handleUpdate);
+  };
 }
 
 export function getLocalRestaurantSettings(): RestaurantSettings {
@@ -548,6 +572,10 @@ export async function saveRestaurantSettings(settings: RestaurantSettings): Prom
     console.debug('Direct local save for settings:', err);
   }
   localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  readThrottler.invalidate('restaurant_settings');
+  try {
+    window.dispatchEvent(new CustomEvent('swadeep_settings_updated'));
+  } catch {}
 }
 
 // Staff Session Management (Rider / Kitchen / Admin)

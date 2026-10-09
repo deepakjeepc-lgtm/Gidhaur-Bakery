@@ -11,7 +11,11 @@ import {
   X,
   Sparkles,
   Info,
-  Clock
+  Clock,
+  Smartphone,
+  ShieldCheck,
+  AlertTriangle,
+  Square
 } from 'lucide-react';
 import { SoundPreset } from '../../utils/sound';
 
@@ -30,34 +34,21 @@ interface SoundSettingsModalProps {
   onUploadCustomFile: (file: File) => Promise<void>;
   onRemoveCustomFile: () => void;
   onUpdateVolume: (volume: number) => void;
-  onPlayTest: (preset?: SoundPreset) => void;
+  onStartTest: () => void;
+  onStopTest: () => void;
   isTesting: boolean;
+  testSecondsLeft?: number;
+  permissionStatus: 'granted' | 'denied' | 'default' | 'unsupported';
+  onRequestPermission: () => Promise<string>;
 }
 
+// Exactly ONE default preset as requested by user
 const PRESET_OPTIONS: { id: SoundPreset; name: string; desc: string; icon: string }[] = [
   {
     id: 'restaurant_chime',
     name: 'Dining Bell Chime (Default)',
     desc: 'Classic 3-tone pleasant dinner bell chime',
     icon: '🛎️'
-  },
-  {
-    id: 'kitchen_beep',
-    name: 'Kitchen KDS Beep',
-    desc: 'Short crisp electronic kitchen beeps',
-    icon: '📟'
-  },
-  {
-    id: 'marimba',
-    name: 'Warm Marimba',
-    desc: 'Melodic acoustic marimba bell harmony',
-    icon: '🎵'
-  },
-  {
-    id: 'urgent_melody',
-    name: 'Urgent Alert Tone',
-    desc: 'Energetic ascending four-tone alert',
-    icon: '⚡'
   }
 ];
 
@@ -70,8 +61,12 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
   onUploadCustomFile,
   onRemoveCustomFile,
   onUpdateVolume,
-  onPlayTest,
+  onStartTest,
+  onStopTest,
   isTesting,
+  testSecondsLeft = 120,
+  permissionStatus,
+  onRequestPermission,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -83,7 +78,6 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check file type
     if (!file.type.startsWith('audio/') && !file.name.match(/\.(mp3|wav|ogg|m4a|aac)$/i)) {
       setUploadError('Please select a valid audio file (MP3, WAV, OGG, M4A)');
       return;
@@ -101,22 +95,28 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
     }
   };
 
+  const formatSeconds = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-5 sm:p-6 space-y-5 animate-scaleUp max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-5 sm:p-6 space-y-5 animate-scale-up max-h-[90vh] overflow-y-auto">
         
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center">
-              <Bell className="w-5 h-5 text-slate-900 stroke-[2.2]" />
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+              <Bell className="w-5 h-5 text-amber-700 stroke-[2.2]" />
             </div>
             <div>
               <h3 className="font-heading font-extrabold text-base sm:text-lg text-slate-900 leading-tight">
                 Order Sound Alert Settings
               </h3>
               <p className="text-xs text-slate-500 font-medium">
-                Choose preset ringtones or upload your custom sound
+                Default chime, phone ring alerts & custom audio
               </p>
             </div>
           </div>
@@ -175,10 +175,89 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
           </div>
         </div>
 
-        {/* Built-in Presets */}
-        <div className="space-y-2.5">
+        {/* Lock Screen & Phone Ring Status Card */}
+        <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50/80 via-white to-amber-50/40 border border-amber-200/90 shadow-2xs space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="font-bold text-xs sm:text-sm text-slate-900">
+                  Phone Lock-Screen Ring & Background Alert
+                </h4>
+                <p className="text-[11px] text-slate-600 leading-tight">
+                  Jab app band ho ya phone lock ho, ek baar phone ring & vibration aayega.
+                </p>
+              </div>
+            </div>
+
+            <span
+              className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                permissionStatus === 'granted'
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                  : permissionStatus === 'denied'
+                  ? 'bg-rose-100 text-rose-800 border-rose-200'
+                  : 'bg-amber-100 text-amber-800 border-amber-200'
+              }`}
+            >
+              {permissionStatus === 'granted'
+                ? 'Active ✅'
+                : permissionStatus === 'denied'
+                ? 'Blocked ❌'
+                : 'Allow Needed 🔔'}
+            </span>
+          </div>
+
+          {/* Explanation badge */}
+          <div className="text-[11px] text-slate-600 bg-white/90 p-2.5 rounded-xl border border-amber-200/70 space-y-1">
+            <div className="flex items-center gap-1.5 text-amber-900 font-semibold">
+              <Clock className="w-3.5 h-3.5" /> 2-Minute Reminder Alarm
+            </div>
+            <p className="text-slate-500">
+              App kholte hi <strong>2 minute tak reminder sound</strong> bajta rahega, jab tak aap order accept ya reject na kar dein ya manual band na karein.
+            </p>
+          </div>
+
+          {/* Test & Permission Buttons */}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {permissionStatus !== 'granted' && (
+              <button
+                type="button"
+                onClick={onRequestPermission}
+                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+              >
+                <Bell className="w-3.5 h-3.5" />
+                Allow Notification Permission
+              </button>
+            )}
+
+            {!isTesting ? (
+              <button
+                type="button"
+                onClick={onStartTest}
+                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+              >
+                <Play className="w-3 h-3 fill-current" />
+                Test Phone Ring & 2-Min Alarm
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onStopTest}
+                className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 animate-pulse"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                Stop Test Alarm ({formatSeconds(testSecondsLeft)})
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Single Built-in Default Preset */}
+        <div className="space-y-2">
           <label className="font-bold text-slate-400 uppercase tracking-wider text-[10px] block">
-            Select Ringtone Preset
+            Default Ringtone
           </label>
           <div className="grid grid-cols-1 gap-2">
             {PRESET_OPTIONS.map((opt) => {
@@ -187,7 +266,7 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
                 <div
                   key={opt.id}
                   onClick={() => onSelectPreset(opt.id)}
-                  className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
                     isSelected
                       ? 'bg-slate-950 text-white border-slate-950 shadow-xs'
                       : 'bg-white border-slate-200 hover:border-slate-400 text-slate-900'
@@ -210,22 +289,6 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onPlayTest(opt.id);
-                      }}
-                      className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 transition-all ${
-                        isSelected
-                          ? 'bg-white/20 hover:bg-white/30 text-white'
-                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                      }`}
-                      title="Preview this sound"
-                    >
-                      <Play className="w-3 h-3 fill-current" />
-                      <span className="text-[11px]">Play</span>
-                    </button>
                     {isSelected && (
                       <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center">
                         <Check className="w-3.5 h-3.5 stroke-[3]" />
@@ -238,10 +301,10 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
           </div>
         </div>
 
-        {/* Custom Audio File Upload Section */}
-        <div className="space-y-2.5">
+        {/* Custom Audio File Upload Section (Stored locally on this device) */}
+        <div className="space-y-2">
           <label className="font-bold text-slate-400 uppercase tracking-wider text-[10px] block">
-            Custom Audio Sound (Your Own Audio / MP3)
+            Custom Audio Sound (Your Device Audio / MP3)
           </label>
 
           <input
@@ -271,7 +334,7 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
                       {settings.customName || 'Custom Audio File'}
                     </h4>
                     <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
-                      Custom
+                      Active
                     </span>
                   </div>
                   <p
@@ -279,105 +342,60 @@ export const SoundSettingsModal: React.FC<SoundSettingsModalProps> = ({
                       settings.preset === 'custom' ? 'text-slate-300' : 'text-slate-500'
                     }`}
                   >
-                    Active custom sound from your device
+                    Stored locally on this phone/device
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPlayTest('custom');
-                  }}
-                  className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 transition-all ${
-                    settings.preset === 'custom'
-                      ? 'bg-white/20 hover:bg-white/30 text-white'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  <Play className="w-3 h-3 fill-current" />
-                  <span className="text-[11px]">Play</span>
-                </button>
-
+                {settings.preset === 'custom' && (
+                  <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center mr-1">
+                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     onRemoveCustomFile();
                   }}
-                  className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors"
+                  className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 transition-colors"
                   title="Remove custom audio"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className="w-4 h-4" />
                 </button>
-
-                {settings.preset === 'custom' && (
-                  <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center ml-1">
-                    <Check className="w-3.5 h-3.5 stroke-[3]" />
-                  </div>
-                )}
               </div>
             </div>
           ) : (
-            <button
-              type="button"
-              disabled={isUploading}
+            <div
               onClick={() => fileInputRef.current?.click()}
-              className="w-full p-4 rounded-2xl border-2 border-dashed border-slate-200 hover:border-slate-900 bg-slate-50/60 hover:bg-white transition-all flex flex-col items-center justify-center gap-1 text-center group"
+              className="border-2 border-dashed border-slate-200 hover:border-slate-400 rounded-2xl p-4 text-center cursor-pointer transition-colors bg-slate-50/50 hover:bg-slate-50"
             >
-              <div className="w-8 h-8 rounded-full bg-slate-100 group-hover:bg-slate-900 group-hover:text-white text-slate-600 flex items-center justify-center transition-colors">
+              <div className="w-10 h-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center mx-auto mb-2 text-slate-500">
                 <Upload className="w-4 h-4" />
               </div>
-              <span className="font-bold text-xs text-slate-900">
-                {isUploading ? 'Loading audio file...' : 'Upload Custom MP3 / Audio Tone'}
-              </span>
-              <span className="text-[10px] text-slate-400">
-                Supported formats: MP3, WAV, OGG, M4A (Max 5MB)
-              </span>
-            </button>
+              <h5 className="font-bold text-xs text-slate-800">
+                {isUploading ? 'Loading Audio...' : 'Upload Custom MP3 / Audio Tone'}
+              </h5>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Supported: MP3, WAV, OGG, M4A (Max 5MB) • Stored on this device only
+              </p>
+            </div>
           )}
 
           {uploadError && (
-            <p className="text-xs text-rose-600 font-medium px-1">
-              {uploadError}
-            </p>
+            <p className="text-xs text-rose-600 font-medium">{uploadError}</p>
           )}
         </div>
 
-        {/* 2-Minute & 5-Second Interval Explanation Note */}
-        <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 flex items-start gap-2.5 text-xs text-slate-600">
-          <Clock className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-          <div className="space-y-0.5">
-            <p className="font-bold text-slate-900">
-              Continuous 5s Alert Logic:
-            </p>
-            <p className="text-[11px] text-slate-500 leading-relaxed">
-              When a new order is received, the sound will repeat <strong>every 5 seconds for up to 2 minutes</strong> until you approve (Accept) or reject/cancel the order.
-            </p>
-          </div>
+        {/* Local Storage Privacy Note */}
+        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/70 flex items-start gap-2 text-[11px] text-slate-500">
+          <Info className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+          <span>
+            Uploaded audio files and volume levels are stored <strong>locally on this phone/browser</strong>. Doosre staff ya customer devices par ye audio bina permission ke play nahi hoga.
+          </span>
         </div>
 
-        {/* Footer Actions */}
-        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => onPlayTest()}
-            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-full transition-all flex items-center gap-1.5"
-          >
-            <Play className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
-            <span>{isTesting ? 'Playing Test...' : 'Test Selected Sound'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-5 py-2 bg-slate-950 hover:bg-slate-800 text-white font-bold text-xs rounded-full transition-all shadow-xs"
-          >
-            Done
-          </button>
-        </div>
       </div>
     </div>
   );

@@ -9,11 +9,11 @@ import {
 import { db } from '../firebase/config';
 import { doc, getDoc, collection, query, where, getDocs, onSnapshot, orderBy, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Order, OrderStatus } from '../types';
-import { calculateDistanceInMeters, formatDistanceAway } from '../utils/distance';
 import { subscribeToLiveSync } from '../services/syncService';
 import { isOrderFromToday, clearAllTrackingHistory } from '../services/orderArchiveService';
 import { triggerHaptic } from '../utils/haptics';
 import { getOrderCategoryClassification } from '../utils/orderCategoryHelper';
+import { checkAndNotifyCustomerOrderStatus, registerCustomerOrderForNotifications } from '../services/customerNotificationService';
 
 interface TrackOrderPageProps {
   initialOrderId?: string;
@@ -88,58 +88,29 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSearchBoxOpen, setIsSearchBoxOpen] = useState(true);
-  const [userLiveCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [agentLiveCoords, setAgentLiveCoords] = useState<Record<string, { lat: number; lng: number }>>({});
   const unsubscribeRef = React.useRef<(() => void) | null>(null);
-  const agentUnsubscribesRef = React.useRef<Record<string, () => void>>({});
 
-  // Subscribe to live agent documents for active assigned orders
+  // Overall component unmount cleanup: kill all pending order listeners
   useEffect(() => {
-    const assignedAgentIds = Array.from(
-      new Set(orders.map((o) => o.assignedAgentId).filter(Boolean) as string[])
-    );
-
-    assignedAgentIds.forEach((agentId) => {
-      if (!agentUnsubscribesRef.current[agentId]) {
-        const agentDocRef = doc(db, 'delivery_agents', agentId);
-        const unsub = onSnapshot(
-          agentDocRef,
-          (docSnap) => {
-            if (docSnap.exists()) {
-              const data = docSnap.data();
-              if (data.currentLat && data.currentLng) {
-                setAgentLiveCoords((prev) => ({
-                  ...prev,
-                  [agentId]: { lat: data.currentLat, lng: data.currentLng },
-                }));
-              }
-            }
-          },
-          (err) => console.warn('Agent live tracking listener note:', err)
-        );
-        agentUnsubscribesRef.current[agentId] = unsub;
+    return () => {
+      if (unsubscribeRef.current) {
+        try {
+          unsubscribeRef.current();
+        } catch {}
+        unsubscribeRef.current = null;
       }
-    });
-
-    return () => {
-      // Clean up agent unsubscribes that are no longer present
-      Object.entries(agentUnsubscribesRef.current).forEach(([id, unsub]) => {
-        if (!assignedAgentIds.includes(id)) {
-          if (typeof unsub === 'function') unsub();
-          delete agentUnsubscribesRef.current[id];
-        }
-      });
-    };
-  }, [orders]);
-
-  useEffect(() => {
-    return () => {
-      if (unsubscribeRef.current) unsubscribeRef.current();
-      Object.values(agentUnsubscribesRef.current).forEach((unsub) => {
-        if (typeof unsub === 'function') unsub();
-      });
     };
   }, []);
+
+  // Monitor order status updates and notify customer on phone/browser
+  useEffect(() => {
+    if (orders && orders.length > 0) {
+      orders.forEach((o) => {
+        registerCustomerOrderForNotifications(o.orderId || o.id);
+        checkAndNotifyCustomerOrderStatus(o);
+      });
+    }
+  }, [orders]);
 
   // Saved device orders & profile
   const [savedDeviceOrders, setSavedDeviceOrders] = useState<any[]>([]);
@@ -512,25 +483,6 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     return null;
   };
 
-  const getLiveDistanceText = (ord: Order) => {
-    const riderLat =
-      ord.riderLocation?.lat ||
-      (ord.assignedAgentId ? agentLiveCoords[ord.assignedAgentId]?.lat : undefined);
-    const riderLng =
-      ord.riderLocation?.lng ||
-      (ord.assignedAgentId ? agentLiveCoords[ord.assignedAgentId]?.lng : undefined);
-
-    if (riderLat && riderLng) {
-      const custLat = userLiveCoords?.lat || ord.customerLocation?.lat;
-      const custLng = userLiveCoords?.lng || ord.customerLocation?.lng;
-      if (custLat && custLng) {
-        const meters = calculateDistanceInMeters(custLat, custLng, riderLat, riderLng);
-        return formatDistanceAway(meters);
-      }
-    }
-    return 'Rider on the way';
-  };
-
   const subscribeToSingleOrder = async (rawId: string) => {
     const rawClean = rawId.trim();
     if (!rawClean) return;
@@ -583,12 +535,26 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
 
               // Subscribe to real-time updates for this document
               if (unsubscribeRef.current) unsubscribeRef.current();
-              unsubscribeRef.current = onSnapshot(doc(db, 'orders', cId), (snap) => {
-                if (snap.exists()) {
-                  const updatedOrder = mapDocToOrder(snap);
-                  setOrders([updatedOrder]);
+              unsubscribeRef.current = onSnapshot(
+                doc(db, 'orders', cId),
+                (snap) => {
+                  if (snap.exists()) {
+                    const updatedOrder = mapDocToOrder(snap);
+                    setOrders([updatedOrder]);
+                    if (updatedOrder.status === 'delivered' || updatedOrder.status === 'rejected') {
+                      if (unsubscribeRef.current) {
+                        try {
+                          unsubscribeRef.current();
+                        } catch {}
+                        unsubscribeRef.current = null;
+                      }
+                    }
+                  }
+                },
+                (err) => {
+                  console.warn('Direct order doc listener note (offline/quota):', err);
                 }
-              });
+              );
               break;
             }
           }

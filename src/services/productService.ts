@@ -4,6 +4,7 @@ import { Product } from '../types';
 
 // Hardcoded sample/dummy products that must NEVER be loaded or auto-added
 export const HARDCODED_PRODUCT_NAMES = new Set<string>([
+  'cheese paneer pizza',
   'farmhouse veggie supreme pizza',
   'paneer tikka & herb cheese pizza',
   'classic margherita basil pizza',
@@ -18,12 +19,134 @@ export const HARDCODED_PRODUCT_NAMES = new Set<string>([
   'new york classic baked cheesecake',
   'wild berry & mascarpone tart',
   'cold brew vietnamese iced coffee',
-  'fresh alphonso mango lassi'
+  'fresh alphonso mango lassi',
+  'gidhaur fresh paneer pizza',
+  'crispy cheese burger',
+  'black forest celebration cake',
+  'belgian chocolate pastry',
+  'butter croissant fresh bake',
+  'crispy aloo samosa (2 pcs)',
+  'signature iced cold coffee',
+  'paneer tikka roll',
 ]);
 
 const STORAGE_KEY_DELETED_IDS = 'swadeep_deleted_product_ids';
 const STORAGE_KEY_DELETED_NAMES = 'swadeep_deleted_product_names';
 const STORAGE_KEY_CACHED_PRODUCTS = 'swadeep_cached_products';
+const STORAGE_KEY_LAST_SYNC = 'swadeep_last_catalog_sync';
+
+// ==========================================
+// IndexedDB Strict Wrapper for Product Catalog
+// ==========================================
+const IDB_NAME = 'swadeep_bakery_catalog_db';
+const IDB_VERSION = 1;
+const IDB_STORE_NAME = 'products';
+
+function openProductDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      return reject(new Error('IndexedDB not supported in this environment'));
+    }
+    const request = window.indexedDB.open(IDB_NAME, IDB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(IDB_STORE_NAME)) {
+        db.createObjectStore(IDB_STORE_NAME, { keyPath: 'id' });
+      }
+    };
+  });
+}
+
+/**
+ * Loads all stored products from IndexedDB, sanitizing and deduplicating them.
+ */
+export async function getProductsFromIndexedDB(): Promise<Product[]> {
+  try {
+    const db = await openProductDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE_NAME, 'readonly');
+      const store = tx.objectStore(IDB_STORE_NAME);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const raw = req.result || [];
+        const clean = sanitizeProducts(raw);
+        resolve(clean);
+      };
+      req.onerror = () => {
+        resolve([]);
+      };
+    });
+  } catch (err) {
+    console.warn('IndexedDB read fallback:', err);
+    return [];
+  }
+}
+
+/**
+ * Persists the entire product catalog in IndexedDB as well as localStorage for dual resilience.
+ */
+export async function saveProductsToIndexedDB(products: Product[]): Promise<void> {
+  if (!Array.isArray(products) || products.length === 0) return;
+  const cleanList = sanitizeProducts(products);
+
+  // Synchronously write to localStorage for instant render fallback
+  try {
+    localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(cleanList));
+  } catch {}
+
+  try {
+    const db = await openProductDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(IDB_STORE_NAME);
+      store.clear();
+      for (const item of cleanList) {
+        if (item && item.id) {
+          store.put(item);
+        }
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('IndexedDB write warning:', err);
+  }
+}
+
+/**
+ * Removes a deleted product from IndexedDB.
+ */
+export async function removeProductFromIndexedDB(productId: string): Promise<void> {
+  if (!productId) return;
+  try {
+    const db = await openProductDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(IDB_STORE_NAME);
+      store.delete(productId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {}
+}
+
+/**
+ * Clears products from IndexedDB.
+ */
+export async function clearProductsIndexedDB(): Promise<void> {
+  try {
+    const db = await openProductDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(IDB_STORE_NAME);
+      store.clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {}
+}
 
 export function getDeletedProductIds(): Set<string> {
   try {
@@ -75,7 +198,7 @@ export async function recordDeletedProduct(id: string, name?: string): Promise<v
     } catch {}
   }
 
-  // 3. Immediately purge from cached products in localStorage
+  // 3. Immediately purge from cached products in localStorage & IndexedDB
   try {
     const cachedStr = localStorage.getItem(STORAGE_KEY_CACHED_PRODUCTS);
     if (cachedStr) {
@@ -88,6 +211,8 @@ export async function recordDeletedProduct(id: string, name?: string): Promise<v
       }
     }
   } catch {}
+
+  removeProductFromIndexedDB(id).catch(() => {});
 
   // 4. Sync permanent deletion record to Firestore so other devices/sessions respect it
   try {
@@ -102,30 +227,30 @@ export async function recordDeletedProduct(id: string, name?: string): Promise<v
 }
 
 /**
- * Checks whether a given product is blacklisted (hardcoded sample or deleted by user)
+ * Checks whether a given product is blacklisted (deleted by user or fake mock template)
  */
 export function isProductBlacklisted(product: { id: string; name?: string }): boolean {
   if (!product) return true;
 
-  // Rule 1: Any item with id starting with 'init-' is a hardcoded sample
-  if (product.id && product.id.startsWith('init-')) {
-    return true;
-  }
-
+  const id = String(product.id || '');
   const normName = (product.name || '').trim().toLowerCase();
 
-  // Rule 2: Hardcoded dummy products from the original seed catalogue
-  if (normName && HARDCODED_PRODUCT_NAMES.has(normName)) {
+  // Rule 1: Has been explicitly deleted by user (ID match)
+  if (id && getDeletedProductIds().has(id)) {
     return true;
   }
 
-  // Rule 3: Has been marked as deleted by user (ID match)
-  if (product.id && getDeletedProductIds().has(product.id)) {
-    return true;
-  }
-
-  // Rule 4: Has been marked as deleted by user (Name match)
+  // Rule 2: Has been explicitly deleted by user (Name match)
   if (normName && getDeletedProductNames().has(normName)) {
+    return true;
+  }
+
+  // Rule 3: Only dummy initial seed placeholder IDs (not real user products)
+  if (
+    id.startsWith('init-dummy-') ||
+    id.startsWith('sample-mock-') ||
+    id === 'item-pizza-1'
+  ) {
     return true;
   }
 
@@ -194,12 +319,114 @@ export function getSanitizedCachedProducts(): Product[] {
       return [];
     }
     const cleanList = sanitizeProducts(parsed);
-    // Write back sanitized list
-    localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(cleanList));
+    // Write back sanitized list safely
+    try {
+      localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(cleanList));
+    } catch {}
     return cleanList;
   } catch {
     return [];
   }
+}
+
+const SYNC_THROTTLE_MS = 15 * 60 * 1000; // 15 minutes throttle window
+let isSyncingCatalog = false;
+let inFlightCatalogSync: Promise<Product[]> | null = null;
+
+/**
+ * Single throttled sync function that refreshes the product catalog:
+ * 1. Checks throttle cooldown (at most once every 15 mins) unless force=true.
+ * 2. Fetches from local server API (/api/products) - 0 Firestore reads!
+ * 3. Saves to IndexedDB and localStorage.
+ * 4. Dispatches 'swadeep_products_updated' event to keep UI instantly in sync.
+ * 5. Strictly prevents any background Firestore read loops.
+ */
+export async function syncCatalogFromNetwork(force = false): Promise<Product[]> {
+  if (isSyncingCatalog && inFlightCatalogSync) {
+    return inFlightCatalogSync;
+  }
+
+  if (!force) {
+    const lastSyncStr = localStorage.getItem(STORAGE_KEY_LAST_SYNC);
+    if (lastSyncStr) {
+      const lastSync = Number(lastSyncStr);
+      if (Date.now() - lastSync < SYNC_THROTTLE_MS) {
+        // Within throttle window: return catalog already in IndexedDB or memory
+        const idb = await getProductsFromIndexedDB();
+        if (idb.length > 0) return idb;
+        const cached = getSanitizedCachedProducts();
+        if (cached.length > 0) return cached;
+      }
+    }
+  }
+
+  isSyncingCatalog = true;
+  inFlightCatalogSync = (async () => {
+    try {
+      // 1. Fetch from local Node API /api/products (0 Firestore reads)
+      try {
+        const res = await fetch('/api/products');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            const cleanList = sanitizeProducts(data);
+            if (cleanList.length > 0) {
+              await saveProductsToIndexedDB(cleanList);
+              localStorage.setItem(STORAGE_KEY_LAST_SYNC, String(Date.now()));
+              window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: cleanList }));
+              return cleanList;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('API products fetch note:', err);
+      }
+
+      // 2. If API is unreachable, return IndexedDB / cached items
+      const existingIdb = await getProductsFromIndexedDB();
+      if (existingIdb.length > 0) {
+        return existingIdb;
+      }
+      const existingCached = getSanitizedCachedProducts();
+      if (existingCached.length > 0) {
+        return existingCached;
+      }
+
+      // 3. Last-resort fallback to Firestore only if catalog is completely empty
+      try {
+        const snap = await getDocs(collection(db, 'products'));
+        if (!snap.empty) {
+          const prods: Product[] = [];
+          snap.forEach((d) => {
+            prods.push({ ...(d.data() as Product), id: d.id });
+          });
+          const cleanList = sanitizeProducts(prods);
+          if (cleanList.length > 0) {
+            await saveProductsToIndexedDB(cleanList);
+            localStorage.setItem(STORAGE_KEY_LAST_SYNC, String(Date.now()));
+            window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: cleanList }));
+            return cleanList;
+          }
+        }
+      } catch (fsErr) {
+        console.warn('Firestore fallback fetch note:', fsErr);
+      }
+
+      return [];
+    } finally {
+      isSyncingCatalog = false;
+      inFlightCatalogSync = null;
+    }
+  })();
+
+  return inFlightCatalogSync;
+}
+
+/**
+ * Fetches the master catalog from local server API or cache with IndexedDB support
+ */
+export async function fetchFallbackProducts(): Promise<Product[]> {
+  return syncCatalogFromNetwork(false);
 }
 
 /**
@@ -329,6 +556,7 @@ export async function saveProductGroup({
         return p;
       });
       localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(newCached));
+      saveProductsToIndexedDB(newCached).catch(() => {});
       window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: newCached }));
     }
   } catch (err) {
@@ -383,6 +611,7 @@ export async function linkProductsToGroup(
         return p;
       });
       localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(newCached));
+      saveProductsToIndexedDB(newCached).catch(() => {});
     }
   } catch (err) {
     console.warn('Local cache update skipped:', err);
@@ -422,6 +651,7 @@ export async function unlinkProductFromGroup(productId: string): Promise<void> {
         return p;
       });
       localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(newCached));
+      saveProductsToIndexedDB(newCached).catch(() => {});
       window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: newCached }));
     }
   } catch (err) {
@@ -470,6 +700,7 @@ export async function unlinkEntireGroup(groupId: string, allProducts: Product[])
         return p;
       });
       localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(newCached));
+      saveProductsToIndexedDB(newCached).catch(() => {});
       window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: newCached }));
     }
   } catch (err) {

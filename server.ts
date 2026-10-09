@@ -180,6 +180,94 @@ app.get('/api/sync/events', (req, res) => {
   });
 });
 
+// Products endpoints (for resilient offline & high-speed zero-latency caching)
+const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
+
+function loadProducts(): any[] {
+  try {
+    if (fs.existsSync(PRODUCTS_FILE)) {
+      const raw = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.warn('Could not read products.json:', err);
+  }
+  return [];
+}
+
+function saveProducts(prods: any[]) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(prods, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving products.json:', err);
+  }
+}
+
+app.get('/api/products', (_req, res) => {
+  res.json(loadProducts());
+});
+
+app.post('/api/products', (req, res) => {
+  const item = req.body;
+  if (!item || !item.name) {
+    return res.status(400).json({ error: 'Product payload required' });
+  }
+
+  const prods = loadProducts();
+  const id = item.id || `item-${Date.now()}`;
+  const newItem = { ...item, id, updatedAt: new Date().toISOString() };
+  const idx = prods.findIndex((p) => p.id === id);
+  if (idx >= 0) {
+    prods[idx] = { ...prods[idx], ...newItem };
+  } else {
+    prods.unshift(newItem);
+  }
+  saveProducts(prods);
+  broadcastSSE('products_update', prods);
+  res.json({ success: true, product: newItem });
+});
+
+app.delete('/api/products/:id', (req, res) => {
+  const { id } = req.params;
+  const prods = loadProducts().filter((p) => p.id !== id);
+  saveProducts(prods);
+  broadcastSSE('products_update', prods);
+  res.json({ success: true });
+});
+
+app.post('/api/products/batch-stock', (req, res) => {
+  const { updates } = req.body;
+  if (!Array.isArray(updates)) {
+    return res.status(400).json({ error: 'Array of updates required' });
+  }
+  const prods = loadProducts();
+  const updateMap = new Map(updates.map((u: any) => [u.id, u]));
+  let changed = false;
+  const updatedProds = prods.map((p: any) => {
+    const upd = updateMap.get(p.id);
+    if (upd) {
+      changed = true;
+      return {
+        ...p,
+        stockQuantity: typeof upd.stockQuantity === 'number' ? upd.stockQuantity : p.stockQuantity,
+        available: typeof upd.available === 'boolean' ? upd.available : p.available,
+        ...(typeof upd.lowStockThreshold === 'number' ? { lowStockThreshold: upd.lowStockThreshold } : {}),
+        lastStockUpdated: new Date().toISOString()
+      };
+    }
+    return p;
+  });
+  if (changed) {
+    saveProducts(updatedProds);
+    broadcastSSE('products_update', updatedProds);
+  }
+  res.json({ success: true, count: updates.length });
+});
+
 // Banner Settings endpoints
 app.get('/api/settings/banners', (_req, res) => {
   res.json(store.bannerSettings);

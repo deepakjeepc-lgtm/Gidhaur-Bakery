@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Bike,
   Phone,
@@ -24,22 +24,16 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import confetti from 'canvas-confetti';
 import {
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
   doc,
-  setDoc,
   updateDoc,
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { subscribeToSharedOrders } from '../../services/orderListenerService';
 import { Order, DeliveryAgent, RestaurantSettings } from '../../types';
 import { subscribeToRestaurantSettings, getLocalRestaurantSettings } from '../../services/staffService';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
 import { playOrderAlertChime } from '../../utils/sound';
-import { calculateDistanceInMeters, formatDistanceAway } from '../../utils/distance';
 import { SwipeToDeliver } from './SwipeToDeliver';
 import {
   saveActiveDeliveryTab,
@@ -99,7 +93,6 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
   
   // Card Expansion State: Default collapsed
   const [expandedOrderIds, setExpandedOrderIds] = useState<Record<string, boolean>>({});
-  const [riderCoords, setRiderCoords] = useState<{ lat: number; lng: number } | null>(null);
   
   // Item Checklist per Order: Record<orderId, Record<itemIndex, boolean>> (default true)
   const [selectedItemsMap, setSelectedItemsMap] = useState<Record<string, Record<number, boolean>>>({});
@@ -109,33 +102,12 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
   
   const [isProcessingDelivery, setIsProcessingDelivery] = useState<string | null>(null);
 
-  // Real-time Orders Sync for this agent
+  // Real-time Orders Sync via Singleton Shared Listener
   useEffect(() => {
-    const ordersCol = collection(db, 'orders');
-    const q = query(ordersCol, orderBy('createdAt', 'desc'));
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setIsLoading(false);
-        const fetched: Order[] = [];
-        snapshot.forEach((d) => {
-          const data = d.data() as Order;
-          fetched.push({ ...data, id: d.id, orderId: data.orderId || d.id });
-        });
-        setOrders(fetched);
-      },
-      (err) => {
-        console.warn('Rider orders fetch note (using local cache):', err?.message || err);
-        setIsLoading(false);
-        try {
-          const localOrders = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
-          if (Array.isArray(localOrders)) {
-            setOrders(localOrders);
-          }
-        } catch {}
-      }
-    );
+    const unsubscribe = subscribeToSharedOrders((fetched) => {
+      setIsLoading(false);
+      setOrders(fetched);
+    });
 
     return () => unsubscribe();
   }, []);
@@ -153,88 +125,6 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
   });
 
   const totalCollectedToday = myCompletedOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-
-  // Keep fresh refs to prevent stale closure captures in GPS watch callbacks
-  const ordersRef = useRef(orders);
-  ordersRef.current = orders;
-
-  const currentAgentRef = useRef(currentAgent);
-  currentAgentRef.current = currentAgent;
-
-  // Real-time GPS location sharing for active deliveries
-  useEffect(() => {
-    if (!isOnline || typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
-
-    const pushLocation = async (lat: number, lng: number) => {
-      setRiderCoords({ lat, lng });
-
-      // 1. Update rider's agent document in Firestore
-      try {
-        const agentRef = doc(db, 'delivery_agents', currentAgentRef.current.id);
-        await setDoc(
-          agentRef,
-          {
-            id: currentAgentRef.current.id,
-            name: currentAgentRef.current.name,
-            phone: currentAgentRef.current.phone || '',
-            currentLat: lat,
-            currentLng: lng,
-            isOnline: true,
-            lastSeen: serverTimestamp(),
-            updatedAt: Date.now(),
-          },
-          { merge: true }
-        );
-      } catch (e) {
-        // Ignore background agent update issues
-      }
-
-      // 2. Push current rider coordinates to all active orders assigned to this agent in Firestore
-      const activeOrds = ordersRef.current.filter((ord) => {
-        if (ord.status !== 'out_for_delivery') return false;
-        if (!ord.assignedAgentId || ord.assignedAgentId === 'unassigned') return true;
-        return (
-          ord.assignedAgentId === currentAgentRef.current.id ||
-          ord.assignedAgentName === currentAgentRef.current.name
-        );
-      });
-
-      for (const ord of activeOrds) {
-        try {
-          const orderRef = doc(db, 'orders', ord.id);
-          await updateDoc(orderRef, {
-            riderLocation: {
-              lat,
-              lng,
-              updatedAt: Date.now(),
-            },
-          });
-        } catch (err) {
-          // Ignore transient background update issues
-        }
-      }
-    };
-
-    // Immediate single GPS fetch
-    navigator.geolocation.getCurrentPosition(
-      (pos) => pushLocation(pos.coords.latitude, pos.coords.longitude),
-      (err) => console.warn('Rider immediate GPS warning:', err),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-    );
-
-    // Continuous watch
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        pushLocation(pos.coords.latitude, pos.coords.longitude);
-      },
-      (err) => {
-        console.warn('Rider geolocation watch error:', err);
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [isOnline]);
 
   const toggleExpand = (orderId: string) => {
     setExpandedOrderIds((prev) => ({ ...prev, [orderId]: !prev[orderId] }));
@@ -638,13 +528,6 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
                         {order.notes && (
                           <div className="bg-amber-50 border border-amber-200/80 rounded-lg p-1.5 text-[11px] text-amber-900 italic truncate">
                             Note: "{order.notes}"
-                          </div>
-                        )}
-                        {/* Live Distance to Customer */}
-                        {order.customerLocation?.lat && riderCoords && (
-                          <div className="flex items-center gap-1.5 pt-1 border-t border-slate-200/60 text-[11px] text-emerald-700 font-bold">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                            <span>Customer is {formatDistanceAway(calculateDistanceInMeters(riderCoords.lat, riderCoords.lng, order.customerLocation.lat, order.customerLocation.lng))}</span>
                           </div>
                         )}
                       </div>

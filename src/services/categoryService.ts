@@ -1,5 +1,6 @@
-import { doc, getDoc, setDoc, onSnapshot, updateDoc, writeBatch, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, writeBatch, collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { readThrottler } from './readThrottler';
 
 export const DEFAULT_CATEGORIES = [
   'Pizzas',
@@ -179,6 +180,7 @@ export const saveCategories = async (
       payload.defaultLandingCategory = defaultLandingCategory;
     }
     await setDoc(CATEGORIES_DOC_REF, payload, { merge: true });
+    readThrottler.invalidate('categories');
   } catch (error: any) {
     console.warn('Category sync note: saving locally (Firestore fallback):', error?.message || error);
     // Still save locally
@@ -189,10 +191,16 @@ export const saveCategories = async (
     if (defaultLandingCategory) {
       localStorage.setItem(LOCAL_STORAGE_DEFAULT_CAT_KEY, defaultLandingCategory);
     }
+  } finally {
+    try {
+      window.dispatchEvent(new CustomEvent('swadeep_categories_updated', {
+        detail: { categories, icons: iconsMap || getCachedCategoryIcons(), defaultCat: defaultLandingCategory }
+      }));
+    } catch {}
   }
 };
 
-// Subscribe to categories, icons, and default landing category in real-time
+// Fetch categories once with memory/localStorage caching and throttle protection (no real-time leak)
 export const subscribeToCategories = (
   fallbackProductCategories: string[],
   callback: (
@@ -201,50 +209,56 @@ export const subscribeToCategories = (
     defaultLandingCat?: string
   ) => void
 ) => {
-  let isInitial = true;
+  // 1. Immediately provide cached data for 0ms layout shift
+  const cachedList = getCachedCategories();
+  const cachedIcons = getCachedCategoryIcons();
+  const cachedDefault = getCachedDefaultLandingCategory();
+  callback(cachedList, cachedIcons, cachedDefault);
 
-  return onSnapshot(
-    CATEGORIES_DOC_REF,
-    (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        const defaultCat = (data?.defaultLandingCategory as string) || getCachedDefaultLandingCategory();
-        if (defaultCat) {
-          localStorage.setItem(LOCAL_STORAGE_DEFAULT_CAT_KEY, defaultCat);
-        }
-
-        if (Array.isArray(data?.list) && data.list.length > 0) {
-          const rawIcons = (data.icons as Record<string, CategoryDetail>) || {};
-          const icons = { ...DEFAULT_CATEGORY_ICONS, ...rawIcons };
-          const mergedList = Array.from(
-            new Set([...data.list, ...fallbackProductCategories.filter(Boolean)])
-          );
-          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(mergedList));
-          localStorage.setItem(LOCAL_STORAGE_ICONS_KEY, JSON.stringify(icons));
-          callback(mergedList, icons, defaultCat);
-          return;
-        }
+  // 2. Listen to local/admin update events
+  const handleUpdate = (e: Event) => {
+    try {
+      const custom = e as CustomEvent;
+      if (custom.detail?.categories) {
+        callback(custom.detail.categories, custom.detail.icons, custom.detail.defaultCat);
+        return;
       }
-
-      // If document doesn't exist yet, seed with combined unique list
-      if (isInitial) {
-        isInitial = false;
-        const cached = getCachedCategories();
-        const cachedIcons = getCachedCategoryIcons();
-        const cachedDefault = getCachedDefaultLandingCategory();
-        const combined = Array.from(
-          new Set([...cached, ...fallbackProductCategories.filter(Boolean)])
-        );
-        const finalCategories = combined.length > 0 ? combined : DEFAULT_CATEGORIES;
-        saveCategories(finalCategories, cachedIcons, cachedDefault).catch(() => {});
-        callback(finalCategories, cachedIcons, cachedDefault);
-      }
-    },
-    (error) => {
-      console.warn('Firestore categories subscription error (using fallback):', error);
       callback(getCachedCategories(), getCachedCategoryIcons(), getCachedDefaultLandingCategory());
-    }
-  );
+    } catch {}
+  };
+  window.addEventListener('swadeep_categories_updated', handleUpdate);
+
+  // 3. Single fetch with rate-limiting throttler (120s cooldown)
+  if (readThrottler.canFetch('categories', 120000)) {
+    readThrottler.markFetched('categories');
+    getDoc(CATEGORIES_DOC_REF)
+      .then((docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const defaultCat = (data?.defaultLandingCategory as string) || getCachedDefaultLandingCategory();
+          if (defaultCat) {
+            localStorage.setItem(LOCAL_STORAGE_DEFAULT_CAT_KEY, defaultCat);
+          }
+          if (Array.isArray(data?.list) && data.list.length > 0) {
+            const rawIcons = (data.icons as Record<string, CategoryDetail>) || {};
+            const icons = { ...DEFAULT_CATEGORY_ICONS, ...rawIcons };
+            const mergedList = Array.from(
+              new Set([...data.list, ...fallbackProductCategories.filter(Boolean)])
+            );
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(mergedList));
+            localStorage.setItem(LOCAL_STORAGE_ICONS_KEY, JSON.stringify(icons));
+            callback(mergedList, icons, defaultCat);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Category fetch note (serving local cache):', err?.message || err);
+      });
+  }
+
+  return () => {
+    window.removeEventListener('swadeep_categories_updated', handleUpdate);
+  };
 };
 
 // Helper: Rename category in products

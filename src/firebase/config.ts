@@ -1,5 +1,12 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, initializeFirestore, memoryLocalCache } from 'firebase/firestore';
+import {
+  getFirestore,
+  initializeFirestore,
+  memoryLocalCache,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  setLogLevel,
+} from 'firebase/firestore';
 import {
   getAuth,
   initializeAuth,
@@ -8,6 +15,11 @@ import {
   inMemoryPersistence,
 } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
+
+// Silence non-fatal Firestore internal warnings (e.g. backend offline/wait timeout)
+try {
+  setLogLevel('silent');
+} catch {}
 
 export const firebaseConfig = {
   apiKey: "AIzaSyBNb0ksbQZP9TNKj3dYL-k1u_aHZTuu-cM",
@@ -24,14 +36,24 @@ export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getA
 
 export const FIRESTORE_DATABASE_ID = firebaseConfig.firestoreDatabaseId;
 
-// Initialize Firestore targeting the dedicated cloud database
+// Initialize Firestore targeting the dedicated cloud database with robust multi-tab offline cache
 export const db = (() => {
   try {
+    let cacheConfig;
+    try {
+      cacheConfig = persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      });
+    } catch {
+      cacheConfig = memoryLocalCache();
+    }
+
     return initializeFirestore(
       app,
       {
         ignoreUndefinedProperties: true,
-        localCache: memoryLocalCache(),
+        localCache: cacheConfig,
+        experimentalAutoDetectLongPolling: true,
       },
       FIRESTORE_DATABASE_ID
     );

@@ -20,15 +20,12 @@ import {
   Timer
 } from 'lucide-react';
 import {
-  collection,
-  query,
-  orderBy,
-  onSnapshot,
   doc,
   updateDoc,
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { subscribeToSharedOrders } from '../../services/orderListenerService';
 import { Order, DeliveryAgent, PreparingStaff } from '../../types';
 import {
   subscribeToDeliveryAgents,
@@ -39,6 +36,7 @@ import {
   getLocalRestaurantSettings
 } from '../../services/staffService';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
+import { deductStockForAcceptedOrder } from '../../services/inventoryService';
 import {
   getOrderNonFoodItems,
   getOrderFoodItems,
@@ -143,15 +141,9 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
     }
   };
 
-  // Subscribe to Realtime Orders
+  // Subscribe to Realtime Orders via Singleton Shared Listener
   useEffect(() => {
-    const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const list: Order[] = [];
-      snapshot.forEach((d) => {
-        list.push({ ...(d.data() as Order), id: d.id });
-      });
-
+    const unsub = subscribeToSharedOrders((list) => {
       // Filter only orders that contain NON-FOOD items!
       const nonFoodOrders = list.filter((ord) => {
         const nonFoodItems = getOrderNonFoodItems(ord);
@@ -379,6 +371,11 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
 
   // Mark status as preparing (start packing)
   const handleStartPacking = async (orderId: string) => {
+    const targetOrder = orders.find((o) => o.id === orderId || o.orderId === orderId);
+    if (targetOrder) {
+      deductStockForAcceptedOrder(targetOrder);
+    }
+
     try {
       await updateDoc(doc(db, 'orders', orderId), {
         status: 'preparing',

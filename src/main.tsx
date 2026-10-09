@@ -23,6 +23,23 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// Purge any stale Vite or node_modules dependencies accidentally cached by older SW
+if (typeof window !== 'undefined' && 'caches' in window) {
+  caches.keys().then((keys) => {
+    keys.forEach((key) => {
+      caches.open(key).then((cache) => {
+        cache.keys().then((requests) => {
+          requests.forEach((req) => {
+            if (req.url.includes('/.vite/') || req.url.includes('/node_modules/')) {
+              cache.delete(req);
+            }
+          });
+        });
+      });
+    });
+  });
+}
+
 // Register PWA service worker
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {

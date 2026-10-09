@@ -1,13 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
-import {
-  collection,
-  onSnapshot,
-  query,
-} from 'firebase/firestore';
-import { db } from './firebase/config';
 import { Product, Order, StaffSession } from './types';
 import {
   getSanitizedCachedProducts,
+  getProductsFromIndexedDB,
+  syncCatalogFromNetwork,
   sanitizeProducts,
   syncDeletedProductsFromFirestore,
   purgeLocalHardcodedProducts,
@@ -25,10 +21,10 @@ import { ProductSkeletonGrid } from './components/ProductSkeletonGrid';
 import { CartDrawer } from './components/CartDrawer';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { CheckoutModal } from './components/CheckoutModal';
-import { LocationPermissionModal } from './components/LocationPermissionModal';
 import { OrderSuccessModal } from './components/OrderSuccessModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { TrackOrderPage } from './components/TrackOrderPage';
+import { BakeryClosedQuotaScreen } from './components/BakeryClosedQuotaScreen';
 import { Footer } from './components/Footer';
 import { AnimatedAmbientBackground } from './components/AnimatedAmbientBackground';
 import { lazyWithRetry } from './utils/lazyRetry';
@@ -61,7 +57,7 @@ import {
 } from './utils/scrollStateStorage';
 import { triggerHaptic } from './utils/haptics';
 
-import { UtensilsCrossed, RefreshCw, Heart, Search, X } from 'lucide-react';
+import { UtensilsCrossed, RefreshCw, Heart, Search, X, Clock, AlertTriangle, ExternalLink } from 'lucide-react';
 
 const PortalLoadingFallback: React.FC = () => (
   <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
@@ -75,7 +71,7 @@ const PortalLoadingFallback: React.FC = () => (
 function MainApp() {
   const { user, loading: authLoading, signOut } = useAuth();
   const { setIsCartOpen, clearCart, addToCart } = useCart();
-  const { settings, showPermissionGuide, setShowPermissionGuide } = useLocation();
+  const { settings } = useLocation();
 
   // Navigation views: 'home' | 'track' | 'admin' - Persisted cross-session
   const [currentView, setCurrentViewState] = useState<'home' | 'track' | 'admin'>(() => getSavedActiveView());
@@ -90,6 +86,20 @@ function MainApp() {
   // Products state & real-time synchronization with offline caching (strictly excluding any hardcoded dummy items)
   const initialCachedProducts = useMemo(() => getSanitizedCachedProducts(), []);
   const [products, setProducts] = useState<Product[]>(initialCachedProducts);
+  const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = useState(false);
+
+  // Sync quota updates from quotaTrackerService or Admin simulation
+  useEffect(() => {
+    const handleQuota = (e: any) => {
+      if (e.detail && typeof e.detail.isExhausted === 'boolean') {
+        setFirestoreQuotaExceeded(e.detail.isExhausted);
+      }
+    };
+    window.addEventListener('gidhaur_quota_updated', handleQuota);
+    return () => window.removeEventListener('gidhaur_quota_updated', handleQuota);
+  }, []);
+
+  const [isQuotaWarningDismissed, setIsQuotaWarningDismissed] = useState(false);
   const [hasInitialLoadCompleted, setHasInitialLoadCompleted] = useState<boolean>(() => {
     return initialCachedProducts.length > 0;
   });
@@ -170,9 +180,12 @@ function MainApp() {
 
   useEffect(() => {
     purgeLocalHardcodedProducts();
-    seedStaffIfEmpty();
-    syncDeletedProductsFromFirestore().catch(() => {});
-  }, []);
+    // Only perform cloud admin sync when explicitly in admin or staff management
+    if (currentView === 'admin' || (staffSession && staffSession.role)) {
+      seedStaffIfEmpty().catch(() => {});
+      syncDeletedProductsFromFirestore().catch(() => {});
+    }
+  }, [currentView, staffSession]);
 
   // Restore scroll position on initial app load / browser reload
   useEffect(() => {
@@ -351,49 +364,56 @@ function MainApp() {
     };
   }, []);
 
-  // Listen to products in Firestore in real-time with resilient offline/permission fallback
+  // Load products: Instant IndexedDB + LocalStorage load, followed by single throttled syncCatalogFromNetwork.
+  // Category filtering is strictly in-memory (products.filter(...)) with 0 network calls.
   useEffect(() => {
-    const productsCol = collection(db, 'products');
-    const q = query(productsCol);
+    let isMounted = true;
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setIsLoadingProducts(false);
-        setHasInitialLoadCompleted(true);
-        if (snapshot.empty) {
-          // Empty menu - strictly do NOT auto-seed or inject dummy products
-          setProducts([]);
-          try {
-            localStorage.setItem('swadeep_cached_products', JSON.stringify([]));
-          } catch {}
-        } else {
-          const prods: Product[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as Product;
-            prods.push({
-              ...data,
-              id: docSnap.id,
-            });
-          });
-          const cleanProds = sanitizeProducts(prods);
-          setProducts(cleanProds);
-          try {
-            localStorage.setItem('swadeep_cached_products', JSON.stringify(cleanProds));
-          } catch {}
+    // 1. Immediately render cached products from memory/localStorage for 0ms initial paint
+    const initialCached = getSanitizedCachedProducts();
+    if (initialCached && initialCached.length > 0) {
+      setProducts(initialCached);
+      setIsLoadingProducts(false);
+      setHasInitialLoadCompleted(true);
+      setFirestoreQuotaExceeded(false);
+    }
+
+    // 2. Read full persistent catalog immediately from IndexedDB
+    getProductsFromIndexedDB()
+      .then((idbProds) => {
+        if (!isMounted) return;
+        if (idbProds && idbProds.length > 0) {
+          setProducts(idbProds);
+          setIsLoadingProducts(false);
+          setHasInitialLoadCompleted(true);
+          setFirestoreQuotaExceeded(false);
         }
-      },
-      (err) => {
-        // Fall back gracefully when Firestore permissions restrict direct queries or network is offline
-        console.warn('Products sync note: using cached/local menu catalogue (Firestore offline or restricted).', err?.message || err);
+      })
+      .catch((err) => {
+        console.warn('IndexedDB initial load note:', err);
+      });
+
+    // 3. Single throttled background catalog sync (fetches /api/products, caches in IDB, 0 Firestore reads)
+    syncCatalogFromNetwork(false)
+      .then((synced) => {
+        if (!isMounted) return;
+        if (synced && synced.length > 0) {
+          setProducts(synced);
+          setIsLoadingProducts(false);
+          setHasInitialLoadCompleted(true);
+          setFirestoreQuotaExceeded(false);
+        } else {
+          setIsLoadingProducts(false);
+          setHasInitialLoadCompleted(true);
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
         setIsLoadingProducts(false);
         setHasInitialLoadCompleted(true);
-        const cleanCached = getSanitizedCachedProducts();
-        setProducts(cleanCached);
-      }
-    );
+      });
 
-    // Support instant local menu updates when admin modifies products
+    // 4. Support instant local menu updates when admin modifies products
     const handleLocalProductsUpdate = (e: Event) => {
       try {
         const customEvt = e as CustomEvent;
@@ -410,7 +430,7 @@ function MainApp() {
     window.addEventListener('swadeep_products_updated', handleLocalProductsUpdate);
 
     return () => {
-      unsubscribe();
+      isMounted = false;
       window.removeEventListener('swadeep_products_updated', handleLocalProductsUpdate);
     };
   }, []);
@@ -808,36 +828,46 @@ function MainApp() {
                   <ProductSkeletonGrid count={8} />
                 ) : (
                   /* Empty State */
-                  <div className="text-center py-16 bg-white rounded-3xl border border-slate-200/80 p-8 shadow-xs my-4">
-                  <div className="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-4">
-                    {activeCategory === 'Liked' ? (
-                      <Heart className="w-8 h-8 stroke-[1.5]" />
-                    ) : (
-                      <UtensilsCrossed className="w-8 h-8 stroke-[1.5]" />
-                    )}
-                  </div>
-                  <h3 className="font-heading font-extrabold text-lg text-slate-900 mb-1">
-                    {activeCategory === 'Liked' ? 'No Liked Items Yet' : 'No items found'}
-                  </h3>
-                  <p className="text-xs text-slate-500 max-w-xs mx-auto mb-4">
-                    {activeCategory === 'Liked'
-                      ? 'Tap the heart icon on any dish to save your favorites here for quick ordering.'
-                      : searchQuery
-                      ? `We couldn't find any dishes matching "${searchQuery}". Try another keyword.`
-                      : `No items available in the "${activeCategory}" category.`}
-                  </p>
-                  {(searchQuery || activeCategory !== 'All') && (
-                    <button
-                      onClick={() => {
-                        setSearchQuery('');
-                        setActiveCategory('All');
+                  (firestoreQuotaExceeded && products.length === 0) ? (
+                    <BakeryClosedQuotaScreen
+                      onRefresh={() => {
+                        window.location.reload();
                       }}
-                      className="px-5 py-2.5 bg-slate-950 text-white rounded-full text-xs font-bold shadow-xs hover:bg-slate-800 transition-all cursor-pointer"
-                    >
-                      View All Items
-                    </button>
-                  )}
-                </div>
+                    />
+                  ) : (
+                    <div className="text-center py-20 bg-white rounded-3xl border border-slate-200/80 p-8 shadow-xs my-4 flex items-center justify-center">
+                      <div>
+                        <div className="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-4">
+                          {activeCategory === 'Liked' ? (
+                            <Heart className="w-8 h-8 stroke-[1.5]" />
+                          ) : (
+                            <UtensilsCrossed className="w-8 h-8 stroke-[1.5]" />
+                          )}
+                        </div>
+                        <h3 className="font-heading font-extrabold text-lg text-slate-900 mb-1">
+                          {activeCategory === 'Liked' ? 'No Liked Items Yet' : 'No items found'}
+                        </h3>
+                        <p className="text-xs text-slate-500 max-w-xs mx-auto mb-4">
+                          {activeCategory === 'Liked'
+                            ? 'Tap the heart icon on any dish to save your favorites here for quick ordering.'
+                            : searchQuery
+                            ? `We couldn't find any dishes matching "${searchQuery}". Try another keyword.`
+                            : `No items available in the "${activeCategory}" category.`}
+                        </p>
+                        {(searchQuery || activeCategory !== 'All') && (
+                          <button
+                            onClick={() => {
+                              setSearchQuery('');
+                              setActiveCategory('All');
+                            }}
+                            className="px-5 py-2.5 bg-slate-950 text-white rounded-full text-xs font-bold shadow-xs hover:bg-slate-800 transition-all cursor-pointer"
+                          >
+                            View All Items
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
                 )
               ) : (
                 /* Product Grid - 2 columns on mobile, 3 on tablet, 4 on desktop directly without background patti */
@@ -910,12 +940,6 @@ function MainApp() {
           setIsCheckoutOpen(false);
         }}
         onOrderSuccess={handleOrderSuccess}
-      />
-
-      {/* GPS Location Permission Flow */}
-      <LocationPermissionModal
-        isOpen={showPermissionGuide}
-        onClose={() => setShowPermissionGuide(false)}
       />
 
       {/* Order Confirmed Receipt Modal */}

@@ -36,13 +36,15 @@ import {
   Loader2,
   Sliders,
   AlertTriangle,
-  Archive
+  Archive,
+  Activity,
+  Boxes
 } from 'lucide-react';
 import {
   collection,
   query,
   orderBy,
-  onSnapshot,
+  limit,
   doc,
   updateDoc,
   deleteDoc,
@@ -50,6 +52,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../../firebase/config';
+import { subscribeToSharedOrders } from '../../services/orderListenerService';
 import { useAuth } from '../../context/AuthContext';
 import { Order, OrderStatus, Product, DeliveryAgent, KitchenStaff, RestaurantSettings } from '../../types';
 import { OperationType, handleFirestoreError } from '../../firebase/errors';
@@ -59,6 +62,9 @@ import { KitchenStaffManagement } from './KitchenStaffManagement';
 import { PreparingStaffManagement } from './PreparingStaffManagement';
 import { PaymentSettings } from './PaymentSettings';
 import { CloudStorageMeter } from './CloudStorageMeter';
+import { FirebaseQuotaUsageView } from './FirebaseQuotaUsageView';
+import { InventoryManagementView } from './InventoryManagementView';
+import { deductStockForAcceptedOrder, isItemLowStock } from '../../services/inventoryService';
 import { OrderHistoryView } from './OrderHistoryView';
 import {
   performDailyOrderRollover,
@@ -116,10 +122,10 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBackToStore, onLogout }) => {
   const { user, signOut } = useAuth();
   const [activeTab, setActiveTabState] = useState<
-    'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats'
+    'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats' | 'usage'
   >(() => getSavedActiveAdminTab('orders') as any);
 
-  const handleTabChange = (newTab: 'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats') => {
+  const handleTabChange = (newTab: 'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats' | 'usage') => {
     if (newTab === activeTab) return;
     saveScrollPosition(`admin_${activeTab}`, window.scrollY);
     setActiveTabState(newTab);
@@ -146,6 +152,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersSubTab, setOrdersSubTab] = useState<'today' | 'history'>('today');
   const [archivedOrders, setArchivedOrders] = useState<Order[]>(() => getArchivedOrders());
+
+  // Live Inventory & Catalog Reactive State
+  const [liveProducts, setLiveProducts] = useState<Product[]>(products);
+  const [analyticsSubView, setAnalyticsSubView] = useState<'stock' | 'revenue'>('stock');
+
+  useEffect(() => {
+    setLiveProducts(products);
+  }, [products]);
+
+  useEffect(() => {
+    const handleProductsUpdate = (e: any) => {
+      if (e.detail && Array.isArray(e.detail)) {
+        setLiveProducts(e.detail);
+      }
+    };
+    window.addEventListener('swadeep_products_updated', handleProductsUpdate);
+    return () => window.removeEventListener('swadeep_products_updated', handleProductsUpdate);
+  }, []);
+
+  const lowStockCount = useMemo(() => {
+    return liveProducts.filter((p) => isItemLowStock(p)).length;
+  }, [liveProducts]);
 
   // Listen to background history updates
   useEffect(() => {
@@ -411,33 +439,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
     };
   }, []);
 
-  // Real-time Firestore onSnapshot listener for Orders
+  // Shared Singleton Real-time listener for Orders (deduplicated, bounded, zero leak)
   useEffect(() => {
-    const ordersCol = collection(db, 'orders');
-    const q = query(ordersCol, orderBy('createdAt', 'desc'));
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setIsLoadingOrders(false);
-        const fetchedOrders: Order[] = [];
-
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data() as Order;
-          fetchedOrders.push({
-            ...data,
-            id: docSnap.id,
-            orderId: data.orderId || docSnap.id,
-          });
-        });
-
-        setOrders(fetchedOrders);
-      },
-      (error) => {
-        setIsLoadingOrders(false);
-        console.warn('Real-time orders sync note:', error);
-      }
-    );
+    const unsubscribe = subscribeToSharedOrders((fetchedOrders) => {
+      setIsLoadingOrders(false);
+      setOrders(fetchedOrders);
+    });
 
     return () => unsubscribe();
   }, []);
@@ -478,6 +485,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
         ...timestampField,
         ...extraUpdates
       });
+
+      // Auto Stock Deduction when order is accepted
+      if (nextStatus === 'accepted') {
+        const targetOrder = orders.find((o) => o.id === orderId || o.orderId === orderId);
+        if (targetOrder) {
+          deductStockForAcceptedOrder(targetOrder);
+        }
+      }
 
       // Send branded order status update email to customer based on admin notification toggles
       const targetOrder = orders.find((o) => o.id === orderId || o.orderId === orderId);
@@ -1089,8 +1104,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                 }`}
                 id="admin-tab-stats"
               >
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>Analytics</span>
+                <Boxes className="w-3.5 h-3.5" />
+                <span>Analytics & Stock</span>
+                {lowStockCount > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                )}
+              </button>
+
+              <button
+                onClick={() => setActiveTab('usage')}
+                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  activeTab === 'usage'
+                    ? 'bg-slate-900 text-white shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                }`}
+                id="admin-tab-usage"
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span>Usage</span>
               </button>
             </div>
           </nav>
@@ -1247,14 +1278,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
       <main className="max-w-7xl mx-auto px-3 sm:px-6 space-y-4">
         {/* Active Repeating Alarm Notification Banner */}
         {soundAlert.isAlarmRinging && (
-          <div className="bg-slate-950 rounded-2xl p-3 shadow-xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 animate-fadeIn">
+          <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 rounded-2xl p-3.5 shadow-xl border border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-4 animate-fade-in ring-2 ring-amber-500/20">
             <div className="flex items-center gap-3 w-full sm:w-auto pl-1">
-              <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0 animate-pulse shadow-[0_0_12px_rgba(16,185,129,0.4)]">
-                <Bell className="w-4 h-4" />
+              <div className="w-9 h-9 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 animate-bounce shadow-[0_0_15px_rgba(245,158,11,0.6)]">
+                <Bell className="w-4 h-4 fill-current" />
               </div>
-              <h4 className="font-medium text-sm text-white tracking-wide">
-                New order received
-              </h4>
+              <div>
+                <h4 className="font-bold text-sm text-white tracking-wide flex items-center gap-2">
+                  <span>🔔 Naya Order Ringing!</span>
+                  <span className="font-mono text-xs px-2.5 py-0.5 rounded-full bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold animate-pulse">
+                    {Math.floor(soundAlert.alarmSecondsLeft / 60)}:{(soundAlert.alarmSecondsLeft % 60).toString().padStart(2, '0')} remaining
+                  </span>
+                </h4>
+                <p className="text-[11px] text-slate-300">
+                  2 minute tak continuous reminder bajta rahega, jab tak accept ya reject na ho jaye.
+                </p>
+              </div>
             </div>
 
             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
@@ -1263,15 +1302,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                   setSelectedStatusFilter('pending');
                   setActiveTab('orders');
                 }}
-                className="flex-1 sm:flex-initial px-4 py-2 bg-white hover:bg-slate-100 text-slate-900 font-semibold text-xs rounded-full transition-colors"
+                className="flex-1 sm:flex-initial px-4 py-2 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-extrabold text-xs rounded-full transition-all shadow-md shadow-amber-500/20"
               >
-                Review ({pendingOrders.length})
+                Review & Accept ({pendingOrders.length})
               </button>
               <button
                 onClick={soundAlert.silenceAlarm}
-                className="flex-1 sm:flex-initial px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-full transition-colors"
+                className="flex-1 sm:flex-initial px-4 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-bold text-xs rounded-full transition-all border border-slate-700"
               >
-                Silence
+                🔕 Mute / Stop Ringing
               </button>
             </div>
           </div>
@@ -1898,131 +1937,187 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
               </div>
             </div>
 
-            {/* 5 Clean Stat Metric Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
-              <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                  TOTAL ORDERS
-                </span>
-                <div className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900">
-                  {orders.length}
-                </div>
-                <span className="text-[10px] text-slate-400 block font-medium">
-                  Live collection
-                </span>
-              </div>
+            {/* Sub-view Switcher: [📦 Smart Stock & Inventory] | [📊 Revenue & Order Metrics] */}
+            <div className="flex items-center p-1.5 bg-slate-100/90 rounded-2xl w-full sm:w-fit border border-slate-200/80 shadow-2xs gap-1">
+              <button
+                onClick={() => setAnalyticsSubView('stock')}
+                className={`flex-1 sm:flex-initial px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  analyticsSubView === 'stock'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Boxes className={`w-4 h-4 ${analyticsSubView === 'stock' ? 'text-rose-600' : 'text-slate-400'}`} />
+                <span>Smart Stock & Inventory</span>
+                {lowStockCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold border border-amber-200">
+                    {lowStockCount} Low
+                  </span>
+                )}
+              </button>
 
-              <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                  PENDING ACTION
-                </span>
-                <div className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900">
-                  {pendingOrders.length}
-                </div>
-                <span className="text-[10px] text-slate-400 block font-medium">
-                  Needs approval
-                </span>
-              </div>
-
-              <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                  IN KITCHEN / OUT
-                </span>
-                <div className="font-heading font-extrabold text-2xl sm:text-3xl text-blue-600">
-                  {inProgressOrders.length}
-                </div>
-                <span className="text-[10px] text-slate-400 block font-medium">
-                  Active prep & dispatch
-                </span>
-              </div>
-
-              <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                  DELIVERED
-                </span>
-                <div className="font-heading font-extrabold text-2xl sm:text-3xl text-emerald-600">
-                  {deliveredOrders.length}
-                </div>
-                <span className="text-[10px] text-slate-400 block font-medium">
-                  Completed orders
-                </span>
-              </div>
-
-              <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1 col-span-2 md:col-span-1">
-                <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">
-                  TOTAL REVENUE
-                </span>
-                <div className="font-amount font-extrabold text-2xl sm:text-3xl text-emerald-700">
-                  ₹{totalRevenue}
-                </div>
-                <span className="text-[10px] text-emerald-600 block font-medium">
-                  Collected on delivery
-                </span>
-              </div>
+              <button
+                onClick={() => setAnalyticsSubView('revenue')}
+                className={`flex-1 sm:flex-initial px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  analyticsSubView === 'revenue'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <TrendingUp className={`w-4 h-4 ${analyticsSubView === 'revenue' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                <span>Revenue & Order Metrics</span>
+              </button>
             </div>
 
-            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
-              <h3 className="font-heading font-extrabold text-xl text-slate-900">
-                Performance Metrics & Revenue
-              </h3>
+            {/* Sub-view 1: Smart Stock & Inventory */}
+            {analyticsSubView === 'stock' && (
+              <InventoryManagementView
+                products={liveProducts}
+                onRefreshCatalog={() => {
+                  try {
+                    window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: liveProducts }));
+                  } catch {}
+                }}
+              />
+            )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
-                  <span className="text-xs text-slate-500 font-medium">Completion Rate</span>
-                  <p className="font-heading font-bold text-2xl text-slate-900">
-                    {orders.length > 0
-                      ? `${Math.round((deliveredOrders.length / orders.length) * 100)}%`
-                      : '100%'}
-                  </p>
-                  <span className="text-[11px] text-slate-400">{deliveredOrders.length} delivered</span>
+            {/* Sub-view 2: Business & Order Performance Analytics */}
+            {analyticsSubView === 'revenue' && (
+              <div className="space-y-4 animate-fade-in">
+                {/* 5 Clean Stat Metric Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
+                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                      TOTAL ORDERS
+                    </span>
+                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900">
+                      {orders.length}
+                    </div>
+                    <span className="text-[10px] text-slate-400 block font-medium">
+                      Live collection
+                    </span>
+                  </div>
+
+                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                      PENDING ACTION
+                    </span>
+                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900">
+                      {pendingOrders.length}
+                    </div>
+                    <span className="text-[10px] text-slate-400 block font-medium">
+                      Needs approval
+                    </span>
+                  </div>
+
+                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                      IN KITCHEN / OUT
+                    </span>
+                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-blue-600">
+                      {inProgressOrders.length}
+                    </div>
+                    <span className="text-[10px] text-slate-400 block font-medium">
+                      Active prep & dispatch
+                    </span>
+                  </div>
+
+                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                      DELIVERED
+                    </span>
+                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-emerald-600">
+                      {deliveredOrders.length}
+                    </div>
+                    <span className="text-[10px] text-slate-400 block font-medium">
+                      Completed orders
+                    </span>
+                  </div>
+
+                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1 col-span-2 md:col-span-1">
+                    <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">
+                      TOTAL REVENUE
+                    </span>
+                    <div className="font-amount font-extrabold text-2xl sm:text-3xl text-emerald-700">
+                      ₹{totalRevenue}
+                    </div>
+                    <span className="text-[10px] text-emerald-600 block font-medium">
+                      Collected on delivery
+                    </span>
+                  </div>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
-                  <span className="text-xs text-slate-500 font-medium">Average Order Value</span>
-                  <p className="font-heading font-bold text-2xl text-slate-900 font-mono">
-                    ₹{orders.length > 0 ? Math.round(totalRevenue / (deliveredOrders.length || 1)) : 0}
-                  </p>
-                  <span className="text-[11px] text-slate-400">Per delivered order</span>
-                </div>
+                <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
+                  <h3 className="font-heading font-extrabold text-xl text-slate-900">
+                    Performance Metrics & Revenue
+                  </h3>
 
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
-                  <span className="text-xs text-slate-500 font-medium">Active Menu Items</span>
-                  <p className="font-heading font-bold text-2xl text-slate-900">
-                    {products.filter((p) => p.available).length} / {products.length}
-                  </p>
-                  <span className="text-[11px] text-slate-400">Available in store</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
+                      <span className="text-xs text-slate-500 font-medium">Completion Rate</span>
+                      <p className="font-heading font-bold text-2xl text-slate-900">
+                        {orders.length > 0
+                          ? `${Math.round((deliveredOrders.length / orders.length) * 100)}%`
+                          : '100%'}
+                      </p>
+                      <span className="text-[11px] text-slate-400">{deliveredOrders.length} delivered</span>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
+                      <span className="text-xs text-slate-500 font-medium">Average Order Value</span>
+                      <p className="font-heading font-bold text-2xl text-slate-900 font-mono">
+                        ₹{orders.length > 0 ? Math.round(totalRevenue / (deliveredOrders.length || 1)) : 0}
+                      </p>
+                      <span className="text-[11px] text-slate-400">Per delivered order</span>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
+                      <span className="text-xs text-slate-500 font-medium">Active Menu Items</span>
+                      <p className="font-heading font-bold text-2xl text-slate-900">
+                        {liveProducts.filter((p) => p.available).length} / {liveProducts.length}
+                      </p>
+                      <span className="text-[11px] text-slate-400">Available in store</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs text-slate-500 font-medium">Registered Delivery Riders</span>
+                        <p className="font-heading font-bold text-xl text-slate-900">{deliveryAgents.length}</p>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab('delivery_agents')}
+                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-full cursor-pointer"
+                      >
+                        Manage
+                      </button>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs text-slate-500 font-medium">Registered Kitchen Chefs</span>
+                        <p className="font-heading font-bold text-xl text-slate-900">{kitchenStaff.length}</p>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab('kitchen_staff')}
+                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-full cursor-pointer"
+                      >
+                        Manage
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between">
-                  <div>
-                    <span className="text-xs text-slate-500 font-medium">Registered Delivery Riders</span>
-                    <p className="font-heading font-bold text-xl text-slate-900">{deliveryAgents.length}</p>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('delivery_agents')}
-                    className="px-3 py-1 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-full"
-                  >
-                    Manage
-                  </button>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between">
-                  <div>
-                    <span className="text-xs text-slate-500 font-medium">Registered Kitchen Chefs</span>
-                    <p className="font-heading font-bold text-xl text-slate-900">{kitchenStaff.length}</p>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('kitchen_staff')}
-                    className="px-3 py-1 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-full"
-                  >
-                    Manage
-                  </button>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
+        )}
+
+        {/* Tab 7: Firebase Daily Consumption & Quota Tracker */}
+        {activeTab === 'usage' && (
+          <FirebaseQuotaUsageView
+            products={products}
+          />
         )}
       </main>
 
@@ -2469,8 +2564,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
         onUploadCustomFile={soundAlert.uploadCustomFile}
         onRemoveCustomFile={soundAlert.removeCustomFile}
         onUpdateVolume={soundAlert.updateVolume}
-        onPlayTest={soundAlert.playTestAlert}
+        onStartTest={soundAlert.startTestAlert}
+        onStopTest={soundAlert.stopTestAlert}
         isTesting={soundAlert.isSoundTesting}
+        testSecondsLeft={soundAlert.testSecondsLeft}
+        permissionStatus={soundAlert.permissionStatus}
+        onRequestPermission={soundAlert.handleRequestPermission}
       />
 
       {/* Logout Confirmation Modal */}
