@@ -24,18 +24,26 @@ if (typeof window !== 'undefined') {
   }
 }
 
+let saveScrollDebounceTimer: any = null;
+
 export function saveScrollPosition(key: string, scrollY?: number) {
   if (typeof window === 'undefined' || !key) return;
   const currentY = scrollY !== undefined ? scrollY : window.scrollY || window.pageYOffset || 0;
   memoryScrollMap[key] = Math.max(0, Math.round(currentY));
 
-  try {
-    const json = JSON.stringify(memoryScrollMap);
-    sessionStorage.setItem(SCROLL_POSITIONS_KEY, json);
-    localStorage.setItem(SCROLL_POSITIONS_KEY, json);
-  } catch (e) {
-    // ignore quota errors
+  // Debounce expensive disk storage write to keep scrolling and tab switching butter-smooth at 60fps
+  if (saveScrollDebounceTimer) {
+    clearTimeout(saveScrollDebounceTimer);
   }
+  saveScrollDebounceTimer = setTimeout(() => {
+    try {
+      const json = JSON.stringify(memoryScrollMap);
+      sessionStorage.setItem(SCROLL_POSITIONS_KEY, json);
+      localStorage.setItem(SCROLL_POSITIONS_KEY, json);
+    } catch (e) {
+      // ignore quota errors
+    }
+  }, 250);
 }
 
 export function getScrollPosition(key: string): number {

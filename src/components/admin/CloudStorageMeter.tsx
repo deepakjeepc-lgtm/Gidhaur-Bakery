@@ -24,7 +24,7 @@ interface CloudStorageMeterProps {
   products: Product[];
 }
 
-export const CloudStorageMeter: React.FC<CloudStorageMeterProps> = ({ products }) => {
+export const CloudStorageMeter = React.memo<CloudStorageMeterProps>(({ products }) => {
   // Instant initialization: ZERO delay on mount, reads from cache or instant catalog computation
   const [stats, setStats] = useState<StorageUsageStats>(() => getInitialStorageUsage(products));
   const [isScanning, setIsScanning] = useState(false);
@@ -240,4 +240,6 @@ export const CloudStorageMeter: React.FC<CloudStorageMeterProps> = ({ products }
       )}
     </div>
   );
-};
+});
+
+CloudStorageMeter.displayName = 'CloudStorageMeter';

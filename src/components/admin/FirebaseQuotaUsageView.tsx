@@ -15,15 +15,13 @@ import {
   Layers,
   ArrowUpRight,
   TrendingDown,
-  Eye,
-  Sliders
+  Eye
 } from 'lucide-react';
 import { Product } from '../../types';
 import {
   getQuotaUsageStats,
   saveQuotaUsageStats,
   getTimeUntilQuotaReset,
-  recordQuotaExhaustedEvent,
   SPARK_LIMITS,
   QuotaMetric
 } from '../../services/quotaTrackerService';
@@ -83,13 +81,6 @@ export const FirebaseQuotaUsageView: React.FC<FirebaseQuotaUsageViewProps> = ({
     }
   };
 
-  const toggleSimulateQuota = () => {
-    const nextState = !stats.isExhausted;
-    recordQuotaExhaustedEvent(nextState, nextState ? 'Admin preview simulation' : '');
-    setStats(getQuotaUsageStats());
-    triggerHaptic('medium');
-  };
-
   // Calculations
   const readsPercent = Math.min(100, Math.round((stats.estimatedReads / stats.readsLimit) * 100));
   const remainingReads = Math.max(0, stats.readsLimit - stats.estimatedReads);
@@ -138,21 +129,10 @@ export const FirebaseQuotaUsageView: React.FC<FirebaseQuotaUsageViewProps> = ({
             <button
               onClick={handleRefresh}
               disabled={isRefreshing}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 active:scale-95 text-white text-xs font-bold transition-all border border-white/10 disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 active:scale-95 text-white text-xs font-bold transition-all border border-white/10 disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
               {isRefreshing ? 'Checking...' : 'Refresh Status'}
-            </button>
-            <button
-              onClick={toggleSimulateQuota}
-              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold transition-all border ${
-                stats.isExhausted
-                  ? 'bg-rose-500 text-white border-rose-400 hover:bg-rose-600'
-                  : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-750'
-              }`}
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              {stats.isExhausted ? 'Quota Simulation: ON' : 'Test Quota Screen'}
             </button>
           </div>
         </div>

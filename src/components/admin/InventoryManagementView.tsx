@@ -43,7 +43,7 @@ interface InventoryManagementViewProps {
 type StockFilterType = 'all' | 'in_stock' | 'low_stock' | 'out_of_stock';
 type StockSortType = 'lowest_stock' | 'highest_stock' | 'name_asc' | 'price_desc' | 'price_asc';
 
-export const InventoryManagementView: React.FC<InventoryManagementViewProps> = ({
+export const InventoryManagementView = React.memo<InventoryManagementViewProps>(({
   products,
   onRefreshCatalog
 }) => {
@@ -764,4 +764,6 @@ export const InventoryManagementView: React.FC<InventoryManagementViewProps> = (
       </div>
     </div>
   );
-};
+});
+
+InventoryManagementView.displayName = 'InventoryManagementView';

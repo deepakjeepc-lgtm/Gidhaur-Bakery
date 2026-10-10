@@ -62,7 +62,7 @@ import { KitchenStaffManagement } from './KitchenStaffManagement';
 import { PreparingStaffManagement } from './PreparingStaffManagement';
 import { PaymentSettings } from './PaymentSettings';
 import { CloudStorageMeter } from './CloudStorageMeter';
-import { FirebaseQuotaUsageView } from './FirebaseQuotaUsageView';
+import { DatabaseStatusIndicator } from './DatabaseStatusIndicator';
 import { InventoryManagementView } from './InventoryManagementView';
 import { deductStockForAcceptedOrder, isItemLowStock } from '../../services/inventoryService';
 import { OrderHistoryView } from './OrderHistoryView';
@@ -112,6 +112,7 @@ import {
   saveScrollPosition,
   restoreScrollPosition
 } from '../../utils/scrollStateStorage';
+import { triggerHaptic } from '../../utils/haptics';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -121,23 +122,55 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBackToStore, onLogout }) => {
   const { user, signOut } = useAuth();
-  const [activeTab, setActiveTabState] = useState<
-    'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats' | 'usage'
-  >(() => getSavedActiveAdminTab('orders') as any);
+  const [staffSubTab, setStaffSubTab] = useState<'kitchen' | 'preparing' | 'delivery'>(() => {
+    const saved = getSavedActiveAdminTab<string>('orders');
+    if (saved === 'preparing_staff') return 'preparing';
+    if (saved === 'delivery_agents') return 'delivery';
+    return 'kitchen';
+  });
 
-  const handleTabChange = (newTab: 'orders' | 'products' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats' | 'usage') => {
-    if (newTab === activeTab) return;
-    saveScrollPosition(`admin_${activeTab}`, window.scrollY);
-    setActiveTabState(newTab);
-    saveActiveAdminTab(newTab);
-    restoreScrollPosition(`admin_${newTab}`);
+  const [activeTab, setActiveTabState] = useState<
+    'orders' | 'products' | 'staff' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats' | 'usage'
+  >(() => {
+    const saved = getSavedActiveAdminTab<string>('orders');
+    if (saved === 'kitchen_staff' || saved === 'preparing_staff' || saved === 'delivery_agents') return 'staff';
+    if (saved === 'usage') return 'orders';
+    return (saved as any) || 'orders';
+  });
+
+  const handleTabChange = (
+    newTab: 'orders' | 'products' | 'staff' | 'delivery_agents' | 'kitchen_staff' | 'preparing_staff' | 'settings' | 'stats' | 'usage'
+  ) => {
+    let targetTab = newTab;
+    if (newTab === 'kitchen_staff') {
+      targetTab = 'staff';
+      setStaffSubTab('kitchen');
+    } else if (newTab === 'preparing_staff') {
+      targetTab = 'staff';
+      setStaffSubTab('preparing');
+    } else if (newTab === 'delivery_agents') {
+      targetTab = 'staff';
+      setStaffSubTab('delivery');
+    } else if (newTab === 'usage') {
+      targetTab = 'orders';
+    }
+
+    if (targetTab === activeTab && newTab === targetTab) return;
+    try {
+      triggerHaptic('selection');
+    } catch {}
+    setActiveTabState(targetTab);
+    saveActiveAdminTab(targetTab);
+    if (window.scrollY > 200) {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }
   };
 
   const setActiveTab = handleTabChange;
 
   // Restore scroll position on initial load of AdminDashboard
   useEffect(() => {
-    restoreScrollPosition(`admin_${activeTab}`, 6);
+    restoreScrollPosition(`admin_${activeTab}`, 1);
   }, []);
 
   // Save scroll on page scroll
@@ -210,7 +243,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
 
   useEffect(() => {
     if (currentArchived.length > 0) {
-      setArchivedOrders(currentArchived);
+      setArchivedOrders((prev) => {
+        if (
+          prev.length === currentArchived.length &&
+          (prev[0]?.id === currentArchived[0]?.id || prev[0]?.orderId === currentArchived[0]?.orderId)
+        ) {
+          return prev;
+        }
+        return currentArchived;
+      });
     }
   }, [currentArchived]);
 
@@ -1011,73 +1052,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
               </button>
 
               <button
-                onClick={() => setActiveTab('kitchen_staff')}
+                onClick={() => setActiveTab('staff')}
                 className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'kitchen_staff'
+                  activeTab === 'staff'
                     ? 'bg-slate-900 text-white shadow-xs font-bold'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
                 }`}
-                id="admin-tab-kitchen"
+                id="admin-tab-staff"
               >
-                <ChefHat className="w-3.5 h-3.5" />
-                <span>Kitchen</span>
-                {kitchenStaff.length > 0 && (
+                <Users className="w-3.5 h-3.5" />
+                <span>Staff</span>
+                {(kitchenStaff.length + preparingStaff.length + deliveryAgents.length) > 0 && (
                   <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
-                      activeTab === 'kitchen_staff'
-                        ? 'bg-slate-800 text-slate-300'
-                        : 'bg-slate-200/80 text-slate-600'
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                      activeTab === 'staff'
+                        ? 'bg-slate-800 text-slate-200'
+                        : 'bg-slate-200/90 text-slate-700'
                     }`}
                   >
-                    {kitchenStaff.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveTab('preparing_staff')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'preparing_staff'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-preparing"
-              >
-                <PackageCheck className="w-3.5 h-3.5" />
-                <span>Preparing</span>
-                {preparingStaff.length > 0 && (
-                  <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
-                      activeTab === 'preparing_staff'
-                        ? 'bg-slate-800 text-slate-300'
-                        : 'bg-slate-200/80 text-slate-600'
-                    }`}
-                  >
-                    {preparingStaff.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveTab('delivery_agents')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'delivery_agents'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-delivery-agents"
-              >
-                <Bike className="w-3.5 h-3.5" />
-                <span>Delivery</span>
-                {deliveryAgents.length > 0 && (
-                  <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
-                      activeTab === 'delivery_agents'
-                        ? 'bg-slate-800 text-slate-300'
-                        : 'bg-slate-200/80 text-slate-600'
-                    }`}
-                  >
-                    {deliveryAgents.length}
+                    {kitchenStaff.length + preparingStaff.length + deliveryAgents.length}
                   </span>
                 )}
               </button>
@@ -1109,19 +1102,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                 {lowStockCount > 0 && (
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                 )}
-              </button>
-
-              <button
-                onClick={() => setActiveTab('usage')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'usage'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-usage"
-              >
-                <Activity className="w-3.5 h-3.5" />
-                <span>Usage</span>
               </button>
             </div>
           </nav>
@@ -1223,6 +1203,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
               )}
             </div>
 
+            {/* Zero-Loop Live Database Connection & Quota All-in-One Status Indicator */}
+            <DatabaseStatusIndicator />
+
             {/* Sound & Custom Audio Settings Modal Trigger */}
             <button
               onClick={() => soundAlert.setIsAlertModalOpen(true)}
@@ -1316,9 +1299,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
           </div>
         )}
 
-        {/* Tab 1: Live Orders Management & Order History Archive */}
-        {activeTab === 'orders' && (
-          <div className="space-y-4">
+        {/* Tab 1: Live Orders Management & Order History Archive (Persisted in DOM for instant 0ms tab switching) */}
+        <div className={activeTab === 'orders' ? 'space-y-4' : 'hidden'}>
             {/* Orders Sub-tab switcher: Full-width expanded modern segmented bar (NO empty gap on right) */}
             <div className="w-full bg-white p-1.5 rounded-2xl sm:rounded-3xl border border-slate-200/90 shadow-2xs flex items-center gap-2">
               <button
@@ -1869,49 +1851,128 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
             )}
               </>
             )}
-          </div>
-        )}
+        </div>
 
         {/* Tab 2: Menu & Product Management (Persisted in DOM for instant 0ms tab switching) */}
         <div className={activeTab === 'products' ? 'block' : 'hidden'}>
           <ProductManagement products={products} />
         </div>
 
-        {/* Tab 3: Kitchen Staff Management */}
-        {activeTab === 'kitchen_staff' && (
-          <KitchenStaffManagement
-            staffList={kitchenStaff}
-            onDirectViewChef={(chef) => setPreviewChef(chef)}
-          />
-        )}
+        {/* Tab 3: Unified Staff Operations Hub (Kitchen, Preparing, Delivery) - Persisted in DOM for instant 0ms switching */}
+        <div className={activeTab === 'staff' ? 'space-y-4' : 'hidden'}>
+          {/* Minimal Segmented Pill Bar Sub-Navigation */}
+          <div className="bg-white/90 backdrop-blur-xs p-1.5 sm:p-2 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center gap-1 p-1 bg-slate-100/90 rounded-xl border border-slate-200/60 overflow-x-auto no-scrollbar">
+              <button
+                type="button"
+                onClick={() => {
+                  setStaffSubTab('kitchen');
+                  try { triggerHaptic('selection'); } catch {}
+                }}
+                className={`px-3.5 sm:px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                  staffSubTab === 'kitchen'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+                id="staff-subtab-kitchen"
+              >
+                <ChefHat className={`w-3.5 h-3.5 ${staffSubTab === 'kitchen' ? 'text-amber-600' : 'text-slate-500'}`} />
+                <span>Kitchen</span>
+                {kitchenStaff.length > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    staffSubTab === 'kitchen' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {kitchenStaff.length}
+                  </span>
+                )}
+              </button>
 
-        {/* Tab 4: Preparing Staff Management */}
-        {activeTab === 'preparing_staff' && (
-          <PreparingStaffManagement
-            staffList={preparingStaff}
-            onDirectViewPrep={(st) => setPreviewPreparingStaff(st)}
-          />
-        )}
+              <button
+                type="button"
+                onClick={() => {
+                  setStaffSubTab('preparing');
+                  try { triggerHaptic('selection'); } catch {}
+                }}
+                className={`px-3.5 sm:px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                  staffSubTab === 'preparing'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+                id="staff-subtab-preparing"
+              >
+                <PackageCheck className={`w-3.5 h-3.5 ${staffSubTab === 'preparing' ? 'text-blue-600' : 'text-slate-500'}`} />
+                <span>Preparing</span>
+                {preparingStaff.length > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    staffSubTab === 'preparing' ? 'bg-blue-100 text-blue-800' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {preparingStaff.length}
+                  </span>
+                )}
+              </button>
 
-        {/* Tab 5: Delivery Agents Management */}
-        {activeTab === 'delivery_agents' && (
-          <DeliveryAgentsManagement
-            agents={deliveryAgents}
-            onDirectViewAgent={(agent) => setPreviewAgent(agent)}
-          />
-        )}
+              <button
+                type="button"
+                onClick={() => {
+                  setStaffSubTab('delivery');
+                  try { triggerHaptic('selection'); } catch {}
+                }}
+                className={`px-3.5 sm:px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                  staffSubTab === 'delivery'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                }`}
+                id="staff-subtab-delivery"
+              >
+                <Bike className={`w-3.5 h-3.5 ${staffSubTab === 'delivery' ? 'text-emerald-600' : 'text-slate-500'}`} />
+                <span>Delivery</span>
+                {deliveryAgents.length > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    staffSubTab === 'delivery' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {deliveryAgents.length}
+                  </span>
+                )}
+              </button>
+            </div>
 
-        {/* Tab 5: Payment & Restaurant Settings */}
-        {activeTab === 'settings' && (
-          <div className="space-y-6">
-            <CloudStorageMeter products={products} />
-            <PaymentSettings settings={settings} onUpdate={(newSettings) => setSettings(newSettings)} />
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-50 border border-slate-200/60 text-xs text-slate-500 font-medium">
+              <Users className="w-3.5 h-3.5 text-slate-400" />
+              <span className="font-semibold text-slate-700">Staff Operations Hub</span>
+            </div>
           </div>
-        )}
 
-        {/* Tab 6: Analytics & Summary */}
-        {activeTab === 'stats' && (
-          <div className="space-y-4">
+          {/* Sub-view Content: Kitchen / Preparing / Delivery - Instant 0ms toggle with zero DOM unmounting */}
+          <div className={staffSubTab === 'kitchen' ? 'block' : 'hidden'}>
+            <KitchenStaffManagement
+              staffList={kitchenStaff}
+              onDirectViewChef={(chef) => setPreviewChef(chef)}
+            />
+          </div>
+
+          <div className={staffSubTab === 'preparing' ? 'block' : 'hidden'}>
+            <PreparingStaffManagement
+              staffList={preparingStaff}
+              onDirectViewPrep={(st) => setPreviewPreparingStaff(st)}
+            />
+          </div>
+
+          <div className={staffSubTab === 'delivery' ? 'block' : 'hidden'}>
+            <DeliveryAgentsManagement
+              agents={deliveryAgents}
+              onDirectViewAgent={(agent) => setPreviewAgent(agent)}
+            />
+          </div>
+        </div>
+
+        {/* Tab 4: Payment & Restaurant Settings - Persisted in DOM for instant 0ms switching */}
+        <div className={activeTab === 'settings' ? 'space-y-6' : 'hidden'}>
+          <CloudStorageMeter products={products} />
+          <PaymentSettings settings={settings} onUpdate={(newSettings) => setSettings(newSettings)} />
+        </div>
+
+        {/* Tab 5: Analytics & Summary - Persisted in DOM for instant 0ms switching */}
+        <div className={activeTab === 'stats' ? 'space-y-4' : 'hidden'}>
             {/* Top Hero / Admin Banner Card */}
             <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="space-y-1.5">
@@ -2087,8 +2148,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                         <p className="font-heading font-bold text-xl text-slate-900">{deliveryAgents.length}</p>
                       </div>
                       <button
-                        onClick={() => setActiveTab('delivery_agents')}
-                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-full cursor-pointer"
+                        onClick={() => {
+                          setActiveTab('staff');
+                          setStaffSubTab('delivery');
+                        }}
+                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-full cursor-pointer transition-colors"
                       >
                         Manage
                       </button>
@@ -2100,8 +2164,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                         <p className="font-heading font-bold text-xl text-slate-900">{kitchenStaff.length}</p>
                       </div>
                       <button
-                        onClick={() => setActiveTab('kitchen_staff')}
-                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-full cursor-pointer"
+                        onClick={() => {
+                          setActiveTab('staff');
+                          setStaffSubTab('kitchen');
+                        }}
+                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-full cursor-pointer transition-colors"
                       >
                         Manage
                       </button>
@@ -2110,15 +2177,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
                 </div>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Tab 7: Firebase Daily Consumption & Quota Tracker */}
-        {activeTab === 'usage' && (
-          <FirebaseQuotaUsageView
-            products={products}
-          />
-        )}
+        </div>
       </main>
 
       {/* Select Rider & Item Verification Dispatch Modal */}

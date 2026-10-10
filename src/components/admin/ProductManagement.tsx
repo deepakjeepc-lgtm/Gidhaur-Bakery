@@ -299,9 +299,7 @@ const ProductTableRow = memo<ProductTableRowProps>(({
 ProductTableRow.displayName = 'ProductTableRow';
 
 // -------------------------------------------------------------
-// Main Product Management Dashboard View
-// -------------------------------------------------------------
-export const ProductManagement: React.FC<ProductManagementProps> = ({ products, onRefresh }) => {
+export const ProductManagement = React.memo<ProductManagementProps>(({ products, onRefresh }) => {
   // Local optimistic products state for butter-smooth zero-reload reordering
   const [localProducts, setLocalProducts] = useState<Product[]>(products);
   const isDraggingRef = useRef(false);
@@ -1197,4 +1195,6 @@ export const ProductManagement: React.FC<ProductManagementProps> = ({ products, 
       )}
     </div>
   );
-};
+});
+
+ProductManagement.displayName = 'ProductManagement';

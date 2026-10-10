@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Order } from '../types';
+import { dbConnectionService } from './dbConnectionService';
 
 type OrderSubscriber = (orders: Order[]) => void;
 
@@ -97,6 +98,9 @@ class OrderListenerService {
             localStorage.setItem('swadeep_recent_orders', JSON.stringify(list));
           } catch {}
 
+          // Pass connection status passively to dbConnectionService
+          dbConnectionService.recordSnapshotArrival(snapshot.metadata?.fromCache);
+
           // Broadcast to all active subscribers
           this.subscribers.forEach((cb) => {
             try {
@@ -110,6 +114,9 @@ class OrderListenerService {
           this.isConnecting = false;
           this.lastFetchErrorTime = Date.now();
           console.warn('Singleton order listener note (quota/offline, serving local cache):', error?.message || error);
+
+          // Notify connection monitor of error
+          dbConnectionService.recordFirestoreError(error);
 
           // Gracefully serve local cache to all subscribers
           this.subscribers.forEach((cb) => {

@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for removing the Store Profile tab and Store Information & Operational Status section from Settings, relocating the Official FSSAI License editor and Live Order Acceptance toggle into the Website & Logos tab, and ensuring clean layout and zero feature or data loss.",
+  "updatedAt":  "2026-10-10T05:42:42.703306692Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

@@ -1,4 +1,5 @@
 import { auth } from './config';
+import { dbConnectionService } from '../services/dbConnectionService';
 
 export enum OperationType {
   CREATE = 'create',
@@ -49,5 +50,10 @@ export function handleFirestoreError(
     path,
   };
 
+  try {
+    dbConnectionService.recordFirestoreError(error);
+  } catch {}
+
   console.warn('Firestore Operation Note:', JSON.stringify(errInfo));
 }
+

@@ -50,7 +50,7 @@ interface PaymentSettingsProps {
 
 type SettingsSection = 'website' | 'store' | 'payments' | 'delivery' | 'emails' | 'security';
 
-export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUpdate }) => {
+export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onUpdate }) => {
   // Active Sub-Navigation Tab
   const [activeSection, setActiveSection] = useState<SettingsSection>('website');
 
@@ -2901,4 +2901,6 @@ export const PaymentSettings: React.FC<PaymentSettingsProps> = ({ settings, onUp
       )}
     </div>
   );
-};
+});
+
+PaymentSettings.displayName = 'PaymentSettings';

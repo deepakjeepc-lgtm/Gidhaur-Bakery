@@ -24,7 +24,7 @@ interface KitchenStaffManagementProps {
   onDirectViewChef?: (staff: KitchenStaff) => void;
 }
 
-export const KitchenStaffManagement: React.FC<KitchenStaffManagementProps> = ({
+export const KitchenStaffManagement = React.memo<KitchenStaffManagementProps>(({
   staffList,
   onDirectViewChef
 }) => {
@@ -507,4 +507,6 @@ export const KitchenStaffManagement: React.FC<KitchenStaffManagementProps> = ({
       )}
     </div>
   );
-};
+});
+
+KitchenStaffManagement.displayName = 'KitchenStaffManagement';

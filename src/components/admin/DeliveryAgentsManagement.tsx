@@ -24,7 +24,7 @@ interface DeliveryAgentsManagementProps {
   onDirectViewAgent?: (agent: DeliveryAgent) => void;
 }
 
-export const DeliveryAgentsManagement: React.FC<DeliveryAgentsManagementProps> = ({
+export const DeliveryAgentsManagement = React.memo<DeliveryAgentsManagementProps>(({
   agents,
   onDirectViewAgent
 }) => {
@@ -542,4 +542,6 @@ export const DeliveryAgentsManagement: React.FC<DeliveryAgentsManagementProps> =
       )}
     </div>
   );
-};
+});
+
+DeliveryAgentsManagement.displayName = 'DeliveryAgentsManagement';

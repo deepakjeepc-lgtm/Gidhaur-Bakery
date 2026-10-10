@@ -24,7 +24,7 @@ interface PreparingStaffManagementProps {
   onDirectViewPrep?: (staff: PreparingStaff) => void;
 }
 
-export const PreparingStaffManagement: React.FC<PreparingStaffManagementProps> = ({
+export const PreparingStaffManagement = React.memo<PreparingStaffManagementProps>(({
   staffList,
   onDirectViewPrep
 }) => {
@@ -481,4 +481,6 @@ export const PreparingStaffManagement: React.FC<PreparingStaffManagementProps> =
       )}
     </div>
   );
-};
+});
+
+PreparingStaffManagement.displayName = 'PreparingStaffManagement';

@@ -162,7 +162,9 @@ export function performDailyOrderRollover(
     return dateB - dateA;
   });
 
-  if (newlyArchivedCount > 0 || existingArchive.length !== allArchived.length) {
+  const hasChanged = newlyArchivedCount > 0 || existingArchive.length !== allArchived.length;
+
+  if (hasChanged) {
     saveArchivedOrders(allArchived);
   }
 
@@ -173,7 +175,7 @@ export function performDailyOrderRollover(
 
   return {
     todayOrders,
-    archivedOrders: allArchived,
+    archivedOrders: hasChanged ? allArchived : existingArchive,
     newlyArchivedCount
   };
 }
