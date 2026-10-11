@@ -1,6 +1,6 @@
 {
-  "summary":  "Complete implementation plan for Graceful Daily Firestore Limit handling: WhatsApp Checkout Fallback for customers and Admin edit/add protection with simulation toggle, requiring zero Firestore reads.",
-  "updatedAt":  "2026-10-11T09:03:33.444590387Z",
+  "summary":  "Implementation plan to fix iPhone PWA back button and swipe-to-close on My Order screen without WebKit crashes, URL bar pop-ups, or Firebase reads.",
+  "updatedAt":  "2026-10-11T13:02:28.497219077Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

@@ -139,8 +139,12 @@ function MainApp() {
     setCurrentViewState(nextView);
     saveActiveView(nextView);
 
-    // Update URL hash for clean address bar state without full reload
-    if (typeof window !== 'undefined') {
+    // In iOS standalone PWA, never touch window.history or hash as it triggers Safari URL bar reveal
+    const isStandalone = typeof window !== 'undefined' && (
+      Boolean((window.navigator as any).standalone) ||
+      window.matchMedia('(display-mode: standalone)').matches
+    );
+    if (typeof window !== 'undefined' && !isStandalone) {
       try {
         const hash = nextView === 'home' ? '' : `#${nextView}`;
         window.history.replaceState(null, '', `${window.location.pathname}${hash}`);
@@ -283,8 +287,6 @@ function MainApp() {
   }, [setIsCartOpen]);
 
   const handleProceedToCheckout = useCallback(() => {
-    // Transition cleanly from Cart to Checkout in history stack
-    window.history.pushState({ modal: 'checkout', from: 'cart' }, '');
     setIsCheckoutOpen(true);
     setIsCartOpen(false);
   }, [setIsCartOpen]);

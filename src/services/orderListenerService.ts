@@ -30,12 +30,11 @@ class OrderListenerService {
       }
     } catch {}
 
-    // Unsubscribe when tab is hidden, re-subscribe when visible
+    // Keep listener alive for active admin subscribers so background / locked phone receives incoming orders.
+    // If connection dropped due to network sleep, re-verify attachment when visible.
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-          this.detachListener();
-        } else if (document.visibilityState === 'visible' && this.subscribers.size > 0) {
+        if (document.visibilityState === 'visible' && this.subscribers.size > 0 && !this.activeUnsubscribe) {
           this.ensureListenerAttached();
         }
       });
@@ -56,10 +55,8 @@ class OrderListenerService {
       callback(this.cachedOrders);
     }
 
-    // Attach single Firestore listener if tab is visible
-    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
-      this.ensureListenerAttached();
-    }
+    // Attach single Firestore listener
+    this.ensureListenerAttached();
 
     return () => {
       this.subscribers.delete(callback);

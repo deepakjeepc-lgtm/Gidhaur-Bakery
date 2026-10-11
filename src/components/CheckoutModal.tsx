@@ -55,7 +55,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   onClose,
   onOrderSuccess,
 }) => {
-  const { items, subtotal, clearCart } = useCart();
+  const { items, subtotal, clearCart, setIsCartOpen } = useCart();
   const { userLocation, settings } = useLocation();
 
   const [customerName, setCustomerName] = useState('');
@@ -130,12 +130,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   const handleCloseNavigation = useCallback(() => {
     triggerHaptic('light');
-    if (window.history.state?.modal === 'checkout') {
-      window.history.back();
-    } else {
-      onClose();
-    }
-  }, [onClose]);
+    onClose();
+    setIsCartOpen(true);
+  }, [onClose, setIsCartOpen]);
 
   const validate = () => {
     const errs: Record<string, string> = {};
@@ -445,11 +442,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setNotes('');
       setIsSubmitting(false);
       triggerHaptic('success');
-      try {
-        if (window.history.state?.modal) {
-          window.history.replaceState(null, '');
-        }
-      } catch {}
       onClose();
       onOrderSuccess(confirmedOrderData);
     } catch (err: any) {
@@ -494,11 +486,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setNotes('');
       setIsSubmitting(false);
       triggerHaptic('success');
-      try {
-        if (window.history.state?.modal) {
-          window.history.replaceState(null, '');
-        }
-      } catch {}
       onClose();
       onOrderSuccess(fallbackOrderData);
     }
@@ -533,7 +520,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             <button
               type="button"
               onClick={handleCloseNavigation}
-              className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200/80 flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-2xs"
+              className="w-11 h-11 rounded-full bg-slate-100 hover:bg-slate-200 active:bg-slate-200 text-slate-800 border border-slate-200/80 flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-2xs touch-manipulation"
               aria-label="Back to Cart"
               id="checkout-back-btn"
             >

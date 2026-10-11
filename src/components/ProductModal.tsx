@@ -112,28 +112,9 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     };
   }, []);
 
-  // Native hardware / gesture back button support
-  useEffect(() => {
-    window.history.pushState({ productView: true }, '');
-
-    const handlePopState = () => {
-      onClose();
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [onClose]);
-
   const handleBackNavigation = useCallback(() => {
     triggerHaptic('light');
     onClose();
-    if (window.history.state?.productView) {
-      try {
-        window.history.back();
-      } catch {}
-    }
   }, [onClose]);
 
   // If colorOptions.length > 1, do NOT auto-select color unless product explicitly has selectedColorName!

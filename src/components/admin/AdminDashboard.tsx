@@ -279,6 +279,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Audio Alerts hook - Handles repeating chime for today's active pending orders
   const soundAlert = useOrderSoundAlert(todayOrders);
 
+  const [notificationTestToast, setNotificationTestToast] = useState<{ message: string; type: 'success' | 'warn' } | null>(null);
+
+  const handleTestNotificationClick = async () => {
+    triggerHaptic('medium');
+    let perm = soundAlert.permissionStatus;
+    if (perm !== 'granted') {
+      perm = await soundAlert.handleRequestPermission();
+    }
+
+    if (perm === 'granted') {
+      try {
+        await sendNativeNotification(
+          '🔔 Test Order Alert - Gidhaur Bakery',
+          'Phone notification & alert sound working! Naya order aane par aisa hi alert aayega.',
+          {
+            tag: 'admin-test-order-alert',
+            vibrate: [500, 250, 500, 250, 500],
+          }
+        );
+      } catch (err) {
+        console.warn('Failed to send test notification:', err);
+      }
+      playOrderAlertChime();
+      setNotificationTestToast({
+        message: '✓ Test Notification sent! Check phone notification bar and sound.',
+        type: 'success',
+      });
+    } else if (perm === 'denied') {
+      setNotificationTestToast({
+        message: '⚠️ Notification blocked. Please allow notifications in phone/browser site settings.',
+        type: 'warn',
+      });
+    } else {
+      setNotificationTestToast({
+        message: 'ℹ️ Notification permission required to ring your phone on new orders.',
+        type: 'warn',
+      });
+    }
+
+    setTimeout(() => {
+      setNotificationTestToast(null);
+    }, 4500);
+  };
+
   const [dispatchingOrder, setDispatchingOrder] = useState<Order | null>(null);
   const [adminCheckedItems, setAdminCheckedItems] = useState<Record<string, boolean>>({});
   const [adminSelectedRiderId, setAdminSelectedRiderId] = useState<string>('');
@@ -1210,6 +1254,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Zero-Loop Live Database Connection & Quota All-in-One Status Indicator */}
             <DatabaseStatusIndicator />
 
+            {/* Direct One-Tap Test App Notification Button */}
+            <button
+              type="button"
+              onClick={handleTestNotificationClick}
+              className={`px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-bold transition-all border flex items-center gap-1.5 cursor-pointer shadow-2xs shrink-0 active:scale-95 ${
+                soundAlert.permissionStatus === 'granted'
+                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300/80'
+                  : 'bg-amber-500 hover:bg-amber-600 text-slate-950 border-amber-600 animate-pulse'
+              }`}
+              title="Test Phone Notification & Ring Sound"
+              id="admin-test-notification-header-btn"
+            >
+              <Bell className="w-3.5 h-3.5 fill-current" />
+              <span className="text-[11px] font-extrabold hidden xs:inline sm:inline">
+                {soundAlert.permissionStatus === 'granted' ? 'Test Alert' : 'Allow & Test 🔔'}
+              </span>
+            </button>
+
             {/* Sound & Custom Audio Settings Modal Trigger */}
             <button
               onClick={() => soundAlert.setIsAlertModalOpen(true)}
@@ -1263,6 +1325,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Main Content Area */}
       <main className="max-w-7xl mx-auto px-3 sm:px-6 space-y-4">
+        {/* Test Notification Feedback Toast */}
+        {notificationTestToast && (
+          <div
+            className={`p-3 rounded-2xl border text-xs font-bold flex items-center justify-between shadow-md transition-all animate-in fade-in duration-200 ${
+              notificationTestToast.type === 'success'
+                ? 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                : 'bg-amber-50 text-amber-900 border-amber-300'
+            }`}
+          >
+            <span>{notificationTestToast.message}</span>
+            <button
+              onClick={() => setNotificationTestToast(null)}
+              className="p-1 hover:bg-black/5 rounded-full cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {/* Active Repeating Alarm Notification Banner */}
         {soundAlert.isAlarmRinging && (
           <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 rounded-2xl p-3.5 shadow-xl border border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-4 animate-fade-in ring-2 ring-amber-500/20">
@@ -1454,10 +1534,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
 
+                <button
+                  type="button"
+                  onClick={handleTestNotificationClick}
+                  className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer shadow-2xs"
+                  title="Test App Notification on Phone"
+                  id="admin-test-notification-toolbar-btn"
+                >
+                  <Bell className="w-3.5 h-3.5 text-amber-700 fill-current" />
+                  <span className="hidden sm:inline">Test App Notification</span>
+                  <span className="sm:hidden">Test Alert</span>
+                </button>
+
                 {orders.length > 0 && (
                   <button
                     onClick={() => setIsClearingAllModalOpen(true)}
-                    className="px-3 py-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200/80 hover:border-rose-200 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 active:scale-95"
+                    className="px-3 py-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200/80 hover:border-rose-200 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer"
                     title="Delete all test orders"
                     id="admin-clear-orders-btn"
                   >

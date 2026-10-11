@@ -329,7 +329,10 @@ export async function sendNativeNotification(
     // Use ServiceWorker registration when available (shows on lock-screen & when app is background/closed)
     if ('serviceWorker' in navigator) {
       try {
-        const reg = await navigator.serviceWorker.getRegistration();
+        let reg = await navigator.serviceWorker.getRegistration();
+        if (!reg && 'ready' in navigator.serviceWorker) {
+          reg = await navigator.serviceWorker.ready;
+        }
         if (reg && reg.showNotification) {
           await reg.showNotification(title, {
             body,
@@ -338,6 +341,7 @@ export async function sendNativeNotification(
             tag: options?.tag || 'gidhaur-order-alert',
             vibrate: vibratePattern,
             requireInteraction: true,
+            silent: false,
             data: { url: options?.url || '/' },
           } as any);
           return;

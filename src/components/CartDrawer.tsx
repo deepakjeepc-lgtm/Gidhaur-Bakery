@@ -297,14 +297,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
     };
   }, [isCartOpen]);
 
-  // Support phone hardware / browser gesture back button
-  useEffect(() => {
-    if (!isCartOpen) return;
-    if (window.history.state?.modal !== 'cart' && window.history.state?.modal !== 'checkout') {
-      window.history.pushState({ modal: 'cart' }, '');
-    }
-  }, [isCartOpen]);
-
   // Handle escape key on desktop
   useEffect(() => {
     if (!isCartOpen) return;
@@ -323,12 +315,65 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
 
   const handleClose = useCallback(() => {
     triggerHaptic('light');
-    if (window.history.state?.modal === 'cart') {
-      window.history.back();
-    } else {
-      setIsCartOpen(false);
-    }
+    // Pure instant React state close - 0ms lag, zero window.history manipulation, completely immune to iOS Safari PWA URL bar reveal
+    setIsCartOpen(false);
   }, [setIsCartOpen]);
+
+  // Swipe-to-close handlers:
+  // - Edge swipe from left screen boundary (classic iOS swipe back)
+  // - Header swipe right or swipe down
+  const edgeSwipeRef = useRef<{ startX: number; startY: number; isEdge: boolean } | null>(null);
+
+  const handleViewTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      edgeSwipeRef.current = {
+        startX: touch.clientX,
+        startY: touch.clientY,
+        isEdge: touch.clientX <= 44,
+      };
+    }
+  };
+
+  const handleViewTouchEnd = (e: React.TouchEvent) => {
+    if (!edgeSwipeRef.current) return;
+    const touch = e.changedTouches[0];
+    if (touch && edgeSwipeRef.current.isEdge) {
+      const deltaX = touch.clientX - edgeSwipeRef.current.startX;
+      const deltaY = touch.clientY - edgeSwipeRef.current.startY;
+      if (deltaX > 48 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) {
+        handleClose();
+      }
+    }
+    edgeSwipeRef.current = null;
+  };
+
+  const headerSwipeRef = useRef<{ startX: number; startY: number } | null>(null);
+
+  const handleHeaderTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      headerSwipeRef.current = {
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+      };
+    }
+  };
+
+  const handleHeaderTouchEnd = (e: React.TouchEvent) => {
+    if (!headerSwipeRef.current) return;
+    const touch = e.changedTouches[0];
+    if (touch) {
+      const deltaX = touch.clientX - headerSwipeRef.current.startX;
+      const deltaY = touch.clientY - headerSwipeRef.current.startY;
+      if (
+        (deltaX > 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2) ||
+        (deltaY > 50 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2)
+      ) {
+        handleClose();
+      }
+    }
+    headerSwipeRef.current = null;
+  };
 
   const handleCheckoutClick = useCallback(() => {
     triggerHaptic('medium');
@@ -361,8 +406,10 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#f8fafc] flex flex-col overflow-hidden select-none animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 bg-[#f8fafc] flex flex-col overflow-hidden select-none animate-in fade-in duration-200 touch-manipulation"
       id="cart-fullscreen-view"
+      onTouchStart={handleViewTouchStart}
+      onTouchEnd={handleViewTouchEnd}
     >
       {/* Full Screen Dedicated View on Mobile & Desktop - Zero popup lag, Zero backdrop stutter */}
       <div
@@ -370,13 +417,17 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Header: Proper Back Button on Left, Title in Center, Trash on Right */}
-        <header className="px-4 py-3 sm:px-6 sm:py-4 bg-white border-b border-slate-200/80 flex items-center justify-between shrink-0 sticky top-0 z-20 shadow-[0_1px_4px_rgba(0,0,0,0.02)]">
+        <header
+          onTouchStart={handleHeaderTouchStart}
+          onTouchEnd={handleHeaderTouchEnd}
+          className="px-4 py-3 sm:px-6 sm:py-4 bg-white border-b border-slate-200/80 flex items-center justify-between shrink-0 sticky top-0 z-20 shadow-[0_1px_4px_rgba(0,0,0,0.02)]"
+        >
           <div className="flex items-center gap-3">
-            {/* Top Left Proper Circular Back Button */}
+            {/* Top Left Proper Circular Back Button - Optimized 44px apple-touch target */}
             <button
               type="button"
               onClick={handleClose}
-              className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200/80 flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-2xs"
+              className="w-11 h-11 rounded-full bg-slate-100 hover:bg-slate-200 active:bg-slate-200 text-slate-800 border border-slate-200/80 flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-2xs touch-manipulation"
               aria-label="Back to Menu"
               id="cart-back-btn"
             >
