@@ -1,7 +1,8 @@
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { ProductExtra } from '../types';
-import { readThrottler } from './readThrottler';
+import { guardedGetDoc } from './firestoreReadGuard';
+import { getSessionCached, setSessionCached, invalidateSessionCache } from './sessionCache';
 
 export const STORAGE_KEY_EXTRAS = 'swadeep_product_extras';
 
@@ -121,7 +122,7 @@ export function saveCachedExtras(extras: ProductExtra[]) {
  */
 export async function saveExtras(extras: ProductExtra[]): Promise<void> {
   saveCachedExtras(extras);
-  readThrottler.invalidate('product_extras');
+  invalidateSessionCache('product_extras');
   try {
     window.dispatchEvent(new CustomEvent('swadeep_extras_updated'));
   } catch {}
@@ -153,16 +154,20 @@ export function subscribeToExtras(callback: (extras: ProductExtra[]) => void): (
   };
   window.addEventListener('swadeep_extras_updated', handleUpdate);
 
-  // 3. Single throttled check (120s cooldown)
-  if (readThrottler.canFetch('product_extras', 120000)) {
-    readThrottler.markFetched('product_extras');
+  // 3. Read ONCE per 24h session via IndexedDB (NO 120s polling)
+  getSessionCached<ProductExtra[]>('product_extras', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      callback(cached);
+      return;
+    }
     const ref = doc(db, 'settings', 'product_extras');
-    getDoc(ref)
+    guardedGetDoc(ref, 'extrasService.extras')
       .then((docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
           if (Array.isArray(data?.items)) {
             saveCachedExtras(data.items);
+            setSessionCached('product_extras', data.items);
             callback(data.items);
           }
         }
@@ -170,7 +175,7 @@ export function subscribeToExtras(callback: (extras: ProductExtra[]) => void): (
       .catch((err) => {
         console.warn('Extras fetch note (using local cache):', err?.message || err);
       });
-  }
+  });
 
   return () => {
     window.removeEventListener('swadeep_extras_updated', handleUpdate);

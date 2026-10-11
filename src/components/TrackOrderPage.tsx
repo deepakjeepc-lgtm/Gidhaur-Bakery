@@ -7,7 +7,8 @@ import {
   Ban, AlertTriangle, Info
 } from 'lucide-react';
 import { db } from '../firebase/config';
-import { doc, getDoc, collection, query, where, getDocs, onSnapshot, orderBy, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, collection, query, where, limit, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { guardedGetDoc, guardedGetDocs, guardedOnSnapshot } from '../services/firestoreReadGuard';
 import { Order, OrderStatus } from '../types';
 import { subscribeToLiveSync } from '../services/syncService';
 import { isOrderFromToday, clearAllTrackingHistory } from '../services/orderArchiveService';
@@ -487,14 +488,11 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     const rawClean = rawId.trim();
     if (!rawClean) return;
 
-    const digitsOnly = rawClean.replace(/\D/g, '');
     const cleanNoHash = rawClean.replace(/^#+/, '').trim();
-    let cleanId = rawClean.toUpperCase();
-
     setIsLoading(true);
     setErrorMessage(null);
 
-    // 1. Immediately check local backend and localStorage so user sees their order instantly
+    // 1. Check local backend and localStorage for instant feedback
     const localMatches = await fetchFallbackOrders(rawClean, false);
     if (localMatches.length > 0) {
       setOrders(localMatches);
@@ -504,128 +502,60 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       setErrorMessage(null);
     }
 
-    const candidateIds = Array.from(
-      new Set([
-        cleanNoHash,
-        digitsOnly,
-        rawClean,
-        cleanId,
-        cleanNoHash.toUpperCase(),
-        cleanNoHash.toLowerCase(),
-      ])
-    ).filter(Boolean);
-
-    // 2. Also listen to Firestore live document updates or query
+    // 2. Fetch single exact order document (NO candidate loop)
     try {
-      // First, try direct document fetch across candidate IDs
-      let foundDirect = false;
-      for (const cId of candidateIds) {
-        try {
-          const directSnap = await getDoc(doc(db, 'orders', cId));
-          if (directSnap.exists()) {
-            const data = directSnap.data();
-            if (!data.isArchived && !data.archived && data.status !== 'archived' && !data.isDeleted) {
-              const mapped = mapDocToOrder(directSnap);
-              setOrders([mapped]);
-              setExpandedOrders(new Set([mapped.orderId]));
-              setIsSearchBoxOpen(false);
-              setIsLoading(false);
-              setErrorMessage(null);
-              foundDirect = true;
-
-              // Subscribe to real-time updates for this document
-              if (unsubscribeRef.current) unsubscribeRef.current();
-              unsubscribeRef.current = onSnapshot(
-                doc(db, 'orders', cId),
-                (snap) => {
-                  if (snap.exists()) {
-                    const updatedOrder = mapDocToOrder(snap);
-                    setOrders([updatedOrder]);
-                    if (updatedOrder.status === 'delivered' || updatedOrder.status === 'rejected') {
-                      if (unsubscribeRef.current) {
-                        try {
-                          unsubscribeRef.current();
-                        } catch {}
-                        unsubscribeRef.current = null;
-                      }
-                    }
-                  }
-                },
-                (err) => {
-                  console.warn('Direct order doc listener note (offline/quota):', err);
-                }
-              );
-              break;
-            }
-          }
-        } catch {}
+      let targetSnap = await guardedGetDoc(doc(db, 'orders', rawClean), 'TrackOrderPage.singleOrder');
+      if (!targetSnap.exists() && cleanNoHash && cleanNoHash !== rawClean) {
+        targetSnap = await guardedGetDoc(doc(db, 'orders', cleanNoHash), 'TrackOrderPage.singleOrderNoHash');
       }
 
-      if (foundDirect) return;
-
-      const ordersCol = collection(db, 'orders');
-      const q = query(ordersCol, where('orderId', 'in', candidateIds.slice(0, 10)));
-
-      if (unsubscribeRef.current) unsubscribeRef.current();
-      unsubscribeRef.current = onSnapshot(
-        q,
-        (querySnapshot) => {
-          setIsLoading(false);
-          if (querySnapshot.empty) {
-            // Keep localMatches if we already found it
-            if (localMatches.length > 0) {
-              setOrders(localMatches);
-              setExpandedOrders(new Set(localMatches.map((o) => o.orderId)));
-              setIsSearchBoxOpen(false);
-              return;
-            }
-            setErrorMessage(`No order found with ID "${rawClean}". Please verify the 5-digit Order ID.`);
-            return;
-          }
-
-          const fetchedOrders: Order[] = [];
-          querySnapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) return;
-            fetchedOrders.push(mapDocToOrder(docSnap));
-          });
-
-          if (fetchedOrders.length === 0) {
-            if (localMatches.length > 0) {
-              setOrders(localMatches);
-              setExpandedOrders(new Set(localMatches.map((o) => o.orderId)));
-              setIsSearchBoxOpen(false);
-              return;
-            }
-            setErrorMessage(`Order #${rawClean} is no longer active.`);
-            return;
-          }
-
-          setOrders(fetchedOrders);
-          setExpandedOrders(new Set(fetchedOrders.map((o) => o.orderId)));
+      if (targetSnap.exists()) {
+        const data = targetSnap.data();
+        if (!data.isArchived && !data.archived && data.status !== 'archived' && !data.isDeleted) {
+          const mapped = mapDocToOrder(targetSnap);
+          setOrders([mapped]);
+          setExpandedOrders(new Set([mapped.orderId]));
           setIsSearchBoxOpen(false);
-          setErrorMessage(null);
-        },
-        async (error) => {
-          console.warn('Firestore live order listener note (using sync engine):', error);
           setIsLoading(false);
-          if (localMatches.length === 0) {
-            const recheck = await fetchFallbackOrders(rawClean, false);
-            if (recheck.length > 0) {
-              setOrders(recheck);
-              setExpandedOrders(new Set(recheck.map((o) => o.orderId)));
-              setIsSearchBoxOpen(false);
-              setErrorMessage(null);
-            } else {
-              setErrorMessage(`No order found with ID "${rawClean}". Please check your Order ID.`);
+          setErrorMessage(null);
+
+          // Open onSnapshot on this SINGLE document only
+          if (unsubscribeRef.current) unsubscribeRef.current();
+          unsubscribeRef.current = guardedOnSnapshot(
+            doc(db, 'orders', targetSnap.id),
+            'TrackOrderPage.liveDoc',
+            (snap: any) => {
+              if (snap.exists()) {
+                const updatedOrder = mapDocToOrder(snap);
+                setOrders([updatedOrder]);
+                // Automatically unsubscribe when terminal state reached
+                if (updatedOrder.status === 'delivered' || updatedOrder.status === 'rejected') {
+                  if (unsubscribeRef.current) {
+                    try {
+                      unsubscribeRef.current();
+                    } catch {}
+                    unsubscribeRef.current = null;
+                  }
+                }
+              }
+            },
+            (err: any) => {
+              console.warn('Direct order doc listener note (offline/quota):', err);
             }
-          }
+          );
+          return;
         }
-      );
-    } catch (e) {
+      }
+
+      // If document was not found
       setIsLoading(false);
       if (localMatches.length === 0) {
-        setErrorMessage(`No order found with ID "${rawClean}".`);
+        setErrorMessage(`No order found with ID "${rawClean}". Please verify the Order ID.`);
+      }
+    } catch (e: any) {
+      setIsLoading(false);
+      if (localMatches.length === 0) {
+        setErrorMessage(e?.message || `No order found with ID "${rawClean}".`);
       }
     }
   };
@@ -637,7 +567,7 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     setIsLoading(true);
     setErrorMessage(null);
 
-    // 1. Immediately check local backend and localStorage so user sees their orders instantly
+    // 1. Check local backend and localStorage for instant feedback
     const localMatches = await fetchFallbackOrders(cleanPhone, true);
     if (localMatches.length > 0) {
       localMatches.sort((a, b) => {
@@ -652,96 +582,72 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       setErrorMessage(null);
     }
 
-    // 2. Also listen to Firestore live query updates
+    // 2. One-time getDocs query with limit(10) (STRICTLY NO onSnapshot for phone searches)
     try {
       const ordersCol = collection(db, 'orders');
-      const q = query(ordersCol, where('phone', '==', cleanPhone));
+      const q = query(ordersCol, where('phone', '==', cleanPhone), limit(10));
+      const querySnapshot = await guardedGetDocs(q, 'TrackOrderPage.phoneOrdersOneTime');
 
-      if (unsubscribeRef.current) unsubscribeRef.current();
-      unsubscribeRef.current = onSnapshot(
-        q,
-        (querySnapshot) => {
-          setIsLoading(false);
-          if (querySnapshot.empty) {
-            if (localMatches.length > 0) {
-              setOrders(localMatches);
-              setExpandedOrders(new Set([localMatches[0].orderId]));
-              setIsSearchBoxOpen(false);
-              return;
-            }
-            setIsSearchBoxOpen(true);
-            setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
-            return;
-          }
-
-          const fetchedOrders: Order[] = [];
-          querySnapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) return;
-            fetchedOrders.push(mapDocToOrder(docSnap));
-          });
-
-          if (fetchedOrders.length === 0) {
-            if (localMatches.length > 0) {
-              setOrders(localMatches);
-              setExpandedOrders(new Set([localMatches[0].orderId]));
-              setIsSearchBoxOpen(false);
-              return;
-            }
-            setIsSearchBoxOpen(true);
-            setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
-            return;
-          }
-
-          fetchedOrders.sort((a, b) => {
-            const timeA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
-            const timeB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
-            return timeB - timeA;
-          });
-
-          setOrders(fetchedOrders);
+      setIsLoading(false);
+      if (querySnapshot.empty) {
+        if (localMatches.length > 0) {
+          setOrders(localMatches);
+          setExpandedOrders(new Set([localMatches[0].orderId]));
           setIsSearchBoxOpen(false);
-          setErrorMessage(null);
-
-          // Auto-expand latest order
-          setExpandedOrders((prev) => {
-            const newSet = new Set(prev);
-            if (fetchedOrders.length === 1) {
-              newSet.add(fetchedOrders[0].orderId);
-            } else if (initialOrderId) {
-              const found = fetchedOrders.find(
-                (o) => o.orderId === initialOrderId || o.id === initialOrderId
-              );
-              if (found) newSet.add(found.orderId);
-            }
-            return newSet;
-          });
-        },
-        async (error) => {
-          console.warn('Firestore live phone listener note (using sync engine):', error);
-          setIsLoading(false);
-          if (localMatches.length === 0) {
-            const recheck = await fetchFallbackOrders(cleanPhone, true);
-            if (recheck.length > 0) {
-              recheck.sort((a, b) => {
-                const timeA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
-                const timeB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
-                return timeB - timeA;
-              });
-              setOrders(recheck);
-              setExpandedOrders(new Set([recheck[0].orderId]));
-              setIsSearchBoxOpen(false);
-              setErrorMessage(null);
-            } else {
-              setErrorMessage(`No orders found for mobile "${cleanPhone}".`);
-            }
-          }
+          return;
         }
-      );
-    } catch (e) {
+        setIsSearchBoxOpen(true);
+        setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
+        return;
+      }
+
+      const fetchedOrders: Order[] = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) return;
+        fetchedOrders.push(mapDocToOrder(docSnap));
+      });
+
+      if (fetchedOrders.length === 0) {
+        if (localMatches.length > 0) {
+          setOrders(localMatches);
+          setExpandedOrders(new Set([localMatches[0].orderId]));
+          setIsSearchBoxOpen(false);
+          return;
+        }
+        setIsSearchBoxOpen(true);
+        setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
+        return;
+      }
+
+      // Sort in JavaScript memory
+      fetchedOrders.sort((a, b) => {
+        const timeA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+        const timeB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+        return timeB - timeA;
+      });
+
+      setOrders(fetchedOrders);
+      setIsSearchBoxOpen(false);
+      setErrorMessage(null);
+
+      // Auto-expand latest order
+      setExpandedOrders((prev) => {
+        const newSet = new Set(prev);
+        if (fetchedOrders.length === 1) {
+          newSet.add(fetchedOrders[0].orderId);
+        } else if (initialOrderId) {
+          const found = fetchedOrders.find(
+            (o) => o.orderId === initialOrderId || o.id === initialOrderId
+          );
+          if (found) newSet.add(found.orderId);
+        }
+        return newSet;
+      });
+    } catch (e: any) {
       setIsLoading(false);
       if (localMatches.length === 0) {
-        setErrorMessage(`No orders found for mobile "${cleanPhone}".`);
+        setErrorMessage(e?.message || `No orders found for mobile "${cleanPhone}".`);
       }
     }
   };

@@ -1,34 +1,11 @@
-import { doc, setDoc, getDocs, collection, serverTimestamp, writeBatch, deleteField } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, writeBatch, deleteField } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Product } from '../types';
 
-// Hardcoded sample/dummy products that must NEVER be loaded or auto-added
-export const HARDCODED_PRODUCT_NAMES = new Set<string>([
-  'cheese paneer pizza',
-  'farmhouse veggie supreme pizza',
-  'paneer tikka & herb cheese pizza',
-  'classic margherita basil pizza',
-  'crispy peri-peri paneer burger',
-  'gourmet veggie smash cheese burger',
-  'artisanal butter croissant',
-  'truffle sourdough garlic bread',
-  'paneer tikka charcoal wrap',
-  'crispy farmhouse fries with dip',
-  'artisan celebration gourmet cake',
-  'belgian dark chocolate ganache pastry',
-  'new york classic baked cheesecake',
-  'wild berry & mascarpone tart',
-  'cold brew vietnamese iced coffee',
-  'fresh alphonso mango lassi',
-  'gidhaur fresh paneer pizza',
-  'crispy cheese burger',
-  'black forest celebration cake',
-  'belgian chocolate pastry',
-  'butter croissant fresh bake',
-  'crispy aloo samosa (2 pcs)',
-  'signature iced cold coffee',
-  'paneer tikka roll',
-]);
+// Hardcoded sample/dummy products (empty set - all real products in catalog are preserved)
+export const HARDCODED_PRODUCT_NAMES = new Set<string>();
+export const CATALOG_CACHE_VERSION = 'swadeep_v5_264_synced';
+const STORAGE_KEY_CATALOG_VERSION = 'swadeep_catalog_version';
 
 const STORAGE_KEY_DELETED_IDS = 'swadeep_deleted_product_ids';
 const STORAGE_KEY_DELETED_NAMES = 'swadeep_deleted_product_names';
@@ -85,15 +62,23 @@ export async function getProductsFromIndexedDB(): Promise<Product[]> {
 }
 
 /**
- * Persists the entire product catalog in IndexedDB as well as localStorage for dual resilience.
+ * Persists the entire product catalog in IndexedDB as well as a lean copy in localStorage.
+ * Ensures localStorage 5MB quota is never exceeded by omitting huge inline base64 strings.
  */
 export async function saveProductsToIndexedDB(products: Product[]): Promise<void> {
   if (!Array.isArray(products) || products.length === 0) return;
   const cleanList = sanitizeProducts(products);
 
-  // Synchronously write to localStorage for instant render fallback
+  // Synchronously write a lean metadata copy to localStorage (bypasses 5MB quota cap)
   try {
-    localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(cleanList));
+    const leanForLocalStorage = cleanList.map((p) => ({
+      ...p,
+      imageUrl: p.imageUrl && p.imageUrl.startsWith('data:') ? '' : p.imageUrl,
+      images: Array.isArray(p.images)
+        ? p.images.filter((img) => img && !img.startsWith('data:'))
+        : [],
+    }));
+    localStorage.setItem(STORAGE_KEY_CACHED_PRODUCTS, JSON.stringify(leanForLocalStorage));
   } catch {}
 
   try {
@@ -226,6 +211,41 @@ export async function recordDeletedProduct(id: string, name?: string): Promise<v
   }
 }
 
+// Protected restored product IDs (including all 17 Gift Hampers & Combos)
+const PROTECTED_RESTORED_IDS = new Set<string>([
+  '2WA001E5gSuQQvngGJkX', '8RsDN3RUkFvWrgEuOBqz', 'BsCU2ArrtNmBo9F7F3JA',
+  'F2q9GTx7fPxTDNgbDiLm', 'J9iz70nxbrJ6D2i10QLO', 'LXpkdj4b88OFaky45NkN',
+  'V3xk7OKiEA1uzOBzEabN', 'X5yU6euyUPjeH6WdckLO', 'Y5b00epUYtdhXYn3lQm0',
+  'cP6KKm5wFr7u8cSKmwHD', 'oTLjeQ1iOj6J7VdOU8Ua', 'qQHIseJZFEAPjKS0XI4h',
+  'tD4LoPn6ddwQ0D4WU0SZ', 'uVgZUnMTvC9XBtXTe5SD', 'wXP7tcmGqNYSMyANVOtY',
+  'xg6vhuQdzcm3ebdUjzK7', 'yl2xnS7BIKZLokYNHHl7'
+]);
+
+/**
+ * Removes a product from the local deleted sets if an admin creates or edits it.
+ */
+export function unblacklistProduct(id?: string, name?: string): void {
+  if (id) {
+    const ids = getDeletedProductIds();
+    if (ids.has(id)) {
+      ids.delete(id);
+      try {
+        localStorage.setItem(STORAGE_KEY_DELETED_IDS, JSON.stringify(Array.from(ids)));
+      } catch {}
+    }
+  }
+  if (name && name.trim()) {
+    const names = getDeletedProductNames();
+    const norm = name.trim().toLowerCase();
+    if (names.has(norm)) {
+      names.delete(norm);
+      try {
+        localStorage.setItem(STORAGE_KEY_DELETED_NAMES, JSON.stringify(Array.from(names)));
+      } catch {}
+    }
+  }
+}
+
 /**
  * Checks whether a given product is blacklisted (deleted by user or fake mock template)
  */
@@ -234,6 +254,11 @@ export function isProductBlacklisted(product: { id: string; name?: string }): bo
 
   const id = String(product.id || '');
   const normName = (product.name || '').trim().toLowerCase();
+
+  // Restored products must never be blocked
+  if (PROTECTED_RESTORED_IDS.has(id)) {
+    return false;
+  }
 
   // Rule 1: Has been explicitly deleted by user (ID match)
   if (id && getDeletedProductIds().has(id)) {
@@ -346,7 +371,12 @@ export async function syncCatalogFromNetwork(force = false): Promise<Product[]> 
     return inFlightCatalogSync;
   }
 
-  if (!force) {
+  // Force automatic catalog refresh if user has older cached catalog version (e.g. unapproved items)
+  const currentVersion = localStorage.getItem(STORAGE_KEY_CATALOG_VERSION);
+  const isVersionOutdated = currentVersion !== CATALOG_CACHE_VERSION;
+  const shouldForce = force || isVersionOutdated;
+
+  if (!shouldForce) {
     const lastSyncStr = localStorage.getItem(STORAGE_KEY_LAST_SYNC);
     if (lastSyncStr) {
       const lastSync = Number(lastSyncStr);
@@ -363,7 +393,7 @@ export async function syncCatalogFromNetwork(force = false): Promise<Product[]> 
   isSyncingCatalog = true;
   inFlightCatalogSync = (async () => {
     try {
-      // 1. Fetch from local Node API /api/products (0 Firestore reads)
+      // 1. Fetch from local Node API /api/products (STRICTLY 0 Firestore reads)
       try {
         const res = await fetch('/api/products');
         if (res.ok) {
@@ -373,6 +403,7 @@ export async function syncCatalogFromNetwork(force = false): Promise<Product[]> 
             if (cleanList.length > 0) {
               await saveProductsToIndexedDB(cleanList);
               localStorage.setItem(STORAGE_KEY_LAST_SYNC, String(Date.now()));
+              localStorage.setItem(STORAGE_KEY_CATALOG_VERSION, CATALOG_CACHE_VERSION);
               window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: cleanList }));
               return cleanList;
             }
@@ -382,7 +413,7 @@ export async function syncCatalogFromNetwork(force = false): Promise<Product[]> 
         console.warn('API products fetch note:', err);
       }
 
-      // 2. If API is unreachable, return IndexedDB / cached items
+      // 2. If API is unreachable, return local IndexedDB or localStorage (0 Firestore reads)
       const existingIdb = await getProductsFromIndexedDB();
       if (existingIdb.length > 0) {
         return existingIdb;
@@ -390,26 +421,6 @@ export async function syncCatalogFromNetwork(force = false): Promise<Product[]> 
       const existingCached = getSanitizedCachedProducts();
       if (existingCached.length > 0) {
         return existingCached;
-      }
-
-      // 3. Last-resort fallback to Firestore only if catalog is completely empty
-      try {
-        const snap = await getDocs(collection(db, 'products'));
-        if (!snap.empty) {
-          const prods: Product[] = [];
-          snap.forEach((d) => {
-            prods.push({ ...(d.data() as Product), id: d.id });
-          });
-          const cleanList = sanitizeProducts(prods);
-          if (cleanList.length > 0) {
-            await saveProductsToIndexedDB(cleanList);
-            localStorage.setItem(STORAGE_KEY_LAST_SYNC, String(Date.now()));
-            window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: cleanList }));
-            return cleanList;
-          }
-        }
-      } catch (fsErr) {
-        console.warn('Firestore fallback fetch note:', fsErr);
       }
 
       return [];
@@ -423,46 +434,17 @@ export async function syncCatalogFromNetwork(force = false): Promise<Product[]> 
 }
 
 /**
- * Fetches the master catalog from local server API or cache with IndexedDB support
+ * Fetches the master catalog from local server API or cache with IndexedDB support (0 Firestore reads)
  */
 export async function fetchFallbackProducts(): Promise<Product[]> {
   return syncCatalogFromNetwork(false);
 }
 
 /**
- * Syncs the list of user-deleted products from Firestore so all devices stay in sync
+ * Syncs the list of user-deleted products locally (STRICTLY 0 Firestore reads)
  */
 export async function syncDeletedProductsFromFirestore(): Promise<void> {
-  try {
-    const snap = await getDocs(collection(db, 'deleted_products'));
-    if (!snap.empty) {
-      const localIds = getDeletedProductIds();
-      const localNames = getDeletedProductNames();
-      let changed = false;
-
-      snap.forEach((d) => {
-        const data = d.data();
-        if (data.id && !localIds.has(data.id)) {
-          localIds.add(data.id);
-          changed = true;
-        }
-        if (data.name && typeof data.name === 'string') {
-          const norm = data.name.trim().toLowerCase();
-          if (norm && !localNames.has(norm)) {
-            localNames.add(norm);
-            changed = true;
-          }
-        }
-      });
-
-      if (changed) {
-        localStorage.setItem(STORAGE_KEY_DELETED_IDS, JSON.stringify(Array.from(localIds)));
-        localStorage.setItem(STORAGE_KEY_DELETED_NAMES, JSON.stringify(Array.from(localNames)));
-      }
-    }
-  } catch (err) {
-    // Offline or permissions note
-  }
+  // Pure local storage - zero Firestore reads to preserve free quota
 }
 
 /**

@@ -4,14 +4,14 @@ import {
   setDoc,
   deleteDoc,
   writeBatch,
-  getDocs,
   query,
   orderBy,
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { CustomerEmailRecord, Order, OrderStatus, RestaurantSettings } from '../types';
-import { readThrottler } from './readThrottler';
+import { guardedGetDocs } from './firestoreReadGuard';
+import { getSessionCached, setSessionCached, invalidateSessionCache } from './sessionCache';
 
 const STORAGE_KEY = 'swadeep_customer_emails';
 
@@ -39,33 +39,38 @@ export function subscribeToCustomerEmails(callback: (records: CustomerEmailRecor
   };
   window.addEventListener('swadeep_emails_updated', handleUpdate);
 
-  // 2. Fetch once if throttler permits (120s cooldown)
-  if (readThrottler.canFetch('customer_emails', 120000)) {
-    readThrottler.markFetched('customer_emails');
+  // 2. Read ONCE per 24h session (NO 120s polling)
+  getSessionCached<CustomerEmailRecord[]>('customer_emails', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      callback(cached);
+      return;
+    }
     fetch('/api/customer-emails')
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           saveLocalCustomerEmails(data);
+          setSessionCached('customer_emails', data);
           callback(data);
         } else {
-          // If server api is empty, try single getDocs
+          // If server api is empty, try single guarded read
           const colRef = collection(db, 'customer_emails');
           const q = query(colRef, orderBy('lastOrderDate', 'desc'));
-          getDocs(q)
+          guardedGetDocs(q, 'customerEmailService.customerEmails')
             .then((snap) => {
               const records: CustomerEmailRecord[] = [];
               snap.forEach((d) => {
                 records.push({ ...(d.data() as CustomerEmailRecord), id: d.id });
               });
               saveLocalCustomerEmails(records);
+              setSessionCached('customer_emails', records);
               callback(records);
             })
             .catch(() => {});
         }
       })
       .catch(() => {});
-  }
+  });
 
   return () => {
     window.removeEventListener('swadeep_emails_updated', handleUpdate);
@@ -104,7 +109,7 @@ export async function recordCustomerEmail(data: {
   const filtered = currentList.filter((r) => r.email.toLowerCase() !== cleanEmail);
   const nextList = [updatedRecord, ...filtered];
   saveLocalCustomerEmails(nextList);
-  readThrottler.invalidate('customer_emails');
+  invalidateSessionCache('customer_emails');
   try {
     window.dispatchEvent(new CustomEvent('swadeep_emails_updated'));
   } catch {}
@@ -169,7 +174,7 @@ export async function clearAllCustomerEmails(): Promise<void> {
   // 2. Firestore batch delete
   try {
     const colRef = collection(db, 'customer_emails');
-    const snap = await getDocs(colRef);
+    const snap = await guardedGetDocs(colRef, 'customerEmailService.clearAllEmails');
     const batch = writeBatch(db);
     snap.forEach((d) => batch.delete(d.ref));
     await batch.commit();

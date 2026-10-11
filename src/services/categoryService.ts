@@ -1,6 +1,7 @@
-import { doc, getDoc, setDoc, updateDoc, writeBatch, collection, getDocs } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, writeBatch, collection, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { readThrottler } from './readThrottler';
+import { guardedGetDoc, guardedGetDocs } from './firestoreReadGuard';
+import { getSessionCached, setSessionCached, invalidateSessionCache } from './sessionCache';
 
 export const DEFAULT_CATEGORIES = [
   'Pizzas',
@@ -38,7 +39,9 @@ export const DEFAULT_CATEGORIES = [
   'Combos & Meal Boxes',
   'Festive & Seasonal Treats',
   'Kids Zone Treats',
-  'Custom Theme Cakes'
+  'Custom Theme Cakes',
+  'Fruit Juice',
+  'Cream'
 ];
 
 export const DEFAULT_CATEGORY_ICONS: Record<string, CategoryDetail> = {
@@ -77,7 +80,9 @@ export const DEFAULT_CATEGORY_ICONS: Record<string, CategoryDetail> = {
   'Combos & Meal Boxes': { name: 'Combos & Meal Boxes', iconType: 'lucide', iconValue: 'Sparkles' },
   'Festive & Seasonal Treats': { name: 'Festive & Seasonal Treats', iconType: 'lucide', iconValue: 'Sparkles' },
   'Kids Zone Treats': { name: 'Kids Zone Treats', iconType: 'lucide', iconValue: 'Candy' },
-  'Custom Theme Cakes': { name: 'Custom Theme Cakes', iconType: 'lucide', iconValue: 'Cake' }
+  'Custom Theme Cakes': { name: 'Custom Theme Cakes', iconType: 'lucide', iconValue: 'Cake' },
+  'Fruit Juice': { name: 'Fruit Juice', iconType: 'lucide', iconValue: 'GlassWater' },
+  'Cream': { name: 'Cream', iconType: 'lucide', iconValue: 'IceCream' }
 };
 
 export interface CategoryDetail {
@@ -180,7 +185,7 @@ export const saveCategories = async (
       payload.defaultLandingCategory = defaultLandingCategory;
     }
     await setDoc(CATEGORIES_DOC_REF, payload, { merge: true });
-    readThrottler.invalidate('categories');
+    invalidateSessionCache('categories');
   } catch (error: any) {
     console.warn('Category sync note: saving locally (Firestore fallback):', error?.message || error);
     // Still save locally
@@ -228,10 +233,12 @@ export const subscribeToCategories = (
   };
   window.addEventListener('swadeep_categories_updated', handleUpdate);
 
-  // 3. Single fetch with rate-limiting throttler (120s cooldown)
-  if (readThrottler.canFetch('categories', 120000)) {
-    readThrottler.markFetched('categories');
-    getDoc(CATEGORIES_DOC_REF)
+  // 3. Read ONCE per 24h session via IndexedDB (NO 120s polling)
+  getSessionCached<any>('categories', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached) {
+      return;
+    }
+    guardedGetDoc(CATEGORIES_DOC_REF, 'categoryService.categories')
       .then((docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -247,6 +254,7 @@ export const subscribeToCategories = (
             );
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(mergedList));
             localStorage.setItem(LOCAL_STORAGE_ICONS_KEY, JSON.stringify(icons));
+            setSessionCached('categories', { list: mergedList, icons, defaultCat });
             callback(mergedList, icons, defaultCat);
           }
         }
@@ -254,7 +262,7 @@ export const subscribeToCategories = (
       .catch((err) => {
         console.warn('Category fetch note (serving local cache):', err?.message || err);
       });
-  }
+  });
 
   return () => {
     window.removeEventListener('swadeep_categories_updated', handleUpdate);
@@ -267,22 +275,20 @@ export const renameCategoryInProducts = async (
   newCategory: string
 ): Promise<number> => {
   try {
-    const productsSnapshot = await getDocs(collection(db, 'products'));
+    const q = query(collection(db, 'products'), where('category', '==', oldCategory));
+    const productsSnapshot = await guardedGetDocs(q, 'categoryService.renameCategoryInProducts');
     let updatedCount = 0;
     const batch = writeBatch(db);
 
     productsSnapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      if (data.category === oldCategory) {
-        batch.set(
-          doc(db, 'products', docSnap.id),
-          {
-            category: newCategory
-          },
-          { merge: true }
-        );
-        updatedCount++;
-      }
+      batch.set(
+        doc(db, 'products', docSnap.id),
+        {
+          category: newCategory
+        },
+        { merge: true }
+      );
+      updatedCount++;
     });
 
     if (updatedCount > 0) {

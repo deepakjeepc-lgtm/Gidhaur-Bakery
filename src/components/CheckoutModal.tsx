@@ -32,6 +32,9 @@ import { Order } from '../types';
 import { triggerHaptic } from '../utils/haptics';
 import { lockBodyScroll, unlockBodyScroll } from '../utils/scrollLock';
 import { recordCustomerEmail, sendOrderStatusEmail } from '../services/customerEmailService';
+import { QuotaExhaustedModal } from './QuotaExhaustedModal';
+import { isQuotaExhausted, markQuotaExhausted, isFirestoreQuotaError } from '../services/quotaService';
+import { WhatsAppOrderDetails } from '../utils/whatsappOrder';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -72,6 +75,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [quotaModalOpen, setQuotaModalOpen] = useState(false);
+  const [pendingWhatsAppData, setPendingWhatsAppData] = useState<WhatsAppOrderDetails | null>(null);
 
   const deliveryFee = 0;
   const grandTotal = subtotal + deliveryFee;
@@ -290,6 +295,32 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     const chosenPaymentMethod = paymentMethod === 'upi' ? 'upi' : 'cod';
 
+    const whatsAppData: WhatsAppOrderDetails = {
+      restaurantName: settings?.restaurantName || 'Gidhaur Bakery',
+      customerName: cleanName,
+      phone: cleanPhone,
+      address: cleanAddress,
+      notes: cleanNotes,
+      items: orderItems.map((oi) => ({
+        name: oi.name,
+        selectedSize: oi.selectedSize,
+        selectedExtras: oi.selectedExtras,
+        quantity: oi.quantity,
+        price: oi.price,
+      })),
+      subtotal,
+      totalAmount: grandTotal,
+      paymentMethod: chosenPaymentMethod,
+    };
+
+    // If Firestore daily limit is exhausted, divert immediately to WhatsApp direct checkout
+    if (isQuotaExhausted()) {
+      setIsSubmitting(false);
+      setPendingWhatsAppData(whatsAppData);
+      setQuotaModalOpen(true);
+      return;
+    }
+
     const orderPayload = {
       orderId: generatedOrderId,
       customerName: cleanName,
@@ -368,6 +399,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       // Persist to Firestore
       setDoc(orderRef, sanitizedOrderPayload).catch((err) => {
         console.warn('Firestore background order sync notice:', err);
+        if (isFirestoreQuotaError(err)) {
+          markQuotaExhausted();
+          setIsSubmitting(false);
+          setPendingWhatsAppData(whatsAppData);
+          setQuotaModalOpen(true);
+        }
       });
 
       const confirmedOrderData: Order = {
@@ -974,6 +1011,17 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Quota Exhausted Modal with WhatsApp Checkout Fallback */}
+      {quotaModalOpen && pendingWhatsAppData && (
+        <QuotaExhaustedModal
+          isOpen={quotaModalOpen}
+          onClose={() => setQuotaModalOpen(false)}
+          orderDetails={pendingWhatsAppData}
+          storePhone={settings?.contactPhone || '+91 98765 43210'}
+          storeAddress={settings?.address || 'Main Market Road, Gidhaur'}
+        />
+      )}
     </div>
   );
 };

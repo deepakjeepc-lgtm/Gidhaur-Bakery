@@ -268,6 +268,31 @@ app.post('/api/products/batch-stock', (req, res) => {
   res.json({ success: true, count: updates.length });
 });
 
+app.post('/api/products/reorder', (req, res) => {
+  const { orders } = req.body;
+  if (!Array.isArray(orders)) {
+    return res.status(400).json({ error: 'Array of orders required' });
+  }
+  const prods = loadProducts();
+  const orderMap = new Map(orders.map((o: any) => [o.id, o.sortOrder]));
+  let changed = false;
+  const updatedProds = prods.map((p: any) => {
+    if (orderMap.has(p.id)) {
+      const nextSort = orderMap.get(p.id);
+      if (p.sortOrder !== nextSort) {
+        changed = true;
+        return { ...p, sortOrder: nextSort };
+      }
+    }
+    return p;
+  });
+  if (changed) {
+    saveProducts(updatedProds);
+    broadcastSSE('products_update', updatedProds);
+  }
+  res.json({ success: true, count: orders.length });
+});
+
 // Banner Settings endpoints
 app.get('/api/settings/banners', (_req, res) => {
   res.json(store.bannerSettings);
@@ -313,6 +338,29 @@ app.post('/api/orders', (req, res) => {
 
   broadcastSSE('orders_update', store.orders);
   res.json({ success: true, order: newOrder });
+});
+
+app.get('/api/orders/:id', (req, res) => {
+  const { id } = req.params;
+  const clean = id.trim().toLowerCase();
+  const digitsOnly = clean.replace(/\D/g, '');
+  const order = store.orders.find(
+    (o) =>
+      o.id?.toLowerCase() === clean ||
+      o.orderId?.toLowerCase() === clean ||
+      (digitsOnly && o.orderId?.replace(/\D/g, '') === digitsOnly)
+  );
+  if (!order) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  res.json(order);
+});
+
+app.get('/api/orders/phone/:phone', (req, res) => {
+  const { phone } = req.params;
+  const clean = phone.replace(/\D/g, '');
+  const matches = store.orders.filter((o) => (o.phone || '').replace(/\D/g, '') === clean);
+  res.json(matches);
 });
 
 app.patch('/api/orders/:id', (req, res) => {
@@ -385,6 +433,21 @@ app.post('/api/settings', (req, res) => {
   saveStore(store);
   broadcastSSE('settings_update', store.settings);
   res.json({ success: true, settings: store.settings });
+});
+
+// Staff endpoints (0 Firestore reads)
+app.get('/api/staff', (_req, res) => {
+  res.json(store.staff || { deliveryAgents: [], kitchenStaff: [] });
+});
+
+app.post('/api/staff', (req, res) => {
+  const { staff } = req.body;
+  if (staff) {
+    store.staff = { ...store.staff, ...staff };
+    saveStore(store);
+    broadcastSSE('staff_update', store.staff);
+  }
+  res.json({ success: true, staff: store.staff });
 });
 
 // Cleanup product images from storage tracker endpoint

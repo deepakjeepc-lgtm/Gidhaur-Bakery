@@ -13,7 +13,6 @@ import {
   Search,
   Smartphone,
   Laptop,
-  Store,
   Sliders,
   Check,
   Sparkles,
@@ -42,13 +41,20 @@ import {
   deleteCustomerEmail,
   clearAllCustomerEmails
 } from '../../services/customerEmailService';
+import {
+  isQuotaExhausted,
+  isQuotaTestMode,
+  setQuotaTestMode,
+  resetQuotaStatus
+} from '../../services/quotaService';
+import { triggerHaptic } from '../../utils/haptics';
 
 interface PaymentSettingsProps {
   settings: RestaurantSettings;
   onUpdate: (settings: RestaurantSettings) => void;
 }
 
-type SettingsSection = 'website' | 'store' | 'payments' | 'delivery' | 'emails' | 'security';
+type SettingsSection = 'website' | 'payments' | 'delivery' | 'emails' | 'security';
 
 export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onUpdate }) => {
   // Active Sub-Navigation Tab
@@ -100,6 +106,20 @@ export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onU
   const [copiedAllEmails, setCopiedAllEmails] = useState(false);
   const [deletingEmailRecord, setDeletingEmailRecord] = useState<CustomerEmailRecord | null>(null);
   const [isClearingAllEmailsConfirm, setIsClearingAllEmailsConfirm] = useState(false);
+
+  // Quota Safeguards State
+  const [quotaTestActive, setQuotaTestActive] = useState<boolean>(isQuotaTestMode());
+  const [quotaExhaustedActive, setQuotaExhaustedActive] = useState<boolean>(isQuotaExhausted());
+  const [quotaResetToast, setQuotaResetToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleQuotaChange = () => {
+      setQuotaTestActive(isQuotaTestMode());
+      setQuotaExhaustedActive(isQuotaExhausted());
+    };
+    window.addEventListener('swadeep_quota_status_changed', handleQuotaChange);
+    return () => window.removeEventListener('swadeep_quota_status_changed', handleQuotaChange);
+  }, []);
 
   // Subscribe to live customer emails list
   useEffect(() => {
@@ -586,12 +606,6 @@ export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onU
       icon: Globe,
     },
     {
-      id: 'store' as SettingsSection,
-      name: 'Store Profile',
-      shortName: 'Store Profile',
-      icon: Store,
-    },
-    {
       id: 'payments' as SettingsSection,
       name: 'Payments & UPI',
       shortName: 'Payments & UPI',
@@ -712,10 +726,50 @@ export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onU
       )}
 
       {/* ========================================================================= */}
-      {/* SECTION 1: WEBSITE INFORMATION & LOGOS */}
+      {/* SECTION 1: WEBSITE INFORMATION, LOGOS & STORE STATUS */}
       {/* ========================================================================= */}
       {activeSection === 'website' && (
         <div className="space-y-6 animate-fadeIn">
+          {/* Live Store Order Acceptance Status Card */}
+          <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-6 space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <h4 className="font-heading font-extrabold text-sm sm:text-base text-slate-900">
+                    Store Order Acceptance Status
+                  </h4>
+                  <span
+                    className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full ${
+                      isStoreOpen
+                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                        : 'bg-slate-100 text-slate-600 border border-slate-200'
+                    }`}
+                  >
+                    {isStoreOpen ? '● ACCEPTING ORDERS' : '○ STORE PAUSED'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 font-medium">
+                  Toggle store offline during off-hours or maintenance to pause incoming customer orders.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsStoreOpen((prev) => !prev)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  isStoreOpen ? 'bg-emerald-600' : 'bg-slate-300'
+                }`}
+                aria-label="Toggle live store order acceptance"
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    isStoreOpen ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
           {/* FEATURED: Floating Navbar Brand Logo (Wordmark) */}
           <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs hover:border-amber-300/80 transition-colors p-5 sm:p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -1495,6 +1549,62 @@ export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onU
               </div>
             </div>
           </div>
+
+          {/* Official FSSAI License Number Configuration Card */}
+          <div className="p-4 sm:p-5 bg-gradient-to-br from-amber-50/50 via-slate-50 to-white rounded-3xl border border-amber-200/80 shadow-xs space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white border border-amber-200 shadow-2xs flex items-center justify-center shrink-0">
+                  <span className="font-heading font-black text-sky-800 text-sm lowercase">fssai</span>
+                </div>
+                <div>
+                  <h4 className="font-heading font-extrabold text-sm text-slate-900 flex items-center gap-2">
+                    <span>Official FSSAI Food Safety License</span>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      Government Registered
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    This 14-digit license number is officially displayed with the FSSAI logo in the website footer and email notifications.
+                  </p>
+                </div>
+              </div>
+
+              {/* Live Badge Preview */}
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-white rounded-xl border border-slate-200 shadow-2xs select-none shrink-0 self-start sm:self-auto">
+                <span className="font-heading font-black text-[13px] tracking-tight text-sky-800 lowercase">
+                  fssai
+                </span>
+                <div className="h-3 w-px bg-slate-200" />
+                <div className="flex items-baseline gap-1 text-[11px]">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Lic. No.</span>
+                  <span className="font-mono font-extrabold text-slate-900 tracking-wide">
+                    {fssaiLicenseNumber || '20426191000010'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                14-Digit FSSAI License Number *
+              </label>
+              <div className="relative flex items-center max-w-md">
+                <input
+                  type="text"
+                  value={fssaiLicenseNumber}
+                  onChange={(e) => setFssaiLicenseNumber(e.target.value.replace(/[^0-9]/g, '').slice(0, 14))}
+                  placeholder="20426191000010"
+                  maxLength={14}
+                  className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-mono font-extrabold text-slate-900 tracking-wider focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
+                  id="fssai-license-input"
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1 font-medium">
+                Registered FSSAI Number: <span className="font-mono font-bold text-slate-700">20426191000010</span> (You can edit and click "Save All Changes")
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1616,430 +1726,7 @@ export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onU
       )}
 
       {/* ========================================================================= */}
-      {/* SECTION 3: STORE PROFILE & TIMINGS */}
-      {/* ========================================================================= */}
-      {activeSection === 'store' && (
-        <div className="space-y-6 animate-fadeIn">
-          <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-6 space-y-5">
-            <div>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-extrabold uppercase tracking-wider mb-1">
-                <Store className="w-3 h-3 text-amber-600" />
-                <span>Store Profile & Operations</span>
-              </div>
-              <h3 className="font-heading font-extrabold text-lg sm:text-xl text-slate-900">
-                Store Information & Operational Status
-              </h3>
-              <p className="text-xs text-slate-500 font-medium">
-                Store name, contact info, operational timings, and live order acceptance status.
-              </p>
-            </div>
-
-            {/* Store Open/Close Toggle */}
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
-              <div className="space-y-0.5">
-                <span className="text-xs font-bold text-slate-900 block">
-                  Store Currently Accepting Orders (Live Open/Closed)
-                </span>
-                <p className="text-[11px] text-slate-500 font-medium">
-                  Toggle store offline during off-hours or maintenance to pause incoming customer orders.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setIsStoreOpen((prev) => !prev)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  isStoreOpen ? 'bg-emerald-600' : 'bg-slate-300'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                    isStoreOpen ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Store Name *
-                </label>
-                <input
-                  type="text"
-                  value={restaurantName}
-                  onChange={(e) => setRestaurantName(e.target.value)}
-                  placeholder="Gidhaur Bakery"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Home Screen Message / Headline
-                </label>
-                <input
-                  type="text"
-                  value={homeScreenMessage}
-                  onChange={(e) => setHomeScreenMessage(e.target.value)}
-                  placeholder="I want to Eat..."
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">Appears above categories on mobile home screen (default: "I want to Eat...")</p>
-              </div>
-
-              {/* Global Typography & Headline Customizer (CSS Variables - Zero Re-render) */}
-              <div className="sm:col-span-2 bg-gradient-to-br from-slate-50 via-white to-slate-50/80 border border-slate-200/90 rounded-2xl p-5 shadow-2xs mt-1">
-                <div className="flex items-center justify-between gap-2 mb-4 pb-3 border-b border-slate-100">
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                      <Sliders className="w-4 h-4 text-amber-600" />
-                      Global Typography & Headline Styling
-                    </h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Adjust global text tracking (letter-spacing) and customize the home headline with 20 fonts (including Roboto Mono & Cursive). Powered by instant CSS variables.
-                    </p>
-                  </div>
-                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    Live CSS
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {/* 1. Global Tracking (Letter Spacing) Slider */}
-                  <div className="sm:col-span-2 bg-slate-50/80 border border-slate-200/70 rounded-xl p-3.5">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                        Global Tracking (Letter Spacing)
-                      </label>
-                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-900 text-white">
-                        {globalTracking > 0 ? `+${globalTracking.toFixed(3)}` : globalTracking.toFixed(3)}em
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min="-0.02"
-                      max="0.08"
-                      step="0.005"
-                      value={globalTracking}
-                      onChange={(e) => handleTrackingChange(Number(e.target.value))}
-                      className="w-full accent-slate-900 cursor-pointer"
-                    />
-                    <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono">
-                      <span>Tight (-0.02em)</span>
-                      <span>Default (+0.015em)</span>
-                      <span>Spacious (+0.08em)</span>
-                    </div>
-                    <p
-                      style={{ letterSpacing: `${globalTracking}em` }}
-                      className="text-xs text-slate-700 mt-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200/80 select-none font-medium truncate"
-                    >
-                      Sample: The quick brown fox jumps over the lazy dog (₹249)
-                    </p>
-                  </div>
-
-                  {/* 2. Headline Font Family (20 Google Fonts List) */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Headline Font (20 Curated Fonts)
-                    </label>
-                    <select
-                      value={homeHeadlineFont}
-                      onChange={(e) => handleHeadlineFontChange(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
-                    >
-                      <optgroup label="Modern Sans-Serif (8)">
-                        {AVAILABLE_FONTS.filter((f) => f.category === 'sans').map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name}
-                          </option>
-                        ))}
-                      </optgroup>
-
-                      <optgroup label="Elegant Serifs (4)">
-                        {AVAILABLE_FONTS.filter((f) => f.category === 'serif').map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name}
-                          </option>
-                        ))}
-                      </optgroup>
-
-                      <optgroup label="Monospace & Code (3)">
-                        {AVAILABLE_FONTS.filter((f) => f.category === 'mono').map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name}
-                          </option>
-                        ))}
-                      </optgroup>
-
-                      <optgroup label="Cursive & Handwritten Scripts (5)">
-                        {AVAILABLE_FONTS.filter((f) => f.category === 'cursive').map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    </select>
-                    <p className="text-[10px] text-slate-400 mt-1">Includes Roboto Mono & 5 Cursive styles</p>
-                  </div>
-
-                  {/* 3. Headline Font Size Slider */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-bold text-slate-700">
-                        Headline Font Size
-                      </label>
-                      <span className="text-xs font-mono font-bold text-slate-900">
-                        {homeHeadlineSize}px
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min="18"
-                      max="44"
-                      step="1"
-                      value={homeHeadlineSize}
-                      onChange={(e) => handleHeadlineSizeChange(Number(e.target.value))}
-                      className="w-full accent-slate-900 cursor-pointer mt-1"
-                    />
-                    <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono">
-                      <span>18px</span>
-                      <span>Default (28px)</span>
-                      <span>44px</span>
-                    </div>
-                  </div>
-
-                  {/* 4. Headline Text Color */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Headline Text Color
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={homeHeadlineColor}
-                        onChange={(e) => handleHeadlineColorChange(e.target.value)}
-                        className="w-9 h-9 rounded-xl border border-slate-200 cursor-pointer p-0.5"
-                      />
-                      <input
-                        type="text"
-                        value={homeHeadlineColor}
-                        onChange={(e) => handleHeadlineColorChange(e.target.value)}
-                        placeholder="#0f172a"
-                        className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* 5. Active Category Color */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Active Category Color
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={categoryActiveColor}
-                        onChange={(e) => setCategoryActiveColor(e.target.value)}
-                        className="w-9 h-9 rounded-xl border border-slate-200 cursor-pointer p-0.5"
-                      />
-                      <input
-                        type="text"
-                        value={categoryActiveColor}
-                        onChange={(e) => setCategoryActiveColor(e.target.value)}
-                        placeholder="#0f172a"
-                        className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* 6. Inactive Category Color */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Inactive Category Color
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={categoryInactiveColor}
-                        onChange={(e) => setCategoryInactiveColor(e.target.value)}
-                        className="w-9 h-9 rounded-xl border border-slate-200 cursor-pointer p-0.5"
-                      />
-                      <input
-                        type="text"
-                        value={categoryInactiveColor}
-                        onChange={(e) => setCategoryInactiveColor(e.target.value)}
-                        placeholder="#64748b"
-                        className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Real-time Headline Live Preview */}
-                <div className="mt-4 pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200/80">
-                  <div className="overflow-hidden">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">
-                      Live Preview
-                    </span>
-                    <h3
-                      style={{
-                        fontFamily: AVAILABLE_FONTS.find((f) => f.id === homeHeadlineFont)?.fontFamily || homeHeadlineFont,
-                        fontSize: `${homeHeadlineSize}px`,
-                        color: homeHeadlineColor,
-                        letterSpacing: `${globalTracking}em`,
-                      }}
-                      className="font-extrabold leading-none truncate max-w-sm sm:max-w-md"
-                    >
-                      {homeScreenMessage || 'I want to Eat...'}
-                    </h3>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span
-                      style={{ color: categoryActiveColor }}
-                      className="text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-100/80"
-                    >
-                      Active Tab
-                    </span>
-                    <span
-                      style={{ color: categoryInactiveColor }}
-                      className="text-xs font-medium opacity-70"
-                    >
-                      Inactive Tab
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Customer Support Phone / WhatsApp *
-                </label>
-                <input
-                  type="text"
-                  value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                  placeholder="+91 98765 43210"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Store Address
-                </label>
-                <input
-                  type="text"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="Main Road, Gidhaur"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Daily Opening Hours
-                </label>
-                <input
-                  type="text"
-                  value={openingHours}
-                  onChange={(e) => setOpeningHours(e.target.value)}
-                  placeholder="08:00 AM - 10:30 PM (Everyday)"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Average Food Preparation Time (Minutes)
-                </label>
-                <input
-                  type="number"
-                  value={defaultPrepTimeMinutes}
-                  onChange={(e) => setDefaultPrepTimeMinutes(Number(e.target.value))}
-                  placeholder="15"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Minimum Order Amount (₹)
-                </label>
-                <input
-                  type="number"
-                  value={minOrderAmount}
-                  onChange={(e) => setMinOrderAmount(Number(e.target.value))}
-                  placeholder="99"
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white"
-                />
-              </div>
-
-              {/* Official FSSAI License Number Configuration Card */}
-              <div className="sm:col-span-2 p-4 sm:p-5 bg-gradient-to-br from-amber-50/50 via-slate-50 to-white rounded-2xl border border-amber-200/80 shadow-2xs space-y-3.5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-100">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-white border border-amber-200 shadow-2xs flex items-center justify-center shrink-0">
-                      <span className="font-heading font-black text-sky-800 text-sm lowercase">fssai</span>
-                    </div>
-                    <div>
-                      <h4 className="font-heading font-extrabold text-sm text-slate-900 flex items-center gap-2">
-                        <span>Official FSSAI Food Safety License</span>
-                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                          Government Registered
-                        </span>
-                      </h4>
-                      <p className="text-[11px] text-slate-500 font-medium">
-                        This 14-digit license number is officially displayed with the FSSAI logo in the website footer and email notifications.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Live Badge Preview */}
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-white rounded-xl border border-slate-200 shadow-2xs select-none shrink-0 self-start sm:self-auto">
-                    <span className="font-heading font-black text-[13px] tracking-tight text-sky-800 lowercase">
-                      fssai
-                    </span>
-                    <div className="h-3 w-px bg-slate-200" />
-                    <div className="flex items-baseline gap-1 text-[11px]">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Lic. No.</span>
-                      <span className="font-mono font-extrabold text-slate-900 tracking-wide">
-                        {fssaiLicenseNumber || '20426191000010'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    14-Digit FSSAI License Number *
-                  </label>
-                  <div className="relative flex items-center max-w-md">
-                    <input
-                      type="text"
-                      value={fssaiLicenseNumber}
-                      onChange={(e) => setFssaiLicenseNumber(e.target.value.replace(/[^0-9]/g, '').slice(0, 14))}
-                      placeholder="20426191000010"
-                      maxLength={14}
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-mono font-extrabold text-slate-900 tracking-wider focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
-                      id="fssai-license-input"
-                    />
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-1 font-medium">
-                    Registered FSSAI Number: <span className="font-mono font-bold text-slate-700">20426191000010</span> (You can edit and click "Save All Changes")
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-
-
-      {/* ========================================================================= */}
-      {/* SECTION 4: DELIVERY & COVERAGE */}
+      {/* SECTION 3: DELIVERY & COVERAGE */}
       {/* ========================================================================= */}
       {activeSection === 'delivery' && (
         <div className="space-y-6 animate-fadeIn">
@@ -2811,6 +2498,98 @@ export const PaymentSettings = React.memo<PaymentSettingsProps>(({ settings, onU
             </div>
 
             <AdminAccountsManagement />
+          </div>
+
+          {/* Database & Daily Quota Safeguards Card */}
+          <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-6 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200 text-[10px] font-extrabold uppercase tracking-wider mb-1">
+                  <Sparkles className="w-3 h-3 text-sky-600" />
+                  <span>Database Quota Safeguards</span>
+                </div>
+                <h3 className="font-heading font-extrabold text-lg sm:text-xl text-slate-900">
+                  Daily Limit & WhatsApp Checkout Fallback
+                </h3>
+                <p className="text-xs text-slate-500 max-w-xl leading-relaxed">
+                  Firestore free tier provides 50,000 reads and 20,000 writes per day. When this limit is reached, direct database orders pause and customers get an instant <strong>WhatsApp Checkout</strong> option with prefilled order details so no business is lost.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold border ${
+                    quotaExhaustedActive
+                      ? 'bg-amber-100 text-amber-900 border-amber-300'
+                      : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                  }`}
+                >
+                  {quotaExhaustedActive ? 'Limit Full (WhatsApp Active)' : 'Normal Booking Active'}
+                </span>
+              </div>
+            </div>
+
+            {/* Simulation Toggle */}
+            <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <span className="font-bold text-xs sm:text-sm text-slate-800">
+                  Simulate Daily Limit Full (Test WhatsApp Fallback)
+                </span>
+                <p className="text-[11px] text-slate-500">
+                  Turn this on anytime to preview the customer 'Orders Full' notice, test WhatsApp checkout button, and verify admin product protection.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('selection');
+                  const nextVal = !quotaTestActive;
+                  setQuotaTestMode(nextVal);
+                  setQuotaTestActive(nextVal);
+                  setQuotaExhaustedActive(isQuotaExhausted());
+                }}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  quotaTestActive ? 'bg-amber-600' : 'bg-slate-300'
+                }`}
+                role="switch"
+                aria-checked={quotaTestActive}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    quotaTestActive ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Reset Button & Target Number */}
+            <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <p className="text-[11px] text-slate-500">
+                Fallback WhatsApp Number:{' '}
+                <span className="font-mono text-slate-800 font-bold">
+                  {contactPhone || '+91 98765 43210'}
+                </span>
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('selection');
+                  resetQuotaStatus();
+                  setQuotaTestActive(false);
+                  setQuotaExhaustedActive(false);
+                  setQuotaResetToast('✓ Daily quota status reset to normal!');
+                  setTimeout(() => setQuotaResetToast(null), 3000);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
+              >
+                Reset Quota Status
+              </button>
+            </div>
+
+            {quotaResetToast && (
+              <p className="text-xs font-bold text-emerald-600 animate-fadeIn">{quotaResetToast}</p>
+            )}
           </div>
         </div>
       )}

@@ -1,14 +1,13 @@
 import {
   collection,
   query,
-  orderBy,
-  limit,
-  onSnapshot,
-  Unsubscribe,
+  where,
+  Unsubscribe
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Order } from '../types';
 import { dbConnectionService } from './dbConnectionService';
+import { guardedOnSnapshot } from './firestoreReadGuard';
 
 type OrderSubscriber = (orders: Order[]) => void;
 
@@ -30,37 +29,46 @@ class OrderListenerService {
         }
       }
     } catch {}
+
+    // Unsubscribe when tab is hidden, re-subscribe when visible
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          this.detachListener();
+        } else if (document.visibilityState === 'visible' && this.subscribers.size > 0) {
+          this.ensureListenerAttached();
+        }
+      });
+    }
   }
 
   /**
    * Subscribe to live active orders.
-   * If this is the first subscriber, opens a SINGLE Firestore snapshot listener.
-   * Subsequent subscribers share the same stream with zero extra reads.
-   * Returns an unsubscribe cleanup function.
+   * Exclusively used on Admin, Kitchen, Prep, and Delivery screens.
+   * NEVER used on customer screens.
+   * Single singleton onSnapshot across the browser tab.
    */
   public subscribe(callback: OrderSubscriber): () => void {
     this.subscribers.add(callback);
 
-    // Immediately deliver cached orders so subscriber never waits on network
+    // Immediately deliver cached orders
     if (this.cachedOrders.length > 0) {
       callback(this.cachedOrders);
     }
 
-    // Attach single Firestore listener if not already active
-    this.ensureListenerAttached();
+    // Attach single Firestore listener if tab is visible
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+      this.ensureListenerAttached();
+    }
 
     return () => {
       this.subscribers.delete(callback);
-      // If no components are listening anymore, terminate Firestore stream immediately
       if (this.subscribers.size === 0) {
         this.detachListener();
       }
     };
   }
 
-  /**
-   * Returns currently cached orders synchronously
-   */
   public getOrders(): Order[] {
     return this.cachedOrders;
   }
@@ -68,7 +76,7 @@ class OrderListenerService {
   private ensureListenerAttached(): void {
     if (this.activeUnsubscribe || this.isConnecting) return;
 
-    // Throttle reconnect if an error recently occurred (cooldown 60 seconds)
+    // Cooldown on error: 60s
     if (Date.now() - this.lastFetchErrorTime < 60000) {
       return;
     }
@@ -76,15 +84,21 @@ class OrderListenerService {
     try {
       this.isConnecting = true;
       const ordersCol = collection(db, 'orders');
-      // Strictly bounded query: only the latest 25 orders to prevent massive reads
-      const q = query(ordersCol, orderBy('createdAt', 'desc'), limit(25));
 
-      this.activeUnsubscribe = onSnapshot(
+      // Requirement: where status in ['pending','accepted','preparing','out_for_delivery']
+      // No orderBy (zero composite index required), no restrictive limit.
+      const q = query(
+        ordersCol,
+        where('status', 'in', ['pending', 'accepted', 'preparing', 'out_for_delivery'])
+      );
+
+      this.activeUnsubscribe = guardedOnSnapshot(
         q,
-        (snapshot) => {
+        'orderListenerService.activeOrders',
+        (snapshot: any) => {
           this.isConnecting = false;
           const list: Order[] = [];
-          snapshot.forEach((docSnap) => {
+          snapshot.forEach((docSnap: any) => {
             const data = docSnap.data() as Order;
             list.push({
               ...data,
@@ -93,15 +107,34 @@ class OrderListenerService {
             });
           });
 
+          // Sort in JavaScript memory (descending by createdAt)
+          list.sort((a, b) => {
+            const timeA = a.createdAt instanceof Date
+              ? a.createdAt.getTime()
+              : a.createdAt && typeof (a.createdAt as any).toDate === 'function'
+              ? (a.createdAt as any).toDate().getTime()
+              : a.createdAt
+              ? new Date(a.createdAt).getTime()
+              : 0;
+
+            const timeB = b.createdAt instanceof Date
+              ? b.createdAt.getTime()
+              : b.createdAt && typeof (b.createdAt as any).toDate === 'function'
+              ? (b.createdAt as any).toDate().getTime()
+              : b.createdAt
+              ? new Date(b.createdAt).getTime()
+              : 0;
+
+            return timeB - timeA;
+          });
+
           this.cachedOrders = list;
           try {
             localStorage.setItem('swadeep_recent_orders', JSON.stringify(list));
           } catch {}
 
-          // Pass connection status passively to dbConnectionService
           dbConnectionService.recordSnapshotArrival(snapshot.metadata?.fromCache);
 
-          // Broadcast to all active subscribers
           this.subscribers.forEach((cb) => {
             try {
               cb(list);
@@ -114,18 +147,14 @@ class OrderListenerService {
           this.isConnecting = false;
           this.lastFetchErrorTime = Date.now();
           console.warn('Singleton order listener note (quota/offline, serving local cache):', error?.message || error);
-
-          // Notify connection monitor of error
           dbConnectionService.recordFirestoreError(error);
 
-          // Gracefully serve local cache to all subscribers
           this.subscribers.forEach((cb) => {
             try {
               cb(this.cachedOrders);
             } catch {}
           });
 
-          // If quota exceeded or backend unavailable, detach listener to avoid continuous retry bursts
           if (
             error?.code === 'resource-exhausted' ||
             error?.code === 'unavailable' ||

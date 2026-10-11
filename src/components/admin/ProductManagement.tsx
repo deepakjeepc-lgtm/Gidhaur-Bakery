@@ -11,6 +11,7 @@ import {
   Leaf,
   Link2,
   GripVertical,
+  Download,
   X
 } from 'lucide-react';
 import { triggerHaptic } from '../../utils/haptics';
@@ -28,8 +29,10 @@ import { db } from '../../firebase/config';
 import { Product } from '../../types';
 import {
   recordDeletedProduct,
+  unblacklistProduct,
   sanitizeProducts,
-  getSanitizedCachedProducts
+  getSanitizedCachedProducts,
+  saveProductsToIndexedDB
 } from '../../services/productService';
 import { cleanupProductImages } from '../../services/storageCleanupService';
 import {
@@ -45,10 +48,13 @@ import { ProductFormScreen } from './ProductFormScreen';
 import { ProductLinkGroupScreen } from './ProductLinkGroupScreen';
 import { ExtrasManagementScreen } from './ExtrasManagementScreen';
 import { renderCategoryIcon } from '../../utils/categoryIcons';
+import { isQuotaExhausted } from '../../services/quotaService';
+import { AdminQuotaBlockedModal } from './AdminQuotaBlockedModal';
 
 interface ProductManagementProps {
   products: Product[];
   onRefresh?: () => void;
+  onUpdateProducts?: (products: Product[]) => void;
 }
 
 // -------------------------------------------------------------
@@ -299,7 +305,7 @@ const ProductTableRow = memo<ProductTableRowProps>(({
 ProductTableRow.displayName = 'ProductTableRow';
 
 // -------------------------------------------------------------
-export const ProductManagement = React.memo<ProductManagementProps>(({ products, onRefresh }) => {
+export const ProductManagement = React.memo<ProductManagementProps>(({ products, onRefresh, onUpdateProducts }) => {
   // Local optimistic products state for butter-smooth zero-reload reordering
   const [localProducts, setLocalProducts] = useState<Product[]>(products);
   const isDraggingRef = useRef(false);
@@ -324,6 +330,7 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
   // Deletion modal state
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [quotaBlockedModalOpen, setQuotaBlockedModalOpen] = useState(false);
 
   // Flipkart Variant Linking Screen
   const [linkGroupProduct, setLinkGroupProduct] = useState<Product | null>(null);
@@ -351,11 +358,21 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
   }, []);
 
   const openAddScreen = useCallback(() => {
+    if (isQuotaExhausted()) {
+      triggerHaptic('error');
+      setQuotaBlockedModalOpen(true);
+      return;
+    }
     setEditingProduct(null);
     setActiveSubView('add-edit');
   }, []);
 
   const openEditScreen = useCallback((prod: Product) => {
+    if (isQuotaExhausted()) {
+      triggerHaptic('error');
+      setQuotaBlockedModalOpen(true);
+      return;
+    }
     setEditingProduct(prod);
     setActiveSubView('add-edit');
   }, []);
@@ -369,6 +386,24 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
     setEditingProduct(null);
   }, []);
 
+// Helper to recursively remove all undefined properties so Firestore never rejects payloads
+function cleanPayloadDeep<T>(val: T): T {
+  if (val === null || val === undefined) return null as any;
+  if (Array.isArray(val)) {
+    return val.map(cleanPayloadDeep).filter((v) => v !== undefined) as any;
+  }
+  if (typeof val === 'object' && !(val instanceof Date)) {
+    const cleaned: any = {};
+    for (const [key, v] of Object.entries(val as any)) {
+      if (v !== undefined) {
+        cleaned[key] = cleanPayloadDeep(v);
+      }
+    }
+    return cleaned;
+  }
+  return val;
+}
+
   // Save product from isolated ProductFormModal
   const handleSaveProduct = useCallback(
     async ({
@@ -380,6 +415,13 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
       productPayload: Partial<Product>;
       isFeatured: boolean;
     }) => {
+      // Guard: Block saving if Firestore daily limit is reached
+      if (isQuotaExhausted()) {
+        triggerHaptic('error');
+        setQuotaBlockedModalOpen(true);
+        return;
+      }
+
       // Auto-save category if new
       if (productPayload.category && !categories.includes(productPayload.category)) {
         const updatedCats = [...categories, productPayload.category];
@@ -388,7 +430,7 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
       }
 
       // Sanitize payload: Ensure imageFits contains ONLY valid Firestore keys (no periods, slashes, or URLs)
-      const cleanPayload: any = { ...productPayload };
+      let cleanPayload: any = { ...productPayload };
       if (cleanPayload.imageFits && typeof cleanPayload.imageFits === 'object') {
         const sanitizedFits: Record<string, 'cover' | 'contain'> = {};
         for (const [key, val] of Object.entries(cleanPayload.imageFits)) {
@@ -399,31 +441,59 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
         cleanPayload.imageFits = sanitizedFits;
       }
 
-      // Remove undefined values to prevent Firestore serialization errors
-      Object.keys(cleanPayload).forEach((k) => {
-        if (cleanPayload[k] === undefined) {
-          delete cleanPayload[k];
-        }
-      });
+      // Recursively strip all undefined values so Firestore never throws Unsupported field value: undefined
+      cleanPayload = cleanPayloadDeep(cleanPayload);
+
+      // Determine document reference & persistent ID upfront (0 Firestore reads)
+      const newDocRef = id ? doc(db, 'products', id) : doc(collection(db, 'products'));
+      const resolvedId = id || newDocRef.id;
+
+      // Un-blacklist product if it was previously in local deleted sets
+      unblacklistProduct(resolvedId, cleanPayload.name);
 
       // 1. Immediate optimistic local update for 0ms perceptible latency
       try {
-        const cachedStr = localStorage.getItem('swadeep_cached_products');
-        let currentProds: Product[] = cachedStr ? JSON.parse(cachedStr) : [...products];
+        let currentProds: Product[] = localProducts.length > 0 ? [...localProducts] : [...products];
         const minOrder = currentProds.reduce((min, p) => Math.min(min, p.sortOrder ?? 100), 100);
-        const resolvedId = id || `item-${Date.now()}`;
         const updatedItem = {
           ...cleanPayload,
           id: resolvedId,
-          sortOrder: isFeatured ? minOrder - 1 : 100,
+          sortOrder: isFeatured ? minOrder - 1 : (cleanPayload.sortOrder ?? 100),
         } as Product;
 
+        let itemReplaced = false;
         if (id) {
-          currentProds = currentProds.map((p) => (p.id === id ? { ...p, ...updatedItem } : p));
-        } else {
+          currentProds = currentProds.map((p) => {
+            if (String(p.id) === String(id)) {
+              itemReplaced = true;
+              return { ...p, ...updatedItem };
+            }
+            return p;
+          });
+        }
+        if (!itemReplaced) {
           currentProds.unshift(updatedItem);
         }
-        localStorage.setItem('swadeep_cached_products', JSON.stringify(currentProds));
+
+        // Update local state immediately so table never drops to 0!
+        setLocalProducts(currentProds);
+        if (onUpdateProducts) onUpdateProducts(currentProds);
+
+        // Auto-switch to the category so user immediately sees the item
+        if (cleanPayload.category) {
+          setSelectedCategory(cleanPayload.category);
+          setSearchQuery('');
+        }
+
+        // Save to IndexedDB
+        saveProductsToIndexedDB(currentProds).catch(() => {});
+
+        // Safe localStorage write
+        try {
+          localStorage.setItem('swadeep_cached_products', JSON.stringify(currentProds));
+        } catch {}
+
+        // Dispatch update event with complete array
         window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: currentProds }));
         if (onRefresh) onRefresh();
 
@@ -433,58 +503,46 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updatedItem),
         }).catch(() => {});
-      } catch {}
+      } catch (err) {
+        console.warn('Optimistic product update error:', err);
+      }
 
       setSeedSuccessMessage(`✓ "${cleanPayload.name}" ${id ? 'updated' : 'added'} successfully!`);
       setTimeout(() => setSeedSuccessMessage(null), 3500);
 
-      // 2. Persist to Firestore in background
+      // 2. Persist to Firestore in background (STRICTLY 0 reads, 1 atomic write)
       try {
-        if (id) {
-          const prodDoc = doc(db, 'products', id);
-          await setDoc(
-            prodDoc,
-            {
-              ...cleanPayload,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        } else {
-          const minOrder = products.reduce((min, p) => Math.min(min, p.sortOrder ?? 100), 100);
-          await addDoc(collection(db, 'products'), {
+        await setDoc(
+          newDocRef,
+          {
             ...cleanPayload,
-            sortOrder: isFeatured ? minOrder - 1 : 100,
-            createdAt: serverTimestamp(),
-          });
-        }
-        // Also sync to local server API fallback
-        try {
-          fetch('/api/products', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...cleanPayload, id: id || `item-${Date.now()}` }),
-          }).catch(() => {});
-        } catch {}
-      } catch (err) {
-        console.warn('Firestore product persist notice (saved locally):', err);
+            id: resolvedId,
+            ...(id
+              ? { updatedAt: serverTimestamp() }
+              : { createdAt: serverTimestamp(), updatedAt: serverTimestamp() }),
+          },
+          { merge: true }
+        );
+      } catch (err: any) {
+        console.warn('Firestore product persist notice (saved locally & server):', err?.message || err);
       }
     },
-    [categories, products]
+    [categories, products, localProducts, onRefresh]
   );
 
   // Toggle in-stock status
   const handleToggleAvailability = useCallback(
     async (product: Product) => {
+      const currentProds = localProducts.length > 0 ? [...localProducts] : [...products];
+      const updated = currentProds.map((p) =>
+        p.id === product.id ? { ...p, available: !product.available } : p
+      );
+      setLocalProducts(updated);
+      saveProductsToIndexedDB(updated).catch(() => {});
       try {
-        const cachedStr = localStorage.getItem('swadeep_cached_products');
-        const currentProds: Product[] = cachedStr ? JSON.parse(cachedStr) : [...products];
-        const updated = currentProds.map((p) =>
-          p.id === product.id ? { ...p, available: !product.available } : p
-        );
         localStorage.setItem('swadeep_cached_products', JSON.stringify(updated));
-        window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: updated }));
       } catch {}
+      window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: updated }));
 
       try {
         const prodDoc = doc(db, 'products', product.id);
@@ -500,25 +558,25 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
         console.warn('Firestore stock update note:', err?.message || err);
       }
     },
-    [products]
+    [products, localProducts]
   );
 
   // Toggle Featured & Pinned to front
   const handleToggleFeatured = useCallback(
     async (product: Product) => {
       const isNowFeatured = !product.isFeatured && !product.isPinnedToFront;
-
+      const currentProds = localProducts.length > 0 ? [...localProducts] : [...products];
+      const updated = currentProds.map((p) =>
+        p.id === product.id
+          ? { ...p, isFeatured: isNowFeatured, isPinnedToFront: isNowFeatured }
+          : p
+      );
+      setLocalProducts(updated);
+      saveProductsToIndexedDB(updated).catch(() => {});
       try {
-        const cachedStr = localStorage.getItem('swadeep_cached_products');
-        const currentProds: Product[] = cachedStr ? JSON.parse(cachedStr) : [...products];
-        const updated = currentProds.map((p) =>
-          p.id === product.id
-            ? { ...p, isFeatured: isNowFeatured, isPinnedToFront: isNowFeatured }
-            : p
-        );
         localStorage.setItem('swadeep_cached_products', JSON.stringify(updated));
-        window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: updated }));
       } catch {}
+      window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: updated }));
 
       try {
         const prodDoc = doc(db, 'products', product.id);
@@ -535,10 +593,10 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
         console.warn('Firestore featured update note:', err?.message || err);
       }
     },
-    [products]
+    [products, localProducts]
   );
 
-  // Reorder helper with instantaneous local cache dispatch
+  // Reorder helper with instantaneous local cache dispatch & zero-waste persistence
   const updateProductOrderList = useCallback(
     async (updatedList: Product[], successMsg?: string) => {
       const reordered = updatedList.map((p, i) => ({
@@ -567,21 +625,40 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
         setTimeout(() => setSeedSuccessMessage(null), 3000);
       }
 
+      // 1. Sync to local server with 0 Firestore writes
       try {
-        const batch = writeBatch(db);
-        reordered.forEach((p) => {
-          batch.set(
-            doc(db, 'products', p.id),
-            {
-              sortOrder: p.sortOrder,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
+        fetch('/api/products/reorder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orders: reordered.map((p) => ({ id: p.id, sortOrder: p.sortOrder })),
+          }),
+        }).catch(() => {});
+      } catch {}
+
+      // 2. Only update Firestore documents whose sortOrder ACTUALLY changed
+      try {
+        const changedProducts = reordered.filter((p) => {
+          const orig = products.find((oldP) => oldP.id === p.id);
+          return !orig || orig.sortOrder !== p.sortOrder;
         });
-        await batch.commit();
+
+        if (changedProducts.length > 0) {
+          const batch = writeBatch(db);
+          changedProducts.slice(0, 50).forEach((p) => {
+            batch.set(
+              doc(db, 'products', p.id),
+              {
+                sortOrder: p.sortOrder,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          });
+          await batch.commit();
+        }
       } catch (err: any) {
-        console.warn('Batch update product sortOrder note:', err?.message || err);
+        console.warn('Optimized sortOrder update note:', err?.message || err);
       }
     },
     [products]
@@ -596,33 +673,54 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
     }
     productSaveDebounceRef.current = window.setTimeout(async () => {
       try {
-        // Quietly update local storage cache without full-page event
-        const cachedStr = localStorage.getItem('swadeep_cached_products');
-        const allCurrent: Product[] = cachedStr ? JSON.parse(cachedStr) : [...updatedList];
         const orderMap = new Map<string, number>();
         updatedList.forEach((p, i) => orderMap.set(p.id, i + 1));
 
-        const newAll = allCurrent.map((p) => {
+        const baseList = localProducts.length > 0 ? localProducts : products;
+        const newAll = baseList.map((p) => {
           if (orderMap.has(p.id)) {
             return { ...p, sortOrder: orderMap.get(p.id) };
           }
           return p;
         });
-        localStorage.setItem('swadeep_cached_products', JSON.stringify(newAll));
 
-        // Firestore batch update in background
-        const batch = writeBatch(db);
-        updatedList.forEach((p, i) => {
-          batch.set(
-            doc(db, 'products', p.id),
-            {
-              sortOrder: i + 1,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        });
-        await batch.commit();
+        setLocalProducts(newAll);
+        saveProductsToIndexedDB(newAll).catch(() => {});
+        try {
+          localStorage.setItem('swadeep_cached_products', JSON.stringify(newAll));
+        } catch {}
+        window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: newAll }));
+
+        // 1. Sync to local server with 0 Firestore writes
+        try {
+          fetch('/api/products/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              orders: updatedList.map((p, i) => ({ id: p.id, sortOrder: i + 1 })),
+            }),
+          }).catch(() => {});
+        } catch {}
+
+        // 2. Only write documents that actually changed position in Firestore
+        const changedProducts = updatedList
+          .map((p, i) => ({ ...p, nextSort: i + 1 }))
+          .filter((p) => p.sortOrder !== p.nextSort);
+
+        if (changedProducts.length > 0) {
+          const batch = writeBatch(db);
+          changedProducts.slice(0, 50).forEach((p) => {
+            batch.set(
+              doc(db, 'products', p.id),
+              {
+                sortOrder: p.nextSort,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          });
+          await batch.commit();
+        }
       } catch (err: any) {
         console.warn('Background product sortOrder save note:', err?.message || err);
       }
@@ -645,7 +743,15 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
       } else if (selectedCategory === 'Featured') {
         matchesCategory = Boolean(p.isFeatured || p.isPinnedToFront);
       } else {
-        matchesCategory = p.category === selectedCategory;
+        const pCat = (p.category || '').trim().toLowerCase();
+        const sCat = selectedCategory.trim().toLowerCase();
+        const normPCat = pCat.replace(/&/g, 'and').replace(/\s+/g, ' ');
+        const normSCat = sCat.replace(/&/g, 'and').replace(/\s+/g, ' ');
+        matchesCategory =
+          pCat === sCat ||
+          normPCat === normSCat ||
+          (normPCat.includes('gift hamper') && normSCat.includes('gift hamper')) ||
+          (normPCat.includes('combo') && normSCat.includes('combo'));
       }
 
       return matchesSearch && matchesCategory;
@@ -843,6 +949,7 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
       const cachedStr = localStorage.getItem('swadeep_cached_products');
       const currentProds: Product[] = cachedStr ? JSON.parse(cachedStr) : [...products];
       const updated = sanitizeProducts(currentProds.filter((p) => p.id !== targetId));
+      saveProductsToIndexedDB(updated).catch(() => {});
       localStorage.setItem('swadeep_cached_products', JSON.stringify(updated));
       window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: updated }));
 
@@ -878,15 +985,87 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
     [products]
   );
 
+  const handleExportCatalogBackup = useCallback(() => {
+    try {
+      const backupData = {
+        exportedAt: new Date().toISOString(),
+        appName: 'Gidhaur Bakery',
+        version: '1.0',
+        totalProducts: products.length,
+        products: products,
+        categories: categories,
+        categoryIcons: categoryIcons,
+        settings: (() => {
+          try {
+            const raw = localStorage.getItem('swadeep_restaurant_settings');
+            return raw ? JSON.parse(raw) : null;
+          } catch {
+            return null;
+          }
+        })(),
+        deliveryAgents: (() => {
+          try {
+            const raw = localStorage.getItem('swadeep_delivery_agents');
+            return raw ? JSON.parse(raw) : [];
+          } catch {
+            return [];
+          }
+        })(),
+        kitchenStaff: (() => {
+          try {
+            const raw = localStorage.getItem('swadeep_kitchen_staff');
+            return raw ? JSON.parse(raw) : [];
+          } catch {
+            return [];
+          }
+        })(),
+        preparingStaff: (() => {
+          try {
+            const raw = localStorage.getItem('swadeep_preparing_staff');
+            return raw ? JSON.parse(raw) : [];
+          } catch {
+            return [];
+          }
+        })(),
+      };
+
+      const jsonStr = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute('href', url);
+      const dateStr = new Date().toISOString().slice(0, 10);
+      downloadAnchor.setAttribute('download', `gidhaur_bakery_backup_${dateStr}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      URL.revokeObjectURL(url);
+
+      triggerHaptic('success');
+      setSeedSuccessMessage(`✓ Exported all ${products.length} products & settings to JSON backup file!`);
+      setTimeout(() => setSeedSuccessMessage(null), 4000);
+    } catch (err: any) {
+      console.error('Export backup error:', err);
+      setSeedSuccessMessage('Failed to export backup: ' + (err?.message || 'Unknown error'));
+      setTimeout(() => setSeedSuccessMessage(null), 4000);
+    }
+  }, [products, categories, categoryIcons]);
+
   // Dedicated Full Screens (No modals, zero scroll lag, zero jitter)
   if (activeSubView === 'add-edit') {
     return (
-      <ProductFormScreen
-        product={editingProduct}
-        categories={categories}
-        onBack={handleBackToCatalog}
-        onSave={handleSaveProduct}
-      />
+      <>
+        <ProductFormScreen
+          product={editingProduct}
+          categories={categories}
+          onBack={handleBackToCatalog}
+          onSave={handleSaveProduct}
+        />
+        <AdminQuotaBlockedModal
+          isOpen={quotaBlockedModalOpen}
+          onClose={() => setQuotaBlockedModalOpen(false)}
+        />
+      </>
     );
   }
 
@@ -937,7 +1116,7 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="font-heading font-extrabold text-2xl text-stone-900">
-            Menu Catalog & Products ({products.length})
+            Menu Catalog & Products ({localProducts.length})
           </h2>
           <p className="text-xs text-stone-500">
             Add new food items, configure custom sizes & portions, upload photos, and manage live stock.
@@ -978,6 +1157,18 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
           >
             <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
             <span>+ Extras</span>
+          </button>
+
+          {/* Export All Products & Settings to JSON */}
+          <button
+            type="button"
+            onClick={handleExportCatalogBackup}
+            className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100/90 border border-emerald-300 text-emerald-900 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 cursor-pointer"
+            id="admin-export-backup-btn"
+            title="Export All Products & Settings to JSON Backup"
+          >
+            <Download className="w-4 h-4 text-emerald-700" />
+            <span>Export Backup (JSON)</span>
           </button>
 
           <button
@@ -1032,7 +1223,7 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>All ({products.length})</span>
+            <span>All ({localProducts.length})</span>
           </button>
 
           {featuredCount > 0 && (
@@ -1193,6 +1384,12 @@ export const ProductManagement = React.memo<ProductManagementProps>(({ products,
           </div>
         </div>
       )}
+
+      {/* Admin Quota Blocked Informational Modal */}
+      <AdminQuotaBlockedModal
+        isOpen={quotaBlockedModalOpen}
+        onClose={() => setQuotaBlockedModalOpen(false)}
+      />
     </div>
   );
 });

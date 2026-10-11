@@ -1,7 +1,8 @@
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { BannerSettings, PromotionalBanner } from '../types';
-import { readThrottler } from './readThrottler';
+import { guardedGetDoc } from './firestoreReadGuard';
+import { getSessionCached, setSessionCached } from './sessionCache';
 
 export const DEFAULT_BANNER_SETTINGS: BannerSettings = {
   isEnabled: true,
@@ -181,10 +182,12 @@ export const subscribeToBannerSettings = (
       });
   }
 
-  // Single throttled getDoc check with 120s cooldown (no real-time leak)
-  if (readThrottler.canFetch('banners', 120000)) {
-    readThrottler.markFetched('banners');
-    getDoc(BANNER_DOC_REF)
+  // Single 24-hour session cache check via IndexedDB (NO 120s polling)
+  getSessionCached<BannerSettings>('promotional_banners', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached) {
+      return;
+    }
+    guardedGetDoc(BANNER_DOC_REF, 'bannerService.banners')
       .then((snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
@@ -194,13 +197,14 @@ export const subscribeToBannerSettings = (
             banners: Array.isArray(data.banners) ? data.banners : DEFAULT_BANNER_SETTINGS.banners,
           };
           cacheBannerSettings(loadedSettings);
+          setSessionCached('promotional_banners', loadedSettings);
           onUpdate(loadedSettings);
         }
       })
       .catch((err) => {
         console.warn('Banner fetch note (serving cached state):', err?.message || err);
       });
-  }
+  });
 
   return () => {
     localSubscribers.delete(onUpdate);

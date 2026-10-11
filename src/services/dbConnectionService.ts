@@ -10,8 +10,9 @@
  * - Pulsing green state when live connected to Firestore.
  */
 
-import { collection, getDocs, limit, query } from 'firebase/firestore';
+import { collection, limit, query } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { guardedGetDocs } from './firestoreReadGuard';
 import {
   getQuotaUsageStats,
   recordQuotaExhaustedEvent,
@@ -110,6 +111,18 @@ class DbConnectionService {
    * Zero added reads—uses existing stream metadata.
    */
   public recordSnapshotArrival(fromCache: boolean = false): void {
+    if (!fromCache && navigator.onLine) {
+      // Live snapshot proof: clear quota exhausted state
+      recordQuotaExhaustedEvent(false);
+      this.updateState({
+        status: 'connected',
+        lastSyncTime: new Date(),
+        fromCache: false,
+        lastErrorMessage: null,
+      });
+      return;
+    }
+
     const quota = getQuotaUsageStats();
     if (quota.isExhausted) {
       this.updateState({
@@ -196,7 +209,7 @@ class DbConnectionService {
     try {
       // Perform 1 lightweight read bounded to limit(1)
       const testQuery = query(collection(db, 'settings'), limit(1));
-      const snap = await getDocs(testQuery);
+      const snap = await guardedGetDocs(testQuery, 'dbConnectionService.testConnectionManual');
       const latencyMs = Math.round(performance.now() - startTime);
       const isFromCache = snap.metadata.fromCache;
 

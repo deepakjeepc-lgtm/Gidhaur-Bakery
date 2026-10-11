@@ -1,100 +1,93 @@
-# Streamline Settings: Relocate FSSAI License & Store Toggle, Remove Store Profile Tab
+# Implementation Plan: Daily Firestore Limit Handling & WhatsApp Checkout Fallback
 
-A complete architectural plan to declutter the administrative Settings panel by removing the redundant Store Profile tab, consolidating the official 14-digit FSSAI Food Safety License editor and live order acceptance toggle cleanly inside the Website & Logos tab, and preserving all database values without regression.
+## 1. Executive Summary & Overview
+When Firestore reaches its free daily quota limit (Spark plan: 50,000 reads and 20,000 writes per day), attempts to write new orders or update products fail with `FirebaseError: [code=resource-exhausted]: Quota exceeded`. 
 
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The following decisions were clarified and confirmed during Phase 1:
->
-> - **Confirmed Placement for FSSAI License**: Relocated directly inside the **Website & Logos** tab as a dedicated, official compliance card with live footer badge preview.
-> - **Confirmed Placement for Live Store Toggle**: Preserved inside the **Website & Logos** tab as a prominent operational status control at the top of the tab.
-> - **Confirmed Default Settings Sub-Tab**: **Website & Logos** remains the default view whenever entering the Settings view.
-> - **Retained Data Guarantees**: Any backend restaurant properties previously displayed in Store Profile (store address, opening hours, contact phone, preparation minutes, min order amount) will be preserved safely in state and storage payloads so existing database configurations are never overwritten or lost.
-
----
-
-### 1. Overview & Core Concept
-
-- **What It Does**: Simplifies the administrative navigation in `PaymentSettings` by eliminating the redundant "Store Profile" tab and consolidating essential operational and compliance controls into the primary "Website & Logos" tab.
-- **Target Audience / Persona**: Store owners and bakery administrators managing storefront branding, daily operational readiness, and government compliance.
-- **Key Value**: Reduces clutter, eliminates unnecessary tab hopping, and presents a single, cohesive storefront identity view containing both visual branding (logos, favicons, metadata) and regulatory compliance (FSSAI license).
+This plan implements a **Graceful Degradation & Business Continuity system**:
+1. **Zero Customer Drop-off**: If the daily limit is exhausted, customers clicking "Place Order" see a warm, branded bakery popup informing them that direct online slots are full for the day, with a 1-tap **"Checkout through WhatsApp"** button.
+2. **Pre-filled Order in WhatsApp**: Tapping the WhatsApp checkout button opens WhatsApp with the complete order breakdown (customer name, phone, address, items, sizes/extras, notes, and grand total) directly to the bakery's contact number.
+3. **Strict Visibility Rule**: WhatsApp checkout appears **only and exclusively** when the daily limit is active; normal checkout remains untouched during standard operations.
+4. **Admin Protection**: Admin cannot edit or add products while the quota is exhausted (preventing phantom edits or unsynced data), showing a clear informative modal.
+5. **Admin Test & Preview Toggle**: A dedicated toggle in Admin Settings allows testing the full WhatsApp order flow and previewing the popup at any time.
+6. **Zero Firestore Reads Guarantee**: Uses local quota trip-wire detection and localStorage state caching to ensure zero extra reads or spikes.
 
 ---
 
-### 2. User Experience & Visual Design
+## 2. Technical Architecture & Component Design
 
-- **Key User Flows**:
-  1. **Entering Settings**: Administrator clicks the Settings tab in the Admin Dashboard. The system immediately presents the **Website & Logos** sub-tab.
-  2. **Toggling Live Store Status**: At the top of the Website & Logos view, an operational status card displays the live order acceptance toggle with clear visual feedback (emerald when accepting orders, slate when closed).
-  3. **Updating FSSAI Food Safety License**: Below the website SEO and logo controls, administrators find the official FSSAI Food Safety License card featuring the official government mark, 14-digit numeric input, and live footer badge preview.
-  4. **Saving Changes**: Clicking "Save All Changes" persists both visual branding, operational status, and FSSAI license numbers in a single atomic update.
+### A. Quota State Service (`src/services/quotaService.ts`)
+- **Key Functions**:
+  - `isQuotaExhausted()`: Checks if either the admin simulation toggle is enabled OR an actual `resource-exhausted` error occurred today.
+  - `markQuotaExhausted()`: Records that the daily quota has been exceeded for today's date (`YYYY-MM-DD`) in `localStorage` so all subsequent actions degrade gracefully without hammering the database.
+  - `isQuotaTestModeEnabled()` / `setQuotaTestMode(enabled: boolean)`: Allows admin to toggle preview mode on or off.
+- **Reset Logic**: Auto-clears the trip-wire state when the calendar date advances past midnight UTC/IST.
 
-- **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Professional, utilitarian SaaS admin aesthetic following clean modern dashboard principles.
-  - *Color Palette & Mood*: Dominant neutral slate canvas (`#FFFFFF` on `#F8FAFC`), crisp hairline borders (`border-slate-200/80`), emerald indicators for open store states (`#059669`), and rich sky/indigo accents for official regulatory badges.
-  - *Typography & Hierarchy*: Sans-serif display with tabular numerals (`tabular-nums font-mono`) for the 14-digit FSSAI license number to prevent misreads.
-  - *Component Styling & Layout*: Clean single-level surface elevation, generous inner padding, zero-pill metadata labels with bullet separators, and clear segmented sub-navigation.
+### B. Customer WhatsApp Fallback Modal (`src/components/QuotaExhaustedModal.tsx`)
+- **Visual Design**:
+  - Warm bakery styling consistent with brand (slate-900 typography, amber/emerald subtle accents, clean zero-pill metadata).
+  - Clear, reassuring message in Hindi & English:
+    - *"Aaj ke liye direct online orders ki limit reach ho chuki hai. Aap hamari bakery visit kar sakte hain ya WhatsApp par 1-click me order bhej sakte hain!"*
+  - Prominent CTA: **"Checkout through WhatsApp"** with the WhatsApp logo, which opens:
+    `https://wa.me/<bakeryPhone>?text=<encoded_order_details>`
+  - Secondary CTA: "View Store Address & Timings" or "Close".
 
-- **Interactive Feedback & Motion**:
-  - Fast, immediate state toggles with smooth pill switch transitions ($\le 150\text{ms}$).
-  - Live preview badge updating character-by-character as the administrator enters or edits their 14-digit FSSAI license number.
-  - Dismissible emerald success toast confirming saved changes without page reload.
+### C. WhatsApp Message Generator (`src/utils/whatsappOrder.ts`)
+- Formats customer order details into an aesthetic, readable message:
+  ```text
+  🎂 *Swadeep Gidhaur Bakery - New Order*
+  ━━━━━━━━━━━━━━━━━━━━━━
+  👤 *Customer Details:*
+  • Name: [Customer Name]
+  • Phone: [Phone]
+  • Address: [Delivery Address]
+  • Note: [Cooking/Delivery notes or None]
+
+  🛍️ *Order Items:*
+  • 1x Choco Truffle Cake (500g) - ₹450
+  • 2x Paneer Patties - ₹70
+
+  💰 *Bill Summary:*
+  • Subtotal: ₹520
+  • Total Amount: ₹520
+  • Payment Mode: Cash on Delivery / UPI
+  ━━━━━━━━━━━━━━━━━━━━━━
+  (Order placed via WhatsApp Direct Checkout)
+  ```
+- Target phone: Derived from `settings.contactPhone` configured in Admin Settings (default fallback to `+91 98765 43210`).
+
+### D. Checkout Flow Integration (`src/components/CheckoutModal.tsx`)
+- In `executeOrderPlacement`:
+  - Step 1: Check `isQuotaExhausted()`. If true, prevent Firestore write, open `QuotaExhaustedModal`, and retain cart data.
+  - Step 2: In normal mode, if Firestore write fails with `resource-exhausted` or `quota-exceeded`:
+    - Automatically call `markQuotaExhausted()`.
+    - Open `QuotaExhaustedModal` with pre-filled WhatsApp link immediately so customer order is never lost.
+
+### E. Admin Product Management Protection (`src/components/admin/ProductManagement.tsx` & `ProductFormScreen.tsx`)
+- When admin attempts to open "Add New Product" or save an edit:
+  - If `isQuotaExhausted()` is true, show an informative toast/modal:
+    *"Firestore Daily Limit Active: Naya product add ya edit abhi Firestore me save nahi ho sakta. Quota kal subah reset hoga."*
+  - Prevents confusing silent failures where an admin thinks changes are live but they cannot be committed to Firestore.
+
+### F. Admin Settings Simulation Toggle (`src/components/admin/PaymentSettings.tsx`)
+- Add a new "Database & Quota Safeguards" section in Settings:
+  - Toggle: "Simulate Daily Limit Full (Test WhatsApp Fallback & Admin Notice)"
+  - Status indicator showing whether quota is normal or tripped.
+  - Button: "Reset Quota Trip-wire" to restore normal behavior after testing.
 
 ---
 
-### 3. Key Product Decisions & Trade-Offs
+## 3. Verification & Testing Steps
 
-- **Decision 1: Relocating FSSAI License to Website & Logos**
-  - *Chosen Approach*: Place the FSSAI license card directly after the Website SEO & Logo previews inside the Website & Logos tab.
-  - *Why*: The FSSAI license number is rendered on the public website footer alongside the website logo and legal copyright. Grouping website legal badges with website identity creates a logical conceptual grouping.
-  - *Alternatives Considered*: Placing FSSAI under Delivery & Coverage or Payments & UPI was considered, but neither relates to public website trust badges.
-
-- **Decision 2: Preserving Underlying Restaurant Settings in State**
-  - *Chosen Approach*: Retain existing state properties for contact details, opening hours, and preparation times, ensuring the `handleSave()` payload merges current database records without resetting them to empty defaults.
-  - *Why*: Prevents destructive data wipes for fields whose editing UI is hidden, maintaining backward compatibility with customer-facing views that reference `settings.contactPhone` or `settings.address`.
-  - *Alternatives Considered*: Dropping fields from the database would break live order receipts and customer contact displays.
-
-- **Decision 3: Single-Row Sub-Navigation Bar Cleanliness**
-  - *Chosen Approach*: Update the `SECTIONS` list from 6 items to 5 items (`Website & Logos`, `Payments & UPI`, `Delivery & Coverage`, `Email Notifications`, `Staff & Security`), removing `Store Profile`.
-  - *Why*: Eliminates horizontal scrolling on medium screens and provides a balanced dock navigation.
-
----
-
-### 4. Technical Architecture & Data Strategy
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Admin Dashboard (Settings)                      │
-│                                                                        │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │ Sub-Navigation Dock:                                           │   │
-│   │ [🌐 Website & Logos] [💳 Payments] [🚚 Delivery] [📧 Email] ... │   │
-│   └────────────────────────────────────────────────────────────────┘   │
-│                                                                        │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │ ACTIVE: Website & Logos Sub-Tab                                │   │
-│   │                                                                │   │
-│   │  1. Live Store Operational Status (Accepting Orders Toggle)   │   │
-│   │  2. Floating Navbar Brand Logo (Wordmark Upload & Zoom)        │   │
-│   │  3. Website & Google Search Logo (Favicon / PWA Upload)        │   │
-│   │  4. Website Title & SEO Snippet Description                    │   │
-│   │  5. Official FSSAI Food Safety License (14-digit input & badge)│   │
-│   └────────────────────────────────────────────────────────────────┘   │
-│                                                                        │
-│   ┌───────────────────────────┐      ┌─────────────────────────────┐   │
-│   │ Atomic Save Handler       │─────▶│ Firestore / Local Persistence│   │
-│   └───────────────────────────┘      └─────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-- **State Management & Data Model**:
-  - `activeSection`: typed as `'website' | 'payments' | 'delivery' | 'emails' | 'security'`.
-  - `isStoreOpen`: boolean toggle bound to `settings.isStoreOpen`.
-  - `fssaiLicenseNumber`: string sanitized to numbers only (up to 14 digits), bound to `settings.fssaiLicenseNumber`.
-  - All existing fields (`restaurantName`, `contactPhone`, `address`, `openingHours`, etc.) remain safely bound in state so saving emits full valid `RestaurantSettings` objects.
-
-- **Interactive Component & State Mapping**:
-  - `Store Accepting Orders Toggle`: Immediate visual state flip with standard accessible switch control.
-  - `FSSAI License Input`: Real-time input masking (`/[^0-9]/g`) with a max length of 14 and synchronized live badge preview.
-  - `Save Button`: Emits asynchronous update to `saveRestaurantSettings()`, synchronizes branding to document, and triggers parent `onUpdate`.
+1. **Initial State (Normal Mode)**:
+   - Ensure standard order checkout works normally without showing any WhatsApp checkout button.
+   - Verify 0 reads spike.
+2. **Simulation Mode Verification**:
+   - Turn on the toggle in Admin Settings: "Simulate Daily Limit Full".
+   - Go to customer store, add products to cart, and click "Place Order".
+   - Verify the "Online Booking Full - Checkout through WhatsApp" modal appears cleanly.
+   - Click "Checkout through WhatsApp" and verify WhatsApp opens with the full pre-formatted bill details and correct store contact number.
+   - Go to Admin -> Product Management, attempt to add or edit a product, and verify the protective notice appears preventing unsaved changes.
+3. **Turn Off Simulation**:
+   - Toggle off simulation; verify regular checkout and admin editing return to standard operation.
+4. **App Compilation & Linting**:
+   - Run `compile_applet` and `lint_applet` to confirm clean builds with 0 errors.

@@ -118,9 +118,15 @@ interface AdminDashboardProps {
   products: Product[];
   onBackToStore: () => void;
   onLogout?: () => void;
+  onUpdateProducts?: (products: Product[]) => void;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBackToStore, onLogout }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({
+  products,
+  onBackToStore,
+  onLogout,
+  onUpdateProducts
+}) => {
   const { user, signOut } = useAuth();
   const [staffSubTab, setStaffSubTab] = useState<'kitchen' | 'preparing' | 'delivery'>(() => {
     const saved = getSavedActiveAdminTab<string>('orders');
@@ -444,10 +450,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
     } catch {}
   };
 
-  // Initial seed and subscriptions
+  // Initial subscriptions
   useEffect(() => {
-    seedStaffIfEmpty();
-
     const unsubAgents = subscribeToDeliveryAgents((agents) => {
       setDeliveryAgents(agents);
     });
@@ -1855,7 +1859,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, onBack
 
         {/* Tab 2: Menu & Product Management (Persisted in DOM for instant 0ms tab switching) */}
         <div className={activeTab === 'products' ? 'block' : 'hidden'}>
-          <ProductManagement products={products} />
+          <ProductManagement
+            products={liveProducts}
+            onUpdateProducts={(updated) => {
+              setLiveProducts(updated);
+              if (onUpdateProducts) onUpdateProducts(updated);
+            }}
+          />
         </div>
 
         {/* Tab 3: Unified Staff Operations Hub (Kitchen, Preparing, Delivery) - Persisted in DOM for instant 0ms switching */}

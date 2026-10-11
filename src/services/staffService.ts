@@ -1,8 +1,6 @@
 import {
   collection,
   doc,
-  getDocs,
-  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -10,7 +8,8 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { DeliveryAgent, KitchenStaff, PreparingStaff, RestaurantSettings, StaffSession } from '../types';
-import { readThrottler } from './readThrottler';
+import { guardedGetDoc, guardedGetDocs } from './firestoreReadGuard';
+import { getSessionCached, setSessionCached, invalidateSessionCache } from './sessionCache';
 
 export const DEFAULT_SETTINGS: RestaurantSettings = {
   enableOnlinePayment: true,
@@ -177,24 +176,12 @@ export async function deleteAdminAccount(id: string): Promise<boolean> {
   return true;
 }
 
-// Seed only settings if missing (strictly NO hardcoded/dummy staff seeding)
-export async function seedStaffIfEmpty() {
-  try {
-    const settingsDoc = await getDoc(doc(db, 'settings', 'restaurant'));
-    if (!settingsDoc.exists()) {
-      await setDoc(doc(db, 'settings', 'restaurant'), {
-        ...DEFAULT_SETTINGS,
-        updatedAt: serverTimestamp()
-      });
-    }
-  } catch (err) {
-    if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
-    }
-  }
+// Clean no-op: strictly NO automatic reads or writes on page load
+export async function seedStaffIfEmpty(): Promise<void> {
+  return;
 }
 
-// Subscribe to Delivery Agents with memory/localStorage caching and throttle protection (no onSnapshot leak)
+// Subscribe to Delivery Agents with 24-hour session cache (NO 180s polling)
 export function subscribeToDeliveryAgents(callback: (agents: DeliveryAgent[]) => void): () => void {
   // 1. Immediately provide cached data
   callback(getLocalDeliveryAgents());
@@ -205,10 +192,13 @@ export function subscribeToDeliveryAgents(callback: (agents: DeliveryAgent[]) =>
   };
   window.addEventListener('swadeep_staff_updated', handleUpdate);
 
-  // 3. Single throttled fetch (180s cooldown)
-  if (readThrottler.canFetch('delivery_agents', 180000)) {
-    readThrottler.markFetched('delivery_agents');
-    getDocs(collection(db, 'delivery_agents'))
+  // 3. Read ONCE per 24h session via IndexedDB (NO interval polling)
+  getSessionCached<DeliveryAgent[]>('delivery_agents', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      callback(cached);
+      return;
+    }
+    guardedGetDocs(collection(db, 'delivery_agents'), 'staffService.deliveryAgents')
       .then((snapshot) => {
         const agents: DeliveryAgent[] = [];
         snapshot.forEach((d) => {
@@ -218,12 +208,13 @@ export function subscribeToDeliveryAgents(callback: (agents: DeliveryAgent[]) =>
           }
         });
         localStorage.setItem(STORAGE_KEYS.DELIVERY_AGENTS, JSON.stringify(agents));
+        setSessionCached('delivery_agents', agents);
         callback(agents);
       })
       .catch((error) => {
         console.warn('Delivery agents fetch note (using local cache):', error?.message || error);
       });
-  }
+  });
 
   return () => {
     window.removeEventListener('swadeep_staff_updated', handleUpdate);
@@ -305,7 +296,7 @@ export async function deleteDeliveryAgent(id: string): Promise<void> {
   window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
-// Subscribe to Kitchen Staff with memory/localStorage caching and throttle protection (no onSnapshot leak)
+// Subscribe to Kitchen Staff with 24-hour session cache (NO 180s polling)
 export function subscribeToKitchenStaff(callback: (staff: KitchenStaff[]) => void): () => void {
   // 1. Immediately provide cached data
   callback(getLocalKitchenStaff());
@@ -316,10 +307,13 @@ export function subscribeToKitchenStaff(callback: (staff: KitchenStaff[]) => voi
   };
   window.addEventListener('swadeep_staff_updated', handleUpdate);
 
-  // 3. Single throttled fetch (180s cooldown)
-  if (readThrottler.canFetch('kitchen_staff', 180000)) {
-    readThrottler.markFetched('kitchen_staff');
-    getDocs(collection(db, 'kitchen_staff'))
+  // 3. Read ONCE per 24h session via IndexedDB (NO interval polling)
+  getSessionCached<KitchenStaff[]>('kitchen_staff', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      callback(cached);
+      return;
+    }
+    guardedGetDocs(collection(db, 'kitchen_staff'), 'staffService.kitchenStaff')
       .then((snapshot) => {
         const staff: KitchenStaff[] = [];
         snapshot.forEach((d) => {
@@ -329,12 +323,13 @@ export function subscribeToKitchenStaff(callback: (staff: KitchenStaff[]) => voi
           }
         });
         localStorage.setItem(STORAGE_KEYS.KITCHEN_STAFF, JSON.stringify(staff));
+        setSessionCached('kitchen_staff', staff);
         callback(staff);
       })
       .catch((error) => {
         console.warn('Kitchen staff fetch note (using local cache):', error?.message || error);
       });
-  }
+  });
 
   return () => {
     window.removeEventListener('swadeep_staff_updated', handleUpdate);
@@ -413,7 +408,7 @@ export async function deleteKitchenStaff(id: string): Promise<void> {
   window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
-// Subscribe to Preparing Staff (Packing Team) with memory/localStorage caching and throttle protection (no onSnapshot leak)
+// Subscribe to Preparing Staff (Packing Team) with 24-hour session cache (NO 180s polling)
 export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) => void): () => void {
   // 1. Immediately provide cached data
   callback(getLocalPreparingStaff());
@@ -424,10 +419,13 @@ export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) =>
   };
   window.addEventListener('swadeep_staff_updated', handleUpdate);
 
-  // 3. Single throttled fetch (180s cooldown)
-  if (readThrottler.canFetch('preparing_staff', 180000)) {
-    readThrottler.markFetched('preparing_staff');
-    getDocs(collection(db, 'preparing_staff'))
+  // 3. Read ONCE per 24h session via IndexedDB (NO interval polling)
+  getSessionCached<PreparingStaff[]>('preparing_staff', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      callback(cached);
+      return;
+    }
+    guardedGetDocs(collection(db, 'preparing_staff'), 'staffService.preparingStaff')
       .then((snapshot) => {
         const staff: PreparingStaff[] = [];
         snapshot.forEach((d) => {
@@ -437,12 +435,13 @@ export function subscribeToPreparingStaff(callback: (staff: PreparingStaff[]) =>
           }
         });
         localStorage.setItem(STORAGE_KEYS.PREPARING_STAFF, JSON.stringify(staff));
+        setSessionCached('preparing_staff', staff);
         callback(staff);
       })
       .catch((error) => {
         console.warn('Preparing staff fetch note (using local cache):', error?.message || error);
       });
-  }
+  });
 
   return () => {
     window.removeEventListener('swadeep_staff_updated', handleUpdate);
@@ -521,7 +520,7 @@ export async function deletePreparingStaff(id: string): Promise<void> {
   window.dispatchEvent(new CustomEvent('swadeep_staff_updated'));
 }
 
-// Settings (UPI ID etc) with memory/localStorage caching and throttle protection (no onSnapshot leak)
+// Settings (UPI ID etc) with 24-hour session cache (NO 180s polling)
 export function subscribeToRestaurantSettings(callback: (settings: RestaurantSettings) => void): () => void {
   // 1. Immediately provide cached settings
   callback(getLocalRestaurantSettings());
@@ -532,21 +531,25 @@ export function subscribeToRestaurantSettings(callback: (settings: RestaurantSet
   };
   window.addEventListener('swadeep_settings_updated', handleUpdate);
 
-  // 3. Single throttled fetch (180s cooldown)
-  if (readThrottler.canFetch('restaurant_settings', 180000)) {
-    readThrottler.markFetched('restaurant_settings');
-    getDoc(doc(db, 'settings', 'restaurant'))
+  // 3. Read ONCE per 24h session via IndexedDB (NO interval polling)
+  getSessionCached<RestaurantSettings>('restaurant_settings', 24 * 60 * 60 * 1000).then((cached) => {
+    if (cached) {
+      callback(cached);
+      return;
+    }
+    guardedGetDoc(doc(db, 'settings', 'restaurant'), 'staffService.restaurantSettings')
       .then((snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data() as RestaurantSettings;
           localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(data));
+          setSessionCached('restaurant_settings', data);
           callback(data);
         }
       })
       .catch((error) => {
         console.warn('Restaurant settings fetch note (using local cache):', error?.message || error);
       });
-  }
+  });
 
   return () => {
     window.removeEventListener('swadeep_settings_updated', handleUpdate);
@@ -572,7 +575,7 @@ export async function saveRestaurantSettings(settings: RestaurantSettings): Prom
     console.debug('Direct local save for settings:', err);
   }
   localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-  readThrottler.invalidate('restaurant_settings');
+  invalidateSessionCache('restaurant_settings');
   try {
     window.dispatchEvent(new CustomEvent('swadeep_settings_updated'));
   } catch {}

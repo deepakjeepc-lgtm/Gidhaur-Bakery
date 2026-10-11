@@ -27,6 +27,7 @@ import { TrackOrderPage } from './components/TrackOrderPage';
 import { BakeryClosedQuotaScreen } from './components/BakeryClosedQuotaScreen';
 import { Footer } from './components/Footer';
 import { AnimatedAmbientBackground } from './components/AnimatedAmbientBackground';
+import { ReadLimitProtectionBanner } from './components/ReadLimitProtectionBanner';
 import { lazyWithRetry } from './utils/lazyRetry';
 import { PortalErrorBoundary } from './components/PortalErrorBoundary';
 import { AVAILABLE_FONTS } from './utils/fontList';
@@ -180,12 +181,7 @@ function MainApp() {
 
   useEffect(() => {
     purgeLocalHardcodedProducts();
-    // Only perform cloud admin sync when explicitly in admin or staff management
-    if (currentView === 'admin' || (staffSession && staffSession.role)) {
-      seedStaffIfEmpty().catch(() => {});
-      syncDeletedProductsFromFirestore().catch(() => {});
-    }
-  }, [currentView, staffSession]);
+  }, []);
 
   // Restore scroll position on initial app load / browser reload
   useEffect(() => {
@@ -414,16 +410,25 @@ function MainApp() {
       });
 
     // 4. Support instant local menu updates when admin modifies products
-    const handleLocalProductsUpdate = (e: Event) => {
+    const handleLocalProductsUpdate = async (e: Event) => {
       try {
         const customEvt = e as CustomEvent;
-        if (customEvt.detail && Array.isArray(customEvt.detail)) {
+        if (customEvt.detail && Array.isArray(customEvt.detail) && customEvt.detail.length > 0) {
           const clean = sanitizeProducts(customEvt.detail);
-          setProducts(clean);
+          if (clean.length > 0) {
+            setProducts(clean);
+            return;
+          }
+        }
+        const idb = await getProductsFromIndexedDB();
+        if (idb.length > 0) {
+          setProducts(idb);
           return;
         }
         const cleanCached = getSanitizedCachedProducts();
-        setProducts(cleanCached);
+        if (cleanCached.length > 0) {
+          setProducts(cleanCached);
+        }
       } catch {}
     };
 
@@ -460,7 +465,8 @@ function MainApp() {
   const categoryCounts = useMemo(() => {
     return products.reduce((acc, p) => {
       acc['All'] = (acc['All'] || 0) + 1;
-      acc[p.category] = (acc[p.category] || 0) + 1;
+      const cat = p.category || 'Uncategorized';
+      acc[cat] = (acc[cat] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
   }, [products]);
@@ -481,7 +487,15 @@ function MainApp() {
       } else if (activeCategory === 'Liked') {
         matchesCategory = favorites.includes(p.id);
       } else {
-        matchesCategory = p.category === activeCategory;
+        const pCat = (p.category || '').trim().toLowerCase();
+        const aCat = activeCategory.trim().toLowerCase();
+        const normPCat = pCat.replace(/&/g, 'and').replace(/\s+/g, ' ');
+        const normACat = aCat.replace(/&/g, 'and').replace(/\s+/g, ' ');
+        matchesCategory =
+          pCat === aCat ||
+          normPCat === normACat ||
+          (normPCat.includes('gift hamper') && normACat.includes('gift hamper')) ||
+          (normPCat.includes('combo') && normACat.includes('combo'));
       }
 
       if (!matchesCategory) return false;
@@ -650,6 +664,7 @@ function MainApp() {
 
     return (
       <PortalErrorBoundary onBackToStore={() => setCurrentView('home')}>
+        <ReadLimitProtectionBanner />
         <Suspense fallback={<PortalLoadingFallback />}>
           {staffSession ? (
             staffSession.role === 'kitchen' ? (
@@ -672,6 +687,7 @@ function MainApp() {
             ) : (
               <AdminDashboard
                 products={products}
+                onUpdateProducts={setProducts}
                 onBackToStore={() => setCurrentView('home')}
                 onLogout={handleStaffLogout}
               />
@@ -679,6 +695,7 @@ function MainApp() {
           ) : user ? (
             <AdminDashboard
               products={products}
+              onUpdateProducts={setProducts}
               onBackToStore={() => setCurrentView('home')}
               onLogout={handleStaffLogout}
             />
@@ -695,6 +712,7 @@ function MainApp() {
 
   return (
     <div className="relative min-h-screen w-full max-w-full overflow-x-hidden flex flex-col justify-between selection:bg-slate-200 selection:text-slate-900 pb-8">
+      <ReadLimitProtectionBanner />
       {/* Dynamic ambient background with still pattern & slow morphing gradient (Pink, Blue, Purple, White @ 5% opacity) */}
       <AnimatedAmbientBackground />
 
