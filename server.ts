@@ -1,14 +1,32 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import sharp from 'sharp';
-import { createServer as createViteServer } from 'vite';
-import { sendOrderNotificationEmail, buildOrderStatusEmailHtml, isMilestoneEmailEnabled } from './src/server/emailHelper';
+import { sendOrderNotificationEmail, isMilestoneEmailEnabled } from './src/server/emailHelper.ts';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+async function getSharp() {
+  const mod = await import('sharp');
+  return (mod as any).default || mod;
+}
 
 app.use(express.json({ limit: '10mb' }));
+
+// Dedicated ultra-fast static serving for compressed WebP product images & public assets
+const PRODUCT_IMAGES_DIR = path.join(process.cwd(), 'public', 'product-images');
+try {
+  if (!fs.existsSync(PRODUCT_IMAGES_DIR)) {
+    fs.mkdirSync(PRODUCT_IMAGES_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.warn('Could not create product-images directory:', err);
+}
+app.use('/product-images', express.static(PRODUCT_IMAGES_DIR, {
+  maxAge: '30d',
+  immutable: true,
+}));
+app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Data storage directory and file for persistent cross-device synchronization
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -17,6 +35,7 @@ const STORE_FILE = path.join(DATA_DIR, 'store.json');
 interface StoreData {
   bannerSettings: any;
   orders: any[];
+  archivedOrders: any[];
   staff: {
     deliveryAgents: any[];
     kitchenStaff: any[];
@@ -85,6 +104,7 @@ function loadStore(): StoreData {
       return {
         bannerSettings: parsed.bannerSettings || DEFAULT_BANNER_SETTINGS,
         orders: Array.isArray(parsed.orders) ? parsed.orders : [],
+        archivedOrders: Array.isArray(parsed.archivedOrders) ? parsed.archivedOrders : [],
         staff: parsed.staff || { deliveryAgents: [], kitchenStaff: [] },
         settings: parsed.settings || {},
         customerEmails: Array.isArray(parsed.customerEmails) ? parsed.customerEmails : [],
@@ -97,6 +117,7 @@ function loadStore(): StoreData {
   const initial: StoreData = {
     bannerSettings: DEFAULT_BANNER_SETTINGS,
     orders: [],
+    archivedOrders: [],
     staff: { deliveryAgents: [], kitchenStaff: [] },
     settings: {},
     customerEmails: [],
@@ -207,14 +228,64 @@ function saveProducts(prods: any[]) {
   }
 }
 
+async function saveBase64ImageToServer(dataUrl: string, nameHint: string): Promise<string> {
+  if (!dataUrl || !dataUrl.startsWith('data:image/')) return dataUrl;
+  try {
+    const parts = dataUrl.split(',');
+    if (!parts[1]) return dataUrl;
+    const buffer = Buffer.from(parts[1], 'base64');
+    const safeName = String(nameHint || 'item')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 30);
+    const filename = `${Date.now()}-${safeName}.webp`;
+    const target = path.join(PRODUCT_IMAGES_DIR, filename);
+    const sharp = await getSharp();
+    await sharp(buffer)
+      .resize(600, 600, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toFile(target);
+    return `/product-images/${filename}`;
+  } catch (err) {
+    console.warn('Failed to convert base64 image on server:', err);
+    return dataUrl;
+  }
+}
+
 app.get('/api/products', (_req, res) => {
   res.json(loadProducts());
 });
 
-app.post('/api/products', (req, res) => {
+app.post('/api/upload-image', async (req, res) => {
+  try {
+    const { dataUrl, name } = req.body;
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+      return res.status(400).json({ error: 'Valid data:image/ string required' });
+    }
+    const url = await saveBase64ImageToServer(dataUrl, name || 'uploaded');
+    res.json({ success: true, url });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/products', async (req, res) => {
   const item = req.body;
   if (!item || !item.name) {
     return res.status(400).json({ error: 'Product payload required' });
+  }
+
+  // Convert any embedded base64 images into static webp files
+  if (item.imageUrl && item.imageUrl.startsWith('data:image/')) {
+    item.imageUrl = await saveBase64ImageToServer(item.imageUrl, item.name || item.id);
+  }
+  if (Array.isArray(item.images)) {
+    for (let i = 0; i < item.images.length; i++) {
+      if (item.images[i] && item.images[i].startsWith('data:image/')) {
+        item.images[i] = await saveBase64ImageToServer(item.images[i], `${item.name || item.id}-img${i}`);
+      }
+    }
   }
 
   const prods = loadProducts();
@@ -317,12 +388,88 @@ app.post('/api/settings/banners', (req, res) => {
   res.json({ success: true, bannerSettings: store.bannerSettings });
 });
 
+function getServerDateStr(input?: any): string {
+  try {
+    const d = input ? new Date(input) : new Date();
+    if (isNaN(d.getTime())) {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    }
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  } catch {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+}
+
+function upsertIntoServerArchive(order: any, extraMeta: Record<string, any> = {}) {
+  if (!order || (!order.id && !order.orderId)) return;
+  if (!Array.isArray(store.archivedOrders)) store.archivedOrders = [];
+  const key = String(order.orderId || order.id).toLowerCase();
+  const idx = store.archivedOrders.findIndex(
+    (o) => String(o.orderId || o.id).toLowerCase() === key
+  );
+  const archivedRecord = {
+    ...order,
+    ...extraMeta,
+    archivedAt: order.archivedAt || extraMeta.archivedAt || new Date().toISOString(),
+  };
+  if (idx >= 0) {
+    store.archivedOrders[idx] = { ...store.archivedOrders[idx], ...archivedRecord };
+  } else {
+    store.archivedOrders.unshift(archivedRecord);
+  }
+}
+
+function enforceServerDailyRollover(): boolean {
+  const todayStr = getServerDateStr();
+  const remainingToday: any[] = [];
+  let rolledOver = false;
+
+  for (const ord of store.orders) {
+    if (!ord || (!ord.id && !ord.orderId)) continue;
+    const ordDateStr = getServerDateStr(ord.createdAt);
+    if (ord.isArchived || ord.status === 'archived' || ordDateStr !== todayStr) {
+      upsertIntoServerArchive(ord, {
+        isPreviousDayArchive: ordDateStr !== todayStr,
+      });
+      rolledOver = true;
+    } else {
+      remainingToday.push(ord);
+    }
+  }
+
+  if (rolledOver) {
+    store.orders = remainingToday;
+    saveStore(store);
+  }
+  return rolledOver;
+}
+
 // Orders endpoints
+app.get('/api/orders/archive', (_req, res) => {
+  enforceServerDailyRollover();
+  res.json(store.archivedOrders || []);
+});
+
+app.post('/api/orders/archive', (req, res) => {
+  const { order, orders: batchOrders } = req.body || {};
+  if (Array.isArray(batchOrders)) {
+    batchOrders.forEach((o) => upsertIntoServerArchive(o));
+  } else if (order && (order.id || order.orderId)) {
+    upsertIntoServerArchive(order);
+  }
+  saveStore(store);
+  res.json({ success: true, archivedOrders: store.archivedOrders });
+});
+
 app.get('/api/orders', (_req, res) => {
+  enforceServerDailyRollover();
   res.json(store.orders);
 });
 
 app.post('/api/orders', (req, res) => {
+  enforceServerDailyRollover();
   const newOrder = req.body;
   if (!newOrder || !newOrder.id) {
     return res.status(400).json({ error: 'Order must contain an id' });
@@ -334,6 +481,11 @@ app.post('/api/orders', (req, res) => {
   } else {
     store.orders.unshift(newOrder);
   }
+
+  if (newOrder.status === 'delivered') {
+    upsertIntoServerArchive(newOrder, { deliveredAt: newOrder.deliveredAt || new Date().toISOString() });
+  }
+
   saveStore(store);
 
   broadcastSSE('orders_update', store.orders);
@@ -341,6 +493,7 @@ app.post('/api/orders', (req, res) => {
 });
 
 app.get('/api/orders/:id', (req, res) => {
+  enforceServerDailyRollover();
   const { id } = req.params;
   const clean = id.trim().toLowerCase();
   const digitsOnly = clean.replace(/\D/g, '');
@@ -357,6 +510,7 @@ app.get('/api/orders/:id', (req, res) => {
 });
 
 app.get('/api/orders/phone/:phone', (req, res) => {
+  enforceServerDailyRollover();
   const { phone } = req.params;
   const clean = phone.replace(/\D/g, '');
   const matches = store.orders.filter((o) => (o.phone || '').replace(/\D/g, '') === clean);
@@ -364,11 +518,28 @@ app.get('/api/orders/phone/:phone', (req, res) => {
 });
 
 app.patch('/api/orders/:id', (req, res) => {
+  enforceServerDailyRollover();
   const { id } = req.params;
-  const updates = req.body;
+  const updates = req.body || {};
   const orderIdx = store.orders.findIndex(
     (o) => o.id === id || o.orderId === id || o.id?.toLowerCase() === id.toLowerCase() || o.orderId?.toLowerCase() === id.toLowerCase()
   );
+
+  // If marked archived/completed, move to archive and remove from active orders
+  if (updates.isArchived || updates.status === 'archived' || updates.status === 'completed') {
+    if (orderIdx !== -1) {
+      const target = { ...store.orders[orderIdx], ...updates, updatedAt: new Date().toISOString() };
+      upsertIntoServerArchive(target, { isManualArchive: true });
+      const removedId = target.id || id;
+      const removedOrderId = target.orderId || id;
+      store.orders.splice(orderIdx, 1);
+      saveStore(store);
+      broadcastSSE('orders_deleted', { deletedIds: [removedId, removedOrderId] });
+      broadcastSSE('orders_update', store.orders);
+      return res.json({ success: true, order: target });
+    }
+  }
+
   if (orderIdx === -1) {
     const newOrder = {
       id,
@@ -378,6 +549,9 @@ app.patch('/api/orders/:id', (req, res) => {
       updatedAt: new Date().toISOString(),
     };
     store.orders.unshift(newOrder);
+    if (newOrder.status === 'delivered') {
+      upsertIntoServerArchive(newOrder, { deliveredAt: new Date().toISOString() });
+    }
     saveStore(store);
     broadcastSSE('orders_update', store.orders);
     return res.json({ success: true, order: newOrder });
@@ -388,6 +562,13 @@ app.patch('/api/orders/:id', (req, res) => {
     ...updates,
     updatedAt: new Date().toISOString(),
   };
+
+  if (store.orders[orderIdx].status === 'delivered') {
+    upsertIntoServerArchive(store.orders[orderIdx], {
+      deliveredAt: store.orders[orderIdx].deliveredAt || new Date().toISOString(),
+    });
+  }
+
   saveStore(store);
 
   broadcastSSE('orders_update', store.orders);
@@ -396,29 +577,53 @@ app.patch('/api/orders/:id', (req, res) => {
 
 app.delete('/api/orders/:id', (req, res) => {
   const { id } = req.params;
-  store.orders = store.orders.filter((o) => o.id !== id && o.orderId !== id);
+  const cleanId = id.toLowerCase();
+  store.orders = store.orders.filter(
+    (o) => String(o.id || '').toLowerCase() !== cleanId && String(o.orderId || '').toLowerCase() !== cleanId
+  );
+  if (Array.isArray(store.archivedOrders)) {
+    store.archivedOrders = store.archivedOrders.filter(
+      (o) => String(o.id || '').toLowerCase() !== cleanId && String(o.orderId || '').toLowerCase() !== cleanId
+    );
+  }
   saveStore(store);
 
+  broadcastSSE('orders_deleted', { deletedIds: [id] });
   broadcastSSE('orders_update', store.orders);
   res.json({ success: true, deletedId: id });
 });
 
-app.post('/api/orders/clear-archive', (req, res) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+app.post('/api/orders/clear-archive', (_req, res) => {
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const removedIds: string[] = [];
   store.orders = store.orders.filter((o) => {
-    const oDate = o.createdAt ? new Date(o.createdAt).toISOString().split('T')[0] : '';
-    return oDate === todayStr;
+    if (!o.createdAt) return false;
+    const d = new Date(o.createdAt);
+    const oDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const keep = oDate === todayStr;
+    if (!keep) {
+      if (o.id) removedIds.push(o.id);
+      if (o.orderId) removedIds.push(o.orderId);
+    }
+    return keep;
   });
+  store.archivedOrders = [];
   saveStore(store);
 
+  if (removedIds.length > 0) {
+    broadcastSSE('orders_deleted', { deletedIds: removedIds });
+  }
   broadcastSSE('orders_update', store.orders);
   res.json({ success: true, remaining: store.orders.length });
 });
 
 app.post('/api/orders/clear-all', (_req, res) => {
   store.orders = [];
+  store.archivedOrders = [];
   saveStore(store);
 
+  broadcastSSE('orders_deleted', { clearAll: true });
   broadcastSSE('orders_update', store.orders);
   res.json({ success: true });
 });
@@ -626,6 +831,8 @@ app.post('/api/update-pwa-icons', async (req, res) => {
       fs.mkdirSync(publicDir, { recursive: true });
     }
 
+    const sharp = await getSharp();
+
     // 1. Generate 512x512 PNG icons (High quality lanczos3 resampler)
     await sharp(buffer)
       .resize(512, 512, { fit: 'cover', kernel: 'lanczos3' })
@@ -751,14 +958,20 @@ app.get('/.well-known/assetlinks.json', (_req, res) => {
 // Vite middleware integration (Vite in dev, static files in prod)
 // -------------------------------------------------------------
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isDev =
+    process.env.NODE_ENV === 'development' ||
+    (process.env.NODE_ENV !== 'production' && !hasBuiltDist);
+
+  if (isDev) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     // Express 4 wildcard
     app.get('*', (_req, res) => {

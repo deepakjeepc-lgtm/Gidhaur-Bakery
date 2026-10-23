@@ -1,4 +1,4 @@
-import { Order, OrderItem } from '../types';
+import { Order } from '../types';
 
 /**
  * Returns true if an item requires Kitchen Cooking/Preparation.

@@ -237,6 +237,7 @@ export interface WebsiteBrandingSettings {
 }
 
 export interface RestaurantSettings extends WebsiteBrandingSettings {
+  homeCardShape?: 'rounded' | 'square'; // Home screen product card shape: 'rounded' (default) or 'square' (sharp with floating drop shadow)
   homeScreenMessage?: string; // Headline shown on mobile home screen (e.g. "I want to Eat...")
   homeHeadlineFont?: string; // Font family name e.g. 'Plus Jakarta Sans', 'Roboto Mono', 'Pacifico', etc.
   homeHeadlineColor?: string; // Hex color e.g. '#0f172a'

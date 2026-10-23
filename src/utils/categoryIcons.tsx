@@ -9,13 +9,9 @@ import {
   IceCream2,
   Cookie,
   Soup,
-  Wine,
-  Beer,
-  Apple,
   Sandwich,
   Salad,
   Egg,
-  Fish,
   Flame,
   Sparkles,
   ChefHat,
@@ -32,19 +28,11 @@ import {
   Popcorn,
   Candy,
   Lollipop,
-  Cherry,
-  Carrot,
   Wheat,
   Croissant,
-  Drumstick,
   Heart,
-  Grid,
-  Store,
-  Tag,
-  CircleDot,
   PartyPopper,
-  Gift,
-  Boxes
+  Gift
 } from 'lucide-react';
 
 export interface IconOption {

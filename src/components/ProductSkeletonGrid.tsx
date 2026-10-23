@@ -1,10 +1,13 @@
 import React from 'react';
+import { useLocation } from '../context/LocationContext';
 
 interface ProductSkeletonGridProps {
   count?: number;
 }
 
 export const ProductSkeletonGrid: React.FC<ProductSkeletonGridProps> = ({ count = 8 }) => {
+  const { settings } = useLocation();
+  const isSquare = settings?.homeCardShape === 'square';
   const items = Array.from({ length: count });
 
   return (
@@ -16,7 +19,11 @@ export const ProductSkeletonGrid: React.FC<ProductSkeletonGridProps> = ({ count 
       {items.map((_, index) => (
         <div
           key={index}
-          className="bg-white rounded-2xl sm:rounded-3xl p-2.5 sm:p-3.5 border border-slate-200/60 shadow-[0_2px_8px_rgba(0,0,0,0.02)] flex flex-col justify-between overflow-hidden animate-shimmer"
+          className={`bg-white p-2.5 sm:p-3.5 flex flex-col justify-between overflow-hidden animate-shimmer ${
+            isSquare
+              ? 'rounded-none border-0 outline-none shadow-[0_6px_18px_-2px_rgba(15,23,42,0.08),0_2px_6px_-1px_rgba(15,23,42,0.05)]'
+              : 'rounded-2xl sm:rounded-3xl border border-slate-200/60 shadow-[0_2px_8px_rgba(0,0,0,0.02)]'
+          }`}
         >
           <div>
             {/* Image Placeholder with Aspect Ratio Match */}

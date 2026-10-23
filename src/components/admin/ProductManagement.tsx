@@ -6,20 +6,17 @@ import {
   Trash2,
   Edit2,
   Image as ImageIcon,
-  Sparkles,
+  Star,
   Layers,
-  Leaf,
   Link2,
   GripVertical,
-  Download,
+  Ban,
   X
 } from 'lucide-react';
 import { triggerHaptic } from '../../utils/haptics';
 import {
   collection,
-  addDoc,
   setDoc,
-  updateDoc,
   deleteDoc,
   doc,
   writeBatch,
@@ -31,12 +28,10 @@ import {
   recordDeletedProduct,
   unblacklistProduct,
   sanitizeProducts,
-  getSanitizedCachedProducts,
   saveProductsToIndexedDB
 } from '../../services/productService';
 import { cleanupProductImages } from '../../services/storageCleanupService';
 import {
-  DEFAULT_CATEGORIES,
   getCachedCategories,
   getCachedCategoryIcons,
   subscribeToCategories,
@@ -47,7 +42,6 @@ import { CategoryManagementScreen } from './CategoryManagementScreen';
 import { ProductFormScreen } from './ProductFormScreen';
 import { ProductLinkGroupScreen } from './ProductLinkGroupScreen';
 import { ExtrasManagementScreen } from './ExtrasManagementScreen';
-import { renderCategoryIcon } from '../../utils/categoryIcons';
 import { isQuotaExhausted } from '../../services/quotaService';
 import { AdminQuotaBlockedModal } from './AdminQuotaBlockedModal';
 
@@ -57,36 +51,30 @@ interface ProductManagementProps {
   onUpdateProducts?: (products: Product[]) => void;
 }
 
-// -------------------------------------------------------------
-// Memoized Product Table Row for 60fps Scrolling & Instant Sorting
-// -------------------------------------------------------------
-interface ProductTableRowProps {
+interface ProductRowCardProps {
   product: Product;
   idx: number;
-  totalProducts?: number;
   isDragging?: boolean;
   isDragOver?: boolean;
-  onMoveToFront?: (product: Product, index: number) => void;
-  onMoveUp?: (product: Product, index: number) => void;
-  onMoveDown?: (product: Product, index: number) => void;
   onToggleAvailability: (product: Product) => void;
-  onToggleFeatured?: (product: Product) => void;
+  onToggleFeatured: (product: Product) => void;
   onEdit: (product: Product) => void;
   onDelete: (product: Product) => void;
   onOpenLinkGroup: (product: Product) => void;
-  onDragStart?: (e: React.DragEvent, index: number) => void;
-  onDragOver?: (e: React.DragEvent, index: number) => void;
-  onDrop?: (e: React.DragEvent, index: number) => void;
-  onDragEnd?: () => void;
-  onTouchStartDrag?: (e: React.TouchEvent, index: number) => void;
+  onDragStart: (e: React.DragEvent, index: number) => void;
+  onDragOver: (e: React.DragEvent, index: number) => void;
+  onDrop: (e: React.DragEvent, index: number) => void;
+  onDragEnd: () => void;
+  onTouchStartDrag: (e: React.TouchEvent, index: number) => void;
 }
 
-const ProductTableRow = memo<ProductTableRowProps>(({
+const ProductRowCard = memo<ProductRowCardProps>(({
   product,
   idx,
   isDragging,
   isDragOver,
   onToggleAvailability,
+  onToggleFeatured,
   onEdit,
   onDelete,
   onOpenLinkGroup,
@@ -97,6 +85,7 @@ const ProductTableRow = memo<ProductTableRowProps>(({
   onTouchStartDrag
 }) => {
   const isPinned = Boolean(product.isFeatured || product.isPinnedToFront);
+  const isAvailable = product.available !== false;
 
   const thumb = useMemo(() => {
     const isVegSalad = (url?: string) => !url || url.includes('photo-1546069901-ba9599a7e63c');
@@ -111,198 +100,241 @@ const ProductTableRow = memo<ProductTableRowProps>(({
   }, [product.imageUrl, product.images, product.variants]);
 
   return (
-    <tr
+    <div
       data-product-index={idx}
       draggable
-      onDragStart={(e) => onDragStart?.(e, idx)}
-      onDragOver={(e) => onDragOver?.(e, idx)}
-      onDrop={(e) => onDrop?.(e, idx)}
+      onDragStart={(e) => onDragStart(e, idx)}
+      onDragOver={(e) => onDragOver(e, idx)}
+      onDrop={(e) => onDrop(e, idx)}
       onDragEnd={onDragEnd}
-      className={`transition-colors duration-75 group select-none ${
-        isPinned ? 'bg-amber-50/30' : 'hover:bg-stone-50/70'
-      } ${
-        isDragging ? 'opacity-30 bg-amber-100/60' : ''
-      } ${
-        isDragOver ? 'bg-amber-100/90 outline-2 outline-amber-500 -outline-offset-2' : ''
+      className={`border select-none p-2.5 sm:p-3 ${
+        isDragOver
+          ? 'border-[#FFFFFF] bg-[#242427]'
+          : isDragging
+          ? 'opacity-40 border-[#3F3F46] bg-[#18181B]'
+          : !isAvailable
+          ? 'bg-[#121212] border-[#27272A]'
+          : isPinned
+          ? 'bg-[#18181B] border-[#3F3F46] hover:bg-[#242427]'
+          : 'bg-[#18181B] border-[#27272A] hover:bg-[#242427] hover:border-[#3F3F46]'
       }`}
+      style={{
+        contentVisibility: isDragging || isDragOver ? 'visible' : 'auto',
+        containIntrinsicSize: '100px',
+      }}
     >
-      {/* Product & Position */}
-      <td className="py-4 px-4 sm:px-6">
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Grip Handle & Position Badge */}
-          <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex flex-col sm:flex-row items-start gap-3">
+        {/* Left: Drag Handle + Rank + Compact Square Thumbnail */}
+        <div className="flex items-start gap-2.5 shrink-0 w-full sm:w-auto">
+          <div className="flex flex-col items-center gap-1 pt-0.5 shrink-0">
             <div
-              onTouchStart={(e) => onTouchStartDrag?.(e, idx)}
-              className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-amber-700 hover:bg-amber-50 active:bg-amber-100 cursor-grab active:cursor-grabbing shrink-0 transition-colors touch-none select-none"
-              title="Left click hold on Desktop or Long press on Mobile to reorder product"
+              onTouchStart={(e) => onTouchStartDrag(e, idx)}
+              className="p-1 text-[#71717A] hover:text-[#FFFFFF] hover:bg-[#242427] cursor-grab active:cursor-grabbing touch-none select-none"
+              title="Hold & drag to reorder position"
               aria-label={`Drag ${product.name} to reorder`}
             >
-              <GripVertical className="w-4 h-4 text-slate-400 group-hover:text-slate-600" />
+              <GripVertical className="w-3.5 h-3.5" />
             </div>
-
             <span
-              className={`w-6 h-6 rounded-lg text-[10px] font-heading font-extrabold flex items-center justify-center shrink-0 ${
-                idx === 0
-                  ? 'bg-amber-500 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600'
-              }`}
-              title={`Position #${idx + 1} in Menu`}
+              className="text-[11px] font-mono font-bold tabular-nums px-1.5 py-0.2 bg-[#0A0A0A] border border-[#27272A] text-[#71717A]"
+              title={`Position #${idx + 1}`}
             >
               #{idx + 1}
             </span>
           </div>
 
-          {/* Photo Thumbnail */}
-          <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-white shrink-0 border border-stone-200/80 shadow-2xs flex items-center justify-center">
-            {thumb ? (
-              <img
-                src={thumb}
-                alt={product.name}
-                className={`w-full h-full ${product.imageFit === 'contain' ? 'object-contain p-0.5 bg-white' : 'object-cover bg-white'}`}
-                referrerPolicy="no-referrer"
-                loading="lazy"
-              />
-            ) : (
-              <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
-                <span className="text-[11px] font-extrabold text-slate-600 uppercase">
+          <div className="flex flex-col items-center shrink-0">
+            {!isAvailable && (
+              <div className="w-14 sm:w-16 bg-[#EF4444]/15 border border-[#EF4444]/50 text-[#EF4444] font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-center py-0.2 mb-1">
+                SOLD OUT
+              </div>
+            )}
+            <div className={`relative w-14 h-14 sm:w-16 sm:h-16 aspect-square border overflow-hidden flex items-center justify-center shrink-0 ${
+              !isAvailable ? 'border-[#27272A] bg-[#0A0A0A]' : 'border-[#27272A] bg-[#121212]'
+            }`}>
+              {thumb ? (
+                <img
+                  src={thumb}
+                  alt={product.name}
+                  className={`w-full h-full ${
+                    product.imageFit === 'contain' ? 'object-contain p-1 bg-[#121212]' : 'object-cover bg-[#121212]'
+                  } ${!isAvailable ? 'opacity-50 grayscale' : ''}`}
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  decoding="async"
+                />
+              ) : (
+                <span className="text-xs font-mono font-bold text-[#71717A] uppercase tracking-[0.08em]">
                   {product.name.slice(0, 2)}
                 </span>
-              </div>
-            )}
-            {product.images && product.images.length > 1 && (
-              <span className="absolute bottom-0 inset-x-0 bg-slate-950/80 text-white text-[8px] font-bold text-center py-0.2">
-                {product.images.length} photos
-              </span>
-            )}
+              )}
+              {product.images && product.images.length > 1 && (
+                <span className="absolute bottom-0.5 right-0.5 bg-[#0A0A0A] border border-[#27272A] text-[#FFFFFF] text-[9px] font-mono font-bold px-1 py-0.2">
+                  {product.images.length} IMG
+                </span>
+              )}
+            </div>
           </div>
 
-          <div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="font-heading font-bold text-sm text-stone-900 tracking-tight">
+          {/* Mobile-only quick title beside image for compact screens */}
+          <div className="sm:hidden flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[#A1A1AA]">
+              <span className="text-[#A1A1AA]">{product.category}</span>
+              <span>·</span>
+              <span className={product.isVegetarian !== false ? 'text-[#10B981]' : 'text-[#EF4444]'}>
+                {product.isNonFood ? 'NON-FOOD' : product.isVegetarian !== false ? 'PURE VEG' : 'NON-VEG'}
+              </span>
+              {product.groupId && (
+                <>
+                  <span>·</span>
+                  <span className="text-[#FFFFFF] font-mono font-semibold">
+                    {product.groupName?.trim().split(/\s+/)[0] || 'LINKED'}
+                  </span>
+                </>
+              )}
+            </div>
+            <h3 className="mt-1 font-['Plus_Jakarta_Sans',sans-serif] font-semibold text-[15px] text-[#FFFFFF] tracking-[-0.01em] leading-[1.35]">
+              {product.name}
+            </h3>
+            {product.description && (
+              <p className="mt-1 text-[11px] text-[#A1A1AA] line-clamp-1 leading-relaxed">{product.description}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Center + Right Details Column */}
+        <div className="flex-1 min-w-0 w-full flex flex-col justify-between">
+          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-2.5">
+            {/* Desktop Metadata Kicker & Title */}
+            <div className="hidden sm:block min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em] text-[#A1A1AA]">
+                <span className="text-[#A1A1AA]">{product.category}</span>
+                <span>·</span>
+                <span className={product.isVegetarian !== false ? 'text-[#10B981]' : 'text-[#EF4444]'}>
+                  {product.isNonFood ? 'NON-FOOD' : product.isVegetarian !== false ? 'PURE VEG' : 'STANDARD'}
+                </span>
+                {typeof product.prepTimeMinutes === 'number' && product.prepTimeMinutes > 0 && (
+                  <>
+                    <span>·</span>
+                    <span>{product.prepTimeMinutes} MIN PREP</span>
+                  </>
+                )}
+                {product.groupId && (
+                  <>
+                    <span>·</span>
+                    <span className="text-[#FFFFFF] font-mono font-semibold">
+                      {product.groupName || 'LINKED'}
+                      {product.groupVariantLabel ? ` (${product.groupVariantLabel})` : ''}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              <h3 className="mt-1 font-['Plus_Jakarta_Sans',sans-serif] font-semibold text-[15px] sm:text-[16px] text-[#FFFFFF] tracking-[-0.01em] leading-[1.35]">
                 {product.name}
-              </span>
-              {!product.isNonFood && product.isVegetarian !== false && (
-                <Leaf className="w-3 h-3 text-emerald-600 shrink-0" />
+              </h3>
+
+              {product.description && (
+                <p className="mt-1 text-xs text-[#A1A1AA] max-w-2xl leading-relaxed line-clamp-2">
+                  {product.description}
+                </p>
               )}
-              {product.isNonFood && (
-                <span className="inline-flex items-center px-1.5 py-0.2 rounded-sm bg-slate-100 text-slate-600 text-[9px] font-semibold tracking-tight border border-slate-200">
-                  Non-Food
-                </span>
-              )}
-              {isPinned && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-heading font-extrabold bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
-                  <Sparkles className="w-2.5 h-2.5 text-amber-600" />
-                  <span>Pinned to Front</span>
+            </div>
+
+            {/* Inline Pricing & All Sizes Breakdown (Matte Minimal Badges with 6px vertical spacing) */}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] font-mono font-semibold tabular-nums tracking-[0.04em] lg:justify-end shrink-0">
+              {product.variants && product.variants.length > 0 ? (
+                product.variants.map((v, vIdx) => {
+                  const vOut = v.available === false;
+                  return (
+                    <span
+                      key={`${v.name}-${vIdx}`}
+                      className={`px-2 py-0.5 border text-[11px] font-mono font-semibold tabular-nums tracking-[0.04em] ${
+                        vOut
+                          ? 'bg-[#0A0A0A] border-[#27272A] text-[#71717A] line-through'
+                          : 'bg-[#0A0A0A] border-[#27272A] text-[#F4F4F5]'
+                      }`}
+                    >
+                      {v.name} <strong className="font-mono font-bold text-[#FFFFFF]">₹{v.price}</strong>
+                    </span>
+                  );
+                })
+              ) : (
+                <span className="px-2.5 py-0.5 border border-[#27272A] bg-[#0A0A0A] text-[#F4F4F5] font-mono font-semibold text-[12px] tabular-nums tracking-[0.04em]">
+                  PRICE <strong className="font-mono font-bold text-xs sm:text-sm text-[#FFFFFF]">₹{product.price}</strong>
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-stone-400 line-clamp-1 max-w-xs">
-              {product.description || 'No description provided'}
-            </p>
-
-            {/* Variant Group Badge (Compact single-line, first word only) */}
-            {product.groupId && (
-              <div className="flex items-center gap-1 mt-1">
-                <span
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200/80 text-[10px] font-bold"
-                  title={`Linked in group: ${product.groupName || ''}`}
-                >
-                  <Link2 className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
-                  <span>Group: {product.groupName?.trim().split(/\s+/)[0] || 'Linked'}</span>
-                  {product.groupVariantLabel && (
-                    <span className="text-[9px] text-indigo-500 font-medium">({product.groupVariantLabel})</span>
-                  )}
-                </span>
-              </div>
-            )}
           </div>
-        </div>
-      </td>
 
-      {/* Category */}
-      <td className="py-4 px-4 whitespace-nowrap">
-        <span className="px-2.5 py-1 rounded-full bg-stone-100 text-stone-700 text-[11px] font-medium border border-stone-200/60">
-          {product.category}
-        </span>
-      </td>
+          {/* Bottom Editorial Action Strip */}
+          <div className="mt-2.5 pt-2 border-t border-[#27272A] flex items-center justify-between gap-4 font-mono">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-5">
+              <button
+                type="button"
+                onClick={() => onEdit(product)}
+                className="inline-flex items-center gap-1.5 text-[#A1A1AA] hover:text-[#FFFFFF] text-[11px] font-bold uppercase tracking-[0.1em] cursor-pointer"
+              >
+                <Edit2 className="w-3.5 h-3.5 text-[#71717A]" />
+                <span>EDIT</span>
+              </button>
 
-      {/* Pricing / Sizes */}
-      <td className="py-4 px-4 whitespace-nowrap">
-        <div className="space-y-0.5">
-          <div className="font-heading font-extrabold text-sm text-stone-900">
-            ₹{product.price}
-          </div>
-          {product.variants && product.variants.length > 0 ? (
-            <div className="flex items-center gap-1 flex-wrap max-w-[160px]">
-              <span className="inline-block text-[10px] font-bold px-1.5 py-0.2 bg-blue-50 text-blue-700 border border-blue-200 rounded">
-                {product.variants.length} Options
-              </span>
-              {product.variants.some((v) => v.available === false) && (
-                <span className="inline-block text-[9px] font-extrabold px-1.5 py-0.2 bg-rose-50 text-rose-700 border border-rose-200 rounded">
-                  {product.variants.filter((v) => v.available === false).length} Out
-                </span>
-              )}
+              <button
+                type="button"
+                onClick={() => onToggleFeatured(product)}
+                className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.1em] cursor-pointer ${
+                  isPinned ? 'text-[#F59E0B]' : 'text-[#A1A1AA] hover:text-[#F59E0B]'
+                }`}
+                title="Pin or unpin product to front of catalog"
+              >
+                <Star className={`w-3.5 h-3.5 ${isPinned ? 'fill-[#F59E0B] text-[#F59E0B]' : 'text-[#71717A]'}`} />
+                <span>HERO</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onToggleAvailability(product)}
+                className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.1em] cursor-pointer ${
+                  isAvailable
+                    ? 'text-[#10B981] hover:text-[#EF4444]'
+                    : 'text-[#EF4444] hover:text-[#10B981]'
+                }`}
+                title={isAvailable ? 'Click to mark Sold Out' : 'Click to mark back In Stock'}
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>{isAvailable ? 'IN STOCK · MARK OUT' : 'SOLD OUT · RESTORE'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenLinkGroup(product)}
+                className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.1em] cursor-pointer ${
+                  product.groupId ? 'text-[#FF5500]' : 'text-[#A1A1AA] hover:text-[#FFFFFF]'
+                }`}
+                title="Link product variants"
+              >
+                <Link2 className="w-3.5 h-3.5 text-[#71717A]" />
+                <span>{product.groupId ? 'LINKED' : 'LINK'}</span>
+              </button>
             </div>
-          ) : (
-            <span className="text-[10px] text-stone-400">Standard Size</span>
-          )}
-        </div>
-      </td>
 
-      {/* In-Stock Status */}
-      <td className="py-4 px-4 whitespace-nowrap">
-        <button
-          onClick={() => onToggleAvailability(product)}
-          className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-            product.available !== false
-              ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
-              : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
-          }`}
-        >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              product.available !== false ? 'bg-emerald-500' : 'bg-rose-500'
-            }`}
-          />
-          <span>{product.available !== false ? 'In Stock' : 'Out of Stock'}</span>
-        </button>
-      </td>
-
-      {/* Actions */}
-      <td className="py-4 px-4 sm:px-6 text-right whitespace-nowrap">
-        <div className="flex items-center justify-end gap-1.5">
-          <button
-            onClick={() => onOpenLinkGroup(product)}
-            className={`p-2 rounded-xl transition-colors cursor-pointer ${
-              product.groupId
-                ? 'text-indigo-600 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100'
-                : 'text-stone-500 hover:text-stone-900 hover:bg-stone-100'
-            }`}
-            title="Link & group product variants"
-          >
-            <Link2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => onEdit(product)}
-            className="p-2 text-stone-500 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors cursor-pointer"
-            title="Edit product details & photos"
-          >
-            <Edit2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => onDelete(product)}
-            className="p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-            title="Delete product permanently"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+            <button
+              type="button"
+              onClick={() => onDelete(product)}
+              className="p-1 text-[#71717A] hover:text-[#EF4444] cursor-pointer shrink-0"
+              title="Delete product permanently"
+              aria-label={`Delete ${product.name}`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 });
 
-ProductTableRow.displayName = 'ProductTableRow';
+ProductRowCard.displayName = 'ProductRowCard';
 
 // -------------------------------------------------------------
 export const ProductManagement = React.memo<ProductManagementProps>(({ products, onRefresh, onUpdateProducts }) => {
@@ -596,73 +628,7 @@ function cleanPayloadDeep<T>(val: T): T {
     [products, localProducts]
   );
 
-  // Reorder helper with instantaneous local cache dispatch & zero-waste persistence
-  const updateProductOrderList = useCallback(
-    async (updatedList: Product[], successMsg?: string) => {
-      const reordered = updatedList.map((p, i) => ({
-        ...p,
-        sortOrder: i + 1,
-      }));
 
-      try {
-        const cachedStr = localStorage.getItem('swadeep_cached_products');
-        const allCurrent: Product[] = cachedStr ? JSON.parse(cachedStr) : [...products];
-        const orderMap = new Map<string, number>();
-        reordered.forEach((p) => orderMap.set(p.id, p.sortOrder!));
-
-        const newAll = allCurrent.map((p) => {
-          if (orderMap.has(p.id)) {
-            return { ...p, sortOrder: orderMap.get(p.id) };
-          }
-          return p;
-        });
-        localStorage.setItem('swadeep_cached_products', JSON.stringify(newAll));
-        window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: newAll }));
-      } catch {}
-
-      if (successMsg) {
-        setSeedSuccessMessage(successMsg);
-        setTimeout(() => setSeedSuccessMessage(null), 3000);
-      }
-
-      // 1. Sync to local server with 0 Firestore writes
-      try {
-        fetch('/api/products/reorder', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            orders: reordered.map((p) => ({ id: p.id, sortOrder: p.sortOrder })),
-          }),
-        }).catch(() => {});
-      } catch {}
-
-      // 2. Only update Firestore documents whose sortOrder ACTUALLY changed
-      try {
-        const changedProducts = reordered.filter((p) => {
-          const orig = products.find((oldP) => oldP.id === p.id);
-          return !orig || orig.sortOrder !== p.sortOrder;
-        });
-
-        if (changedProducts.length > 0) {
-          const batch = writeBatch(db);
-          changedProducts.slice(0, 50).forEach((p) => {
-            batch.set(
-              doc(db, 'products', p.id),
-              {
-                sortOrder: p.sortOrder,
-                updatedAt: serverTimestamp(),
-              },
-              { merge: true }
-            );
-          });
-          await batch.commit();
-        }
-      } catch (err: any) {
-        console.warn('Optimized sortOrder update note:', err?.message || err);
-      }
-    },
-    [products]
-  );
 
   // Debounced persistence helper for product sort order (prevents screen flashes)
   const productSaveDebounceRef = useRef<number | null>(null);
@@ -742,6 +708,8 @@ function cleanPayloadDeep<T>(val: T): T {
         matchesCategory = true;
       } else if (selectedCategory === 'Featured') {
         matchesCategory = Boolean(p.isFeatured || p.isPinnedToFront);
+      } else if (selectedCategory === 'SoldOut') {
+        matchesCategory = p.available === false;
       } else {
         const pCat = (p.category || '').trim().toLowerCase();
         const sCat = selectedCategory.trim().toLowerCase();
@@ -898,40 +866,7 @@ function cleanPayloadDeep<T>(val: T): T {
     setDragOverProductIdx(null);
   }, [dragOverProductIdx, handleProductReorder]);
 
-  const handleMoveProductToFront = useCallback(
-    async (product: Product, index: number) => {
-      if (index <= 0) return;
-      const updated = [...sortedProducts];
-      const [selected] = updated.splice(index, 1);
-      updated.unshift(selected);
-      await updateProductOrderList(updated, `"${product.name}" moved to #1 position!`);
-    },
-    [sortedProducts, updateProductOrderList]
-  );
 
-  const handleMoveProductUp = useCallback(
-    async (product: Product, index: number) => {
-      if (index <= 0) return;
-      const updated = [...sortedProducts];
-      const temp = updated[index - 1];
-      updated[index - 1] = updated[index];
-      updated[index] = temp;
-      await updateProductOrderList(updated);
-    },
-    [sortedProducts, updateProductOrderList]
-  );
-
-  const handleMoveProductDown = useCallback(
-    async (product: Product, index: number) => {
-      if (index >= sortedProducts.length - 1) return;
-      const updated = [...sortedProducts];
-      const temp = updated[index + 1];
-      updated[index + 1] = updated[index];
-      updated[index] = temp;
-      await updateProductOrderList(updated);
-    },
-    [sortedProducts, updateProductOrderList]
-  );
 
   // Complete Product Deletion + Guaranteed Storage Image Cleanup
   const handleDeleteProduct = async () => {
@@ -981,394 +916,302 @@ function cleanPayloadDeep<T>(val: T): T {
   };
 
   const featuredCount = useMemo(
-    () => products.filter((p) => p.isFeatured || p.isPinnedToFront).length,
-    [products]
+    () => localProducts.filter((p) => p.isFeatured || p.isPinnedToFront).length,
+    [localProducts]
   );
 
-  const handleExportCatalogBackup = useCallback(() => {
-    try {
-      const backupData = {
-        exportedAt: new Date().toISOString(),
-        appName: 'Gidhaur Bakery',
-        version: '1.0',
-        totalProducts: products.length,
-        products: products,
-        categories: categories,
-        categoryIcons: categoryIcons,
-        settings: (() => {
-          try {
-            const raw = localStorage.getItem('swadeep_restaurant_settings');
-            return raw ? JSON.parse(raw) : null;
-          } catch {
-            return null;
-          }
-        })(),
-        deliveryAgents: (() => {
-          try {
-            const raw = localStorage.getItem('swadeep_delivery_agents');
-            return raw ? JSON.parse(raw) : [];
-          } catch {
-            return [];
-          }
-        })(),
-        kitchenStaff: (() => {
-          try {
-            const raw = localStorage.getItem('swadeep_kitchen_staff');
-            return raw ? JSON.parse(raw) : [];
-          } catch {
-            return [];
-          }
-        })(),
-        preparingStaff: (() => {
-          try {
-            const raw = localStorage.getItem('swadeep_preparing_staff');
-            return raw ? JSON.parse(raw) : [];
-          } catch {
-            return [];
-          }
-        })(),
-      };
+  const soldOutCount = useMemo(
+    () => localProducts.filter((p) => p.available === false).length,
+    [localProducts]
+  );
 
-      const jsonStr = JSON.stringify(backupData, null, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const downloadAnchor = document.createElement('a');
-      downloadAnchor.setAttribute('href', url);
-      const dateStr = new Date().toISOString().slice(0, 10);
-      downloadAnchor.setAttribute('download', `gidhaur_bakery_backup_${dateStr}.json`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-      URL.revokeObjectURL(url);
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    categories.forEach((cat) => {
+      const sCat = cat.trim().toLowerCase();
+      const normSCat = sCat.replace(/&/g, 'and').replace(/\s+/g, ' ');
+      counts[cat] = localProducts.filter((p) => {
+        const pCat = (p.category || '').trim().toLowerCase();
+        const normPCat = pCat.replace(/&/g, 'and').replace(/\s+/g, ' ');
+        return (
+          pCat === sCat ||
+          normPCat === normSCat ||
+          (normPCat.includes('gift hamper') && normSCat.includes('gift hamper')) ||
+          (normPCat.includes('combo') && normSCat.includes('combo'))
+        );
+      }).length;
+    });
+    return counts;
+  }, [localProducts, categories]);
 
-      triggerHaptic('success');
-      setSeedSuccessMessage(`✓ Exported all ${products.length} products & settings to JSON backup file!`);
-      setTimeout(() => setSeedSuccessMessage(null), 4000);
-    } catch (err: any) {
-      console.error('Export backup error:', err);
-      setSeedSuccessMessage('Failed to export backup: ' + (err?.message || 'Unknown error'));
-      setTimeout(() => setSeedSuccessMessage(null), 4000);
-    }
-  }, [products, categories, categoryIcons]);
-
-  // Dedicated Full Screens (No modals, zero scroll lag, zero jitter)
-  if (activeSubView === 'add-edit') {
-    return (
-      <>
+  return (
+    <>
+      {/* 0-Delay Sub-Screen: Add / Edit Product (Persisted in DOM for instant 0ms open & back) */}
+      <div className={activeSubView === 'add-edit' ? 'block' : 'hidden'}>
         <ProductFormScreen
           product={editingProduct}
           categories={categories}
           onBack={handleBackToCatalog}
           onSave={handleSaveProduct}
         />
-        <AdminQuotaBlockedModal
-          isOpen={quotaBlockedModalOpen}
-          onClose={() => setQuotaBlockedModalOpen(false)}
-        />
-      </>
-    );
-  }
-
-  if (activeSubView === 'categories') {
-    return (
-      <CategoryManagementScreen
-        categories={categories}
-        products={products}
-        iconsMap={categoryIcons}
-        onBack={handleBackToCatalog}
-        onCategoriesChange={(newCats, newIcons) => {
-          queueMicrotask(() => {
-            setCategories(newCats);
-            if (newIcons) setCategoryIcons(newIcons);
-          });
-        }}
-      />
-    );
-  }
-
-  if (activeSubView === 'link-groups') {
-    return (
-      <ProductLinkGroupScreen
-        product={linkGroupProduct}
-        allProducts={products}
-        onBack={handleBackToCatalog}
-        onSuccess={(msg) => {
-          handleBackToCatalog();
-          setSeedSuccessMessage(msg);
-          setTimeout(() => setSeedSuccessMessage(null), 4000);
-          onRefresh?.();
-        }}
-      />
-    );
-  }
-
-  if (activeSubView === 'extras') {
-    return (
-      <ExtrasManagementScreen
-        onBack={handleBackToCatalog}
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Action and Search Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="font-heading font-extrabold text-2xl text-stone-900">
-            Menu Catalog & Products ({localProducts.length})
-          </h2>
-          <p className="text-xs text-stone-500">
-            Add new food items, configure custom sizes & portions, upload photos, and manage live stock.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2.5 flex-wrap">
-          {/* Manage Categories */}
-          <button
-            onClick={openCategoriesScreen}
-            className="px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 cursor-pointer"
-            id="admin-manage-categories-btn"
-            title="Manage Menu Category Tabs (Add/Delete/Rename/Reorder)"
-          >
-            <Layers className="w-4 h-4 text-slate-600" />
-            <span>Manage Categories ({categories.length})</span>
-          </button>
-
-          {/* Link & Group Products */}
-          <button
-            type="button"
-            onClick={() => openLinkGroup(null)}
-            className="px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 cursor-pointer"
-            id="admin-link-variants-btn"
-            title="Link & Group Product Variants"
-          >
-            <Link2 className="w-4 h-4 text-indigo-600" />
-            <span>Link Variants</span>
-          </button>
-
-          {/* Manage Extras & Add-ons Library */}
-          <button
-            type="button"
-            onClick={openExtrasScreen}
-            className="px-4 py-2.5 bg-white hover:bg-amber-50/50 border border-amber-200/90 text-amber-900 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 cursor-pointer"
-            id="admin-manage-extras-btn"
-            title="Manage Extras & Add-ons Library (Cheese, Corn, Spicy, Dips)"
-          >
-            <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
-            <span>+ Extras</span>
-          </button>
-
-          {/* Export All Products & Settings to JSON */}
-          <button
-            type="button"
-            onClick={handleExportCatalogBackup}
-            className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100/90 border border-emerald-300 text-emerald-900 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-2xs active:scale-95 cursor-pointer"
-            id="admin-export-backup-btn"
-            title="Export All Products & Settings to JSON Backup"
-          >
-            <Download className="w-4 h-4 text-emerald-700" />
-            <span>Export Backup (JSON)</span>
-          </button>
-
-          <button
-            onClick={openAddScreen}
-            className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 active:scale-95 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-md shadow-slate-950/20 cursor-pointer"
-            id="admin-add-product-btn"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add New Item</span>
-          </button>
-        </div>
       </div>
 
-      {seedSuccessMessage && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs flex items-center gap-2 animate-fadeIn">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>{seedSuccessMessage}</span>
-        </div>
-      )}
+      {/* 0-Delay Sub-Screen: Category Management */}
+      <div className={activeSubView === 'categories' ? 'block' : 'hidden'}>
+        <CategoryManagementScreen
+          categories={categories}
+          products={products}
+          iconsMap={categoryIcons}
+          onBack={handleBackToCatalog}
+          onCategoriesChange={(newCats, newIcons) => {
+            queueMicrotask(() => {
+              setCategories(newCats);
+              if (newIcons) setCategoryIcons(newIcons);
+            });
+          }}
+        />
+      </div>
 
-      {/* Filter and Search Bar */}
-      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-stone-200/80 shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="relative w-full sm:w-72 md:w-80 shrink-0">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search menu items..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-9 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:bg-white focus:border-slate-400 font-medium"
-          />
-          {searchQuery && (
+      {/* 0-Delay Sub-Screen: Flipkart Link Groups */}
+      <div className={activeSubView === 'link-groups' ? 'block' : 'hidden'}>
+        <ProductLinkGroupScreen
+          product={linkGroupProduct}
+          allProducts={products}
+          onBack={handleBackToCatalog}
+          onSuccess={(msg) => {
+            handleBackToCatalog();
+            setSeedSuccessMessage(msg);
+            setTimeout(() => setSeedSuccessMessage(null), 4000);
+            onRefresh?.();
+          }}
+        />
+      </div>
+
+      {/* 0-Delay Sub-Screen: Extras Management */}
+      <div className={activeSubView === 'extras' ? 'block' : 'hidden'}>
+        <ExtrasManagementScreen
+          onBack={handleBackToCatalog}
+        />
+      </div>
+
+      {/* Main Catalog View (Persisted in DOM for instant 0ms switching) */}
+      <div className={activeSubView === 'catalog' ? 'space-y-5' : 'hidden'}>
+        {/* Lekhix Editorial Minimal Catalog Header (Direct Canvas + Razor-sharp 1px border divider) */}
+        <div className="pb-4 border-b border-[#27272A] flex flex-col md:flex-row md:items-center justify-between gap-4 text-[#FFFFFF]">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-[18px] font-bold uppercase tracking-[0.04em] text-[#FFFFFF] font-['Plus_Jakarta_Sans',sans-serif]">
+              CATALOG
+            </h2>
+            <span className="text-[11px] font-mono font-medium text-[#A1A1AA] uppercase tracking-[0.14em]">
+              {localProducts.length} PRODUCTS · {categories.length} CATEGORIES
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap">
             <button
               type="button"
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-600 rounded-full hover:bg-stone-200/70 transition-colors cursor-pointer"
-              title="Clear search"
+              onClick={openCategoriesScreen}
+              className="px-4 py-2.5 bg-[#18181D] hover:bg-[#242429] border border-[#2E2E36] hover:border-[#3F3F46] text-[#F5F5F7] text-[11px] font-bold uppercase tracking-[0.18em] flex items-center gap-2 cursor-pointer rounded-none"
+              id="admin-manage-categories-btn"
+            >
+              <Layers className="w-3.5 h-3.5 text-[#A1A1AA] shrink-0" />
+              <span className="tracking-[0.18em]">CATEGORIES ({categories.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openLinkGroup(null)}
+              className="px-4 py-2.5 bg-[#18181D] hover:bg-[#242429] border border-[#2E2E36] hover:border-[#3F3F46] text-[#F5F5F7] text-[11px] font-bold uppercase tracking-[0.18em] flex items-center gap-2 cursor-pointer rounded-none"
+              id="admin-link-variants-btn"
+            >
+              <Link2 className="w-3.5 h-3.5 text-[#A1A1AA] shrink-0" />
+              <span className="tracking-[0.18em]">LINK VARIANTS</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={openExtrasScreen}
+              className="px-4 py-2.5 bg-[#18181D] hover:bg-[#242429] border border-[#2E2E36] hover:border-[#3F3F46] text-[#F5F5F7] text-[11px] font-bold uppercase tracking-[0.18em] flex items-center gap-2 cursor-pointer rounded-none"
+              id="admin-manage-extras-btn"
+            >
+              <span className="tracking-[0.18em]">+ EXTRAS</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={openAddScreen}
+              className="px-5 py-2.5 bg-[#FFFFFF] hover:bg-zinc-200 text-[#111111] text-[11px] font-bold uppercase tracking-[0.18em] flex items-center gap-2 cursor-pointer border border-[#FFFFFF] shrink-0 rounded-none"
+              id="admin-add-product-btn"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[3] shrink-0" />
+              <span className="tracking-[0.18em]">ADD PRODUCT</span>
+            </button>
+          </div>
+        </div>
+
+        {seedSuccessMessage && (
+          <div className="p-3 bg-[#18181B] border border-[#10B981] text-[#FFFFFF] text-xs font-mono font-bold flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+              <span>{seedSuccessMessage}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSeedSuccessMessage(null)}
+              className="text-[#A1A1AA] hover:text-[#FFFFFF] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Category Pills & Filters */}
-        <div className="flex items-center gap-1.5 overflow-x-auto flex-1 min-w-0 no-scrollbar py-1">
-          <button
-            onClick={() => setSelectedCategory('All')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-heading font-bold shrink-0 transition-all cursor-pointer ${
-              selectedCategory === 'All'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>All ({localProducts.length})</span>
-          </button>
-
-          {featuredCount > 0 && (
+        {/* Lekhix Editorial Category Filter Strip & Search (Pure Matte Black with Breathable Spacing) */}
+        <div className="pb-3 border-b border-[#27272A] flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-[#FFFFFF]">
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar font-mono text-[11px]">
             <button
-              onClick={() => setSelectedCategory('Featured')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-heading font-bold shrink-0 transition-all cursor-pointer ${
-                selectedCategory === 'Featured'
-                  ? 'bg-amber-600 text-white shadow-xs'
-                  : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
+              type="button"
+              onClick={() => setSelectedCategory('All')}
+              className={`px-3 py-1.5 border whitespace-nowrap cursor-pointer font-bold uppercase tracking-[0.08em] rounded-none ${
+                selectedCategory === 'All'
+                  ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                  : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427] font-medium'
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>⭐ Pinned / Front ({featuredCount})</span>
+              ALL ({localProducts.length})
             </button>
-          )}
 
-          {categories.map((cat) => {
-            const visual = categoryIcons[cat];
-            const isSelected = selectedCategory === cat;
-            return (
+            {featuredCount > 0 && (
               <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-heading font-bold shrink-0 transition-all cursor-pointer ${
-                  isSelected
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                type="button"
+                onClick={() => setSelectedCategory('Featured')}
+                className={`px-3 py-1.5 border whitespace-nowrap cursor-pointer font-bold uppercase tracking-[0.08em] rounded-none ${
+                  selectedCategory === 'Featured'
+                    ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                    : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427] font-medium'
                 }`}
               >
-                {renderCategoryIcon(
-                  visual,
-                  cat,
-                  `w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-white' : 'text-stone-500'}`
-                )}
-                <span>{cat}</span>
+                ★ HERO ({featuredCount})
               </button>
-            );
-          })}
+            )}
 
-          <button
-            onClick={openCategoriesScreen}
-            className="px-3 py-1.5 rounded-xl text-xs font-heading font-bold text-slate-700 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-300 transition-colors flex items-center gap-1 shrink-0 cursor-pointer shadow-2xs"
-            title="Rearrange Categories & Landing Screen Defaults"
-          >
-            <Layers className="w-3.5 h-3.5 text-slate-600" />
-            <span>Rearrange Tabs</span>
-          </button>
-        </div>
-      </div>
+            {categories.map((cat) => {
+              const isSelected = selectedCategory === cat;
+              const count = categoryCounts[cat] ?? 0;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-3 py-1.5 border whitespace-nowrap cursor-pointer uppercase tracking-[0.08em] rounded-none ${
+                    isSelected
+                      ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A] font-bold'
+                      : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427] font-medium'
+                  }`}
+                >
+                  {cat.toUpperCase()} ({count})
+                </button>
+              );
+            })}
 
-      {/* Product Table / Virtualized Rendering */}
-      {sortedProducts.length === 0 ? (
-        <div className="bg-white rounded-3xl border border-stone-200/80 p-12 text-center space-y-3">
-          <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center text-stone-400 mx-auto">
-            <ImageIcon className="w-8 h-8" />
+            <button
+              type="button"
+              onClick={() => setSelectedCategory('SoldOut')}
+              className={`px-3 py-1.5 border whitespace-nowrap cursor-pointer uppercase tracking-[0.08em] rounded-none ${
+                selectedCategory === 'SoldOut'
+                  ? 'border-[#EF4444] bg-[#EF4444] text-[#FFFFFF] font-bold'
+                  : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#EF4444] font-medium'
+              }`}
+            >
+              SOLD OUT ({soldOutCount})
+            </button>
           </div>
-          <h3 className="font-heading font-bold text-stone-800 text-lg">No Products Found</h3>
-          <p className="text-xs text-stone-500 max-w-sm mx-auto">
-            {products.length === 0
-              ? 'Your menu is currently empty. Click "Add New Product" to start adding items.'
-              : 'No items match your search or category filter.'}
-          </p>
+
+          <div className="relative w-full lg:w-72 shrink-0 font-mono">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#71717A] pointer-events-none" />
+            <input
+              type="text"
+              placeholder="FILTER CATALOG..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-7 py-2 bg-[#121212] border border-[#27272A] focus:border-[#FFFFFF] text-[11px] font-mono font-medium text-[#FFFFFF] placeholder:text-[#71717A] placeholder:font-mono placeholder:uppercase placeholder:tracking-[0.1em] focus:outline-none uppercase tracking-[0.1em] rounded-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-[#71717A] hover:text-[#FFFFFF] cursor-pointer"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+      {/* Single-Column (1-Product-Per-Row) Structured List */}
+      {sortedProducts.length === 0 ? (
+        <div className="bg-[#18181B] border border-[#27272A] p-10 text-center space-y-3">
+          <div className="w-10 h-10 border border-[#27272A] bg-[#121212] flex items-center justify-center text-[#71717A] mx-auto">
+            <ImageIcon className="w-5 h-5" />
+          </div>
+          <h3 className="font-bold text-[#FFFFFF] text-sm uppercase tracking-[0.06em]">NO MATCHING ITEMS</h3>
           {products.length === 0 && (
             <button
+              type="button"
               onClick={openAddScreen}
-              className="mt-2 px-5 py-2.5 bg-slate-950 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer inline-flex items-center gap-1.5"
+              className="mt-2 px-4 py-2 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-bold text-[11px] font-mono uppercase tracking-[0.06em] cursor-pointer inline-flex items-center gap-1.5 border border-[#FF5500]"
             >
-              <Plus className="w-4 h-4 text-white" />
-              <span>Add New Product Now</span>
+              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>ADD FIRST PRODUCT</span>
             </button>
           )}
         </div>
       ) : (
-        <div className="bg-white rounded-3xl border border-stone-200/80 shadow-xs overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-stone-600">
-              <thead className="bg-stone-50/80 border-b border-stone-200/80 text-stone-500 font-bold uppercase tracking-wider text-[10px]">
-                <tr>
-                  <th className="py-3.5 px-4 sm:px-6">
-                    <div className="flex items-center gap-2">
-                      <span>Product & Position</span>
-                      <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/80 font-normal normal-case">
-                        <GripVertical className="w-3 h-3 text-amber-600" />
-                        Hold & drag to reorder
-                      </span>
-                    </div>
-                  </th>
-                  <th className="py-3.5 px-4">Category</th>
-                  <th className="py-3.5 px-4">Pricing / Sizes</th>
-                  <th className="py-3.5 px-4">In-Stock Status</th>
-                  <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody
-                className="divide-y divide-stone-100"
-                onTouchMove={handleProductTouchMove}
-                onTouchEnd={handleProductTouchEnd}
-                onTouchCancel={handleProductTouchEnd}
-              >
-                {sortedProducts.map((product, idx) => (
-                  <ProductTableRow
-                    key={product.id}
-                    product={product}
-                    idx={idx}
-                    totalProducts={sortedProducts.length}
-                    isDragging={draggedProductIdx === idx}
-                    isDragOver={dragOverProductIdx === idx}
-                    onDragStart={handleProductDragStart}
-                    onDragOver={handleProductDragOver}
-                    onDrop={handleProductDrop}
-                    onDragEnd={handleProductDragEnd}
-                    onTouchStartDrag={handleProductTouchStart}
-                    onToggleAvailability={handleToggleAvailability}
-                    onToggleFeatured={handleToggleFeatured}
-                    onEdit={openEditScreen}
-                    onDelete={(p) => setProductToDelete(p)}
-                    onOpenLinkGroup={openLinkGroup}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <div
+          className="space-y-2.5"
+          onTouchMove={handleProductTouchMove}
+          onTouchEnd={handleProductTouchEnd}
+          onTouchCancel={handleProductTouchEnd}
+        >
+          {sortedProducts.map((product, idx) => (
+            <ProductRowCard
+              key={product.id}
+              product={product}
+              idx={idx}
+              isDragging={draggedProductIdx === idx}
+              isDragOver={dragOverProductIdx === idx}
+              onDragStart={handleProductDragStart}
+              onDragOver={handleProductDragOver}
+              onDrop={handleProductDrop}
+              onDragEnd={handleProductDragEnd}
+              onTouchStartDrag={handleProductTouchStart}
+              onToggleAvailability={handleToggleAvailability}
+              onToggleFeatured={handleToggleFeatured}
+              onEdit={openEditScreen}
+              onDelete={(p) => setProductToDelete(p)}
+              onOpenLinkGroup={openLinkGroup}
+            />
+          ))}
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
+      {/* Delete Confirmation Modal (Pure Matte Black) */}
       {productToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-stone-100 space-y-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
-              <Trash2 className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="font-heading font-extrabold text-stone-900 text-lg">
-                Delete "{productToDelete.name}"?
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="bg-[#18181B] border border-[#EF4444] max-w-sm w-full p-5 space-y-4">
+            <div className="space-y-1">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] text-[#EF4444] block">
+                PERMANENT DELETION
+              </span>
+              <h3 className="font-bold text-[#FFFFFF] text-base">
+                Delete &quot;{productToDelete.name}&quot;?
               </h3>
-              <p className="text-xs text-stone-500 mt-1">
-                This item will be permanently removed from your online catalog and its cloud images deleted from storage.
-              </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setProductToDelete(null)}
-                className="flex-1 py-2.5 rounded-xl border border-stone-200 text-stone-600 font-bold text-xs hover:bg-stone-50"
+                className="flex-1 py-2 border border-[#27272A] bg-[#121212] text-[#FFFFFF] font-bold text-[11px] font-mono uppercase tracking-[0.06em] hover:bg-[#242427] cursor-pointer"
               >
                 Cancel
               </button>
@@ -1376,7 +1219,7 @@ function cleanPayloadDeep<T>(val: T): T {
                 type="button"
                 onClick={handleDeleteProduct}
                 disabled={isDeleting}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/20"
+                className="flex-1 py-2 bg-[#EF4444] hover:bg-[#dc2626] text-[#FFFFFF] font-bold text-[11px] font-mono uppercase tracking-[0.06em] cursor-pointer disabled:opacity-50 border border-[#EF4444]"
               >
                 {isDeleting ? 'Deleting...' : 'Delete'}
               </button>
@@ -1391,6 +1234,7 @@ function cleanPayloadDeep<T>(val: T): T {
         onClose={() => setQuotaBlockedModalOpen(false)}
       />
     </div>
+    </>
   );
 });
 

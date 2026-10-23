@@ -22,6 +22,7 @@ import {
 import { Product, ProductVariant, ProductExtra } from '../types';
 import { useCart } from '../context/CartContext';
 import { triggerHaptic } from '../utils/haptics';
+import { lockBodyScroll, unlockBodyScroll } from '../utils/scrollLock';
 
 interface ProductModalProps {
   product: Product | null;
@@ -57,7 +58,6 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   const { addToCart, getItemQuantity, totalItems, subtotal, setIsCartOpen } = useCart();
   const [addedAnimation, setAddedAnimation] = useState(false);
   const hasVariants = Boolean(product?.variants && product.variants.length > 0);
-  const hasMultipleVariants = Boolean(product?.variants && product.variants.length > 1);
 
   // If a product has multiple variants and user didn't open a pre-split variant, start unselected (-1)!
   const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(() => {
@@ -67,10 +67,11 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   });
   const [selectedQty, setSelectedQty] = useState(1);
   const [selectedExtras, setSelectedExtras] = useState<ProductExtra[]>([]);
-  const [isHovered, setIsHovered] = useState(false);
+  const isHoveredRef = useRef(false);
   const [isManualPaused, setIsManualPaused] = useState(false);
   const manualPauseTimerRef = useRef<number | null>(null);
   const touchStartXRef = useRef<number | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
 
   // 1. Level 1: Flipkart-Style Linked Sibling Products (Numbers 0..9, Flavours, Models)
   const siblingProducts = useMemo(() => {
@@ -97,18 +98,9 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   // Ultra-fast zero-layout-shift scroll lock for fluid 120fps scrolling
   useEffect(() => {
-    const origHtmlOverflow = document.documentElement.style.overflow;
-    const origBodyOverflow = document.body.style.overflow;
-    const origOverscroll = document.body.style.overscrollBehavior;
-
-    document.documentElement.style.overflow = 'hidden';
-    document.body.style.overflow = 'hidden';
-    document.body.style.overscrollBehavior = 'none';
-
+    lockBodyScroll();
     return () => {
-      document.documentElement.style.overflow = origHtmlOverflow;
-      document.body.style.overflow = origBodyOverflow;
-      document.body.style.overscrollBehavior = origOverscroll;
+      unlockBodyScroll();
     };
   }, []);
 
@@ -167,29 +159,52 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   // Shows ONLY the photo of the selected variant/option so it doesn't auto-shift between other variants!
   const isVegSalad = (url?: string) => !url || url.includes('photo-1546069901-ba9599a7e63c');
 
+  // Normalize image URLs so primary cover (.webp) and its generated copies (-img0.webp / -var0.webp) never duplicate
+  const getCanonicalImageKey = (url: string): string => {
+    const trimmed = url.trim();
+    if (trimmed.startsWith('/product-images/')) {
+      return trimmed
+        .replace(/-(?:img0|var0)(\.[a-zA-Z0-9]+)(\?.*)?$/i, '$1$2')
+        .split('?')[0];
+    }
+    return trimmed.split('#')[0];
+  };
+
   const rawImages: string[] = useMemo(() => {
     const list: string[] = [];
+    const seenKeys = new Set<string>();
+
+    const pushUnique = (url?: string) => {
+      if (!url || isVegSalad(url)) return;
+      const trimmed = url.trim();
+      if (!trimmed) return;
+      const key = getCanonicalImageKey(trimmed);
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        list.push(trimmed);
+      }
+    };
 
     // 1. If an active variant with a specific image is selected, show THAT variant's photo only!
     if (activeVariant?.imageUrl && !isVegSalad(activeVariant.imageUrl)) {
-      list.push(activeVariant.imageUrl);
+      pushUnique(activeVariant.imageUrl);
       return list;
     }
 
     // 2. If a specific color option has its own image, show THAT color's photo only!
     if (selectedColorOption?.imageUrl && !isVegSalad(selectedColorOption.imageUrl)) {
-      list.push(selectedColorOption.imageUrl);
+      pushUnique(selectedColorOption.imageUrl);
       return list;
     }
 
-    // 3. Otherwise fallback to product's own images / imageUrl
+    // 3. Otherwise fallback to product's own images (and only fallback to imageUrl if images is empty)
     if (product?.images && product.images.length > 0) {
       for (const img of product.images) {
-        if (!isVegSalad(img) && !list.includes(img)) list.push(img);
+        pushUnique(img);
       }
     }
-    if (product?.imageUrl && !isVegSalad(product.imageUrl) && !list.includes(product.imageUrl)) {
-      list.push(product.imageUrl);
+    if (list.length === 0 && product?.imageUrl) {
+      pushUnique(product.imageUrl);
     }
 
     return list;
@@ -256,25 +271,34 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   useEffect(() => {
     if (rawImages.length <= 1) return;
-    if (isManualPaused || isHovered) return;
+    if (isManualPaused) return;
 
     const timer = setInterval(() => {
+      if (isHoveredRef.current) return;
       setActiveImgIdx((prev) => (prev + 1) % rawImages.length);
     }, 4500);
     return () => clearInterval(timer);
-  }, [rawImages.length, isManualPaused, isHovered]);
+  }, [rawImages.length, isManualPaused]);
 
-  // Touch Swipe Handlers for Modal
+  // Touch Swipe Handlers for Modal (only active when multiple images exist and swipe is horizontal)
   const handleTouchStart = (e: React.TouchEvent) => {
+    if (rawImages.length <= 1) return;
     touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartXRef.current === null) return;
+    if (rawImages.length <= 1 || touchStartXRef.current === null || touchStartYRef.current === null) {
+      touchStartXRef.current = null;
+      touchStartYRef.current = null;
+      return;
+    }
     const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
     const diffX = touchStartXRef.current - touchEndX;
+    const diffY = touchStartYRef.current - touchEndY;
 
-    if (Math.abs(diffX) > 35) {
+    if (Math.abs(diffX) > 40 && Math.abs(diffX) > Math.abs(diffY) * 1.5) {
       pauseAutoAdvanceTemporarily();
       if (diffX > 0) {
         // Swiped Left -> Next Image
@@ -285,6 +309,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       }
     }
     touchStartXRef.current = null;
+    touchStartYRef.current = null;
   };
 
   // Dynamic SVG Icon and Title according to variant preset type or custom label
@@ -347,9 +372,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   if (!product) return null;
 
-  const isStockZero = typeof product.stockQuantity === 'number' && product.stockQuantity <= 0;
   const isVariantInStock = rawActiveVariant ? rawActiveVariant.available !== false : true;
-  const isProductInStock = !isStockZero && product.available !== false && isVariantInStock;
 
   const getModalImageFitClass = (imgSrc: string, idx: number) => {
     // 1. If active variant has its own image and explicit fit
@@ -476,7 +499,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-white flex flex-col w-full h-[100dvh] max-h-[100dvh] overflow-hidden overscroll-none select-none animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 bg-white flex flex-col w-full h-[100dvh] max-h-[100dvh] overflow-hidden overscroll-none select-none"
       id="product-detail-fullscreen-view"
     >
       {/* Dedicated Clean Page View on Desktop AND Mobile - No Popup Lag or Background Clutter */}
@@ -490,7 +513,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
           <button
             type="button"
             onClick={handleBackNavigation}
-            className="pointer-events-auto w-10 h-10 rounded-full bg-white/95 hover:bg-white text-slate-800 shadow-[0_2px_12px_rgba(0,0,0,0.14)] border border-slate-200/90 backdrop-blur-md flex items-center justify-center transition-all duration-200 active:scale-90 hover:scale-105 cursor-pointer"
+            className="pointer-events-auto w-10 h-10 rounded-full bg-white hover:bg-slate-50 text-slate-800 shadow-[0_2px_10px_rgba(0,0,0,0.12)] border border-slate-200/90 flex items-center justify-center transition-transform duration-150 active:scale-90 cursor-pointer"
             aria-label="Back to Menu"
             id="product-fullscreen-back-btn"
           >
@@ -504,10 +527,10 @@ export const ProductModal: React.FC<ProductModalProps> = ({
               <button
                 type="button"
                 onClick={() => onToggleFavorite(product.id)}
-                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-90 border backdrop-blur-md ${
+                className={`w-10 h-10 rounded-full flex items-center justify-center transition-transform duration-150 active:scale-90 border ${
                   isFavorite
-                    ? 'bg-rose-50/95 text-rose-600 border-rose-200 shadow-[0_2px_12px_rgba(244,63,94,0.2)]'
-                    : 'bg-white/95 hover:bg-white text-slate-700 border-slate-200/90 shadow-[0_2px_12px_rgba(0,0,0,0.12)]'
+                    ? 'bg-rose-50 text-rose-600 border-rose-200 shadow-[0_2px_10px_rgba(244,63,94,0.18)]'
+                    : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200/90 shadow-[0_2px_10px_rgba(0,0,0,0.1)]'
                 }`}
                 aria-label="Save as favorite"
                 id="modal-fav-btn"
@@ -524,7 +547,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
             <button
               type="button"
               onClick={handleBackNavigation}
-              className="hidden sm:flex w-10 h-10 rounded-full bg-white/95 hover:bg-white text-slate-700 items-center justify-center transition-all duration-200 hover:scale-105 active:scale-90 border border-slate-200/90 shadow-[0_2px_12px_rgba(0,0,0,0.12)] cursor-pointer"
+              className="hidden sm:flex w-10 h-10 rounded-full bg-white hover:bg-slate-50 text-slate-700 items-center justify-center transition-transform duration-150 active:scale-90 border border-slate-200/90 shadow-[0_2px_10px_rgba(0,0,0,0.1)] cursor-pointer"
               aria-label="Close"
               id="close-product-modal"
             >
@@ -535,39 +558,29 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
         {/* Scrollable Content: Edge-to-Edge Hero Image + Details */}
         <div
-          className="flex-1 overflow-y-auto select-text pb-48 sm:pb-56 overscroll-y-contain no-scrollbar"
-          style={{
-            WebkitOverflowScrolling: 'touch',
-          }}
+          className="modal-scroll-container flex-1 overflow-y-auto select-text pb-48 sm:pb-56"
         >
           {/* Edge-to-Edge Hero Picture Container */}
           <div className="relative w-full">
             <div
-              onTouchStart={handleTouchStart}
-              onTouchEnd={handleTouchEnd}
-              onMouseEnter={() => setIsHovered(true)}
-              onMouseLeave={() => setIsHovered(false)}
-              className="group relative w-full aspect-[4/3] sm:aspect-[4/3] sm:max-h-[500px] overflow-hidden bg-white select-none flex items-center justify-center transform-gpu"
+              onTouchStart={rawImages.length > 1 ? handleTouchStart : undefined}
+              onTouchEnd={rawImages.length > 1 ? handleTouchEnd : undefined}
+              onMouseEnter={rawImages.length > 1 ? () => { isHoveredRef.current = true; } : undefined}
+              onMouseLeave={rawImages.length > 1 ? () => { isHoveredRef.current = false; } : undefined}
+              className="group relative w-full aspect-[4/3] sm:aspect-[4/3] sm:max-h-[500px] overflow-hidden bg-white select-none flex items-center justify-center"
             >
               {rawImages.length > 0 ? (
-                rawImages.map((imgSrc, idx) => (
-                  <img
-                    key={idx}
-                    src={imgSrc}
-                    alt={`${product.name} ${idx + 1}`}
-                    loading="eager"
-                    decoding="async"
-                    className={`absolute inset-0 w-full h-full ${getModalImageFitClass(
-                      imgSrc,
-                      idx
-                    )} transition-opacity duration-300 ease-out transform-gpu ${
-                      idx === activeImgIdx
-                        ? 'opacity-100 z-0 pointer-events-auto'
-                        : 'opacity-0 pointer-events-none'
-                    }`}
-                    referrerPolicy="no-referrer"
-                  />
-                ))
+                <img
+                  src={rawImages[activeImgIdx] || rawImages[0]}
+                  alt={product.name}
+                  loading="eager"
+                  decoding="async"
+                  className={`w-full h-full ${getModalImageFitClass(
+                    rawImages[activeImgIdx] || rawImages[0],
+                    activeImgIdx
+                  )}`}
+                  referrerPolicy="no-referrer"
+                />
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200/80 p-6 text-center">
                   <div className="w-16 h-16 rounded-2xl bg-white shadow-2xs border border-slate-200/80 flex items-center justify-center text-slate-500 mb-2">
@@ -591,7 +604,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                       pauseAutoAdvanceTemporarily();
                       setActiveImgIdx((prev) => (prev - 1 + rawImages.length) % rawImages.length);
                     }}
-                    className="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/80 hover:bg-white text-slate-700 hover:text-slate-950 border border-white/60 shadow-[0_2px_8px_rgba(0,0,0,0.08)] backdrop-blur-xs flex items-center justify-center transition-all duration-200 z-10 cursor-pointer active:scale-90"
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/95 hover:bg-white text-slate-700 hover:text-slate-950 border border-slate-200/80 shadow-xs flex items-center justify-center transition-transform duration-150 z-10 cursor-pointer active:scale-90"
                     aria-label="Previous photo"
                   >
                     <ChevronLeft className="w-4 h-4 stroke-[2.5]" />
@@ -604,7 +617,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                       pauseAutoAdvanceTemporarily();
                       setActiveImgIdx((prev) => (prev + 1) % rawImages.length);
                     }}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/80 hover:bg-white text-slate-700 hover:text-slate-950 border border-white/60 shadow-[0_2px_8px_rgba(0,0,0,0.08)] backdrop-blur-xs flex items-center justify-center transition-all duration-200 z-10 cursor-pointer active:scale-90"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-white/95 hover:bg-white text-slate-700 hover:text-slate-950 border border-slate-200/80 shadow-xs flex items-center justify-center transition-transform duration-150 z-10 cursor-pointer active:scale-90"
                     aria-label="Next photo"
                   >
                     <ChevronRight className="w-4 h-4 stroke-[2.5]" />
@@ -1179,11 +1192,11 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         </div>
       </div>
 
-      {/* Floating Bottom Action Area with GPU-Accelerated Capsules - Fluid 120fps Scrolling Performance */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 pointer-events-none px-3.5 sm:px-4 pb-[max(env(safe-area-inset-bottom,1.5rem),2.25rem)] pt-1 flex flex-col items-center transform-gpu">
+      {/* Floating Bottom Action Area - Crisp Solid Surface for 120fps Scrolling Performance */}
+      <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-none px-3.5 sm:px-4 pb-[max(env(safe-area-inset-bottom,1.5rem),2.25rem)] pt-1 flex flex-col items-center">
         {/* Capsule 1: Floating In-Modal Cart Notification & Fast Checkout Shortcut */}
         {totalItems > 0 && (
-          <div className="pointer-events-auto max-w-lg w-full mx-auto mb-2.5 p-1.5 sm:p-2 bg-white/95 rounded-full border border-slate-200/90 text-slate-950 flex items-center justify-between shadow-[0_10px_30px_rgba(15,23,42,0.1)] shrink-0 animate-in fade-in slide-in-from-bottom-2 select-none transform-gpu">
+          <div className="pointer-events-auto max-w-lg w-full mx-auto mb-2.5 p-1.5 sm:p-2 bg-white rounded-full border border-slate-200/90 text-slate-950 flex items-center justify-between shadow-[0_8px_24px_rgba(15,23,42,0.08)] shrink-0 select-none">
             <div className="flex items-center gap-2.5 pl-1">
               <span className="w-8 h-8 sm:w-8.5 sm:h-8.5 rounded-full bg-amber-400 text-slate-950 font-heading font-black text-sm sm:text-base flex items-center justify-center shrink-0 shadow-2xs">
                 {totalItems}
@@ -1198,24 +1211,24 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 onClose();
                 setIsCartOpen(true);
               }}
-              className="h-10 sm:h-11 px-6 sm:px-7 bg-amber-400 hover:bg-amber-500 active:scale-95 text-slate-950 font-heading font-black text-xs sm:text-[13px] rounded-full flex items-center justify-center border border-amber-300 shadow-none transition-all cursor-pointer shrink-0"
+              className="h-10 sm:h-11 px-6 sm:px-7 bg-amber-400 hover:bg-amber-500 active:scale-95 text-slate-950 font-heading font-black text-xs sm:text-[13px] rounded-full flex items-center justify-center border border-amber-300 shadow-none transition-colors cursor-pointer shrink-0"
             >
               <span>View Cart</span>
             </button>
           </div>
         )}
 
-        {/* Capsule 2: Action Footer - GPU-Accelerated Crisp Design */}
-        <div className={`pointer-events-auto max-w-lg w-full mx-auto p-1.5 sm:p-2 bg-white/95 rounded-full flex items-center gap-2.5 transition-all duration-200 transform-gpu ${
+        {/* Capsule 2: Action Footer - Crisp Solid Surface */}
+        <div className={`pointer-events-auto max-w-lg w-full mx-auto p-1.5 sm:p-2 bg-white rounded-full flex items-center gap-2.5 ${
           isSelectionComplete
-            ? 'border border-slate-300 shadow-[0_14px_38px_rgba(15,23,42,0.12)]'
-            : 'border border-slate-200/90 shadow-[0_10px_30px_rgba(15,23,42,0.08)]'
+            ? 'border border-slate-300 shadow-[0_10px_28px_rgba(15,23,42,0.1)]'
+            : 'border border-slate-200/90 shadow-[0_8px_24px_rgba(15,23,42,0.08)]'
         }`}>
           {/* Stepper */}
           <div className="flex items-center gap-2 bg-slate-100/90 border border-slate-200/80 rounded-full px-3 h-12.5 shadow-2xs shrink-0">
             <button
               onClick={() => setSelectedQty((q) => Math.max(1, q - 1))}
-              className="w-7 h-7 rounded-full bg-white hover:bg-slate-50 text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-all cursor-pointer shadow-2xs border border-slate-200/80"
+              className="w-7 h-7 rounded-full bg-white hover:bg-slate-50 text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-transform cursor-pointer shadow-2xs border border-slate-200/80"
               aria-label="Decrease"
             >
               <Minus className="w-3.5 h-3.5" />
@@ -1225,7 +1238,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
             </span>
             <button
               onClick={() => setSelectedQty((q) => q + 1)}
-              className="w-7 h-7 rounded-full bg-white hover:bg-slate-50 text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-all cursor-pointer shadow-2xs border border-slate-200/80"
+              className="w-7 h-7 rounded-full bg-white hover:bg-slate-50 text-slate-800 active:scale-90 flex items-center justify-center font-bold transition-transform cursor-pointer shadow-2xs border border-slate-200/80"
               aria-label="Increase"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -1237,7 +1250,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
             type="button"
             onClick={handleAddOrUpdate}
             disabled={!product.available || !isVariantInStock}
-            className={`flex-1 h-12.5 px-6 rounded-full font-heading font-black text-sm sm:text-base flex items-center justify-center gap-2 transition-all duration-200 active:scale-[0.98] whitespace-nowrap ${
+            className={`flex-1 h-12.5 px-6 rounded-full font-heading font-black text-sm sm:text-base flex items-center justify-center gap-2 transition-colors duration-150 active:scale-[0.98] whitespace-nowrap ${
               !product.available || !isVariantInStock
                 ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-xs'
                 : addedAnimation
@@ -1245,8 +1258,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 : !isSelectionComplete
                 ? shakeError
                   ? 'bg-red-50 text-red-600 border-2 border-red-500 animate-shake-alert cursor-pointer'
-                  : 'bg-slate-900 hover:bg-slate-800 text-white shadow-[0_4px_16px_rgba(15,23,42,0.18)] cursor-pointer'
-                : 'bg-slate-900 hover:bg-slate-800 text-white shadow-[0_4px_18px_rgba(15,23,42,0.22)] cursor-pointer'
+                  : 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
+                : 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer'
             }`}
             id="modal-add-to-cart-btn"
           >

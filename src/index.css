@@ -37,24 +37,26 @@
   html {
     width: 100%;
     max-width: 100%;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow-x: clip;
     margin: 0;
     padding: 0;
+    -webkit-overflow-scrolling: touch;
   }
 
   body {
     width: 100%;
     max-width: 100%;
+    overflow-x: clip;
     margin: 0;
     padding: 0;
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     color: #0f172a;
     background-color: #f6f8fb;
     letter-spacing: 0.015em;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+    text-rendering: optimizeLegibility !important;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11" !important;
     -webkit-overflow-scrolling: touch;
   }
 
@@ -90,12 +92,79 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.01em;
   }
-  .product-card-container {
-    content-visibility: auto;
-    contain-intrinsic-size: 260px;
-    transform: translateZ(0);
-    backface-visibility: hidden;
+
+  .font-mono {
+    font-family: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
   }
+}
+
+/* Luxury Architectural Admin & Staff Console — Permanent OLED Dark Mode (#0A0A0C) */
+:root {
+  --admin-bg: #0A0A0C;
+  --admin-surface: #141418;
+  --admin-surface-elevated: #18181D;
+  --admin-input-bg: #18181D;
+  --admin-border: #26262B;
+  --admin-border-strong: #2E2E36;
+  --admin-text: #FFFFFF;
+  --admin-text-secondary: #F5F5F7;
+  --admin-muted: #A1A1AA;
+  --admin-cta-bg: #FFFFFF;
+  --admin-cta-text: #111111;
+  --admin-accent-red: #CC0000;
+  --admin-accent-amber: #B45309;
+}
+
+.admin-curator-console {
+  background-color: var(--admin-bg) !important;
+  color: var(--admin-text) !important;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  font-variant-numeric: tabular-nums !important;
+  font-feature-settings: "tnum" 1, "cv02" 1, "cv03" 1, "cv04" 1, "cv11" 1 !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  text-rendering: optimizeLegibility !important;
+  letter-spacing: 0.02em;
+}
+
+.admin-curator-console h1,
+.admin-curator-console h2,
+.admin-curator-console h3,
+.admin-curator-console h4 {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 13px;
+  letter-spacing: 0.10em !important;
+  color: var(--admin-text) !important;
+}
+
+.admin-curator-console .font-mono {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* Strip GPU-heavy blurs, fuzzy drop-shadows, and transition delays inside Admin Curator Console */
+.admin-curator-console *,
+.admin-curator-console *::before,
+.admin-curator-console *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.admin-curator-console ::-webkit-scrollbar-track {
+  background: var(--admin-bg);
+}
+
+.admin-curator-console ::-webkit-scrollbar-thumb {
+  background: var(--admin-border-strong);
+  border-radius: 0px;
+}
+
+.admin-curator-console ::-webkit-scrollbar-thumb:hover {
+  background: var(--admin-muted);
 }
 
 /* Custom subtle scrollbar */
@@ -120,6 +189,15 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Butter-smooth 120fps GPU-promoted scroll container for full-screen modals & drawers */
+.modal-scroll-container {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  will-change: scroll-position;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* Shimmer Loading Animation */
@@ -274,15 +352,13 @@
   animation: textShimmer 2.6s ease-in-out infinite;
 }
 
-/* Category Switch Transition Animations */
+/* Category Switch Transition Animations (Opacity-only to avoid giant GPU transform layer over product grid) */
 @keyframes categoryContentFadeIn {
   0% {
     opacity: 0;
-    transform: translateY(8px);
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -299,8 +375,7 @@
 }
 
 .animate-category-switch {
-  animation: categoryContentFadeIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: transform, opacity;
+  animation: categoryContentFadeIn 0.16s ease-out;
 }
 
 .animate-tab-active {
@@ -316,66 +391,6 @@
     animation: none !important;
     transition: none !important;
   }
-}
-
-/* Hide scrollbar for clean chip trays and carousels */
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-/* Diwali Festive Sway & Gentle Diya Flicker */
-@keyframes diwaliSway {
-  0%, 100% {
-    transform: rotate(-1.2deg);
-  }
-  50% {
-    transform: rotate(1.2deg);
-  }
-}
-
-@keyframes diwaliFlicker {
-  0%, 100% {
-    transform: scale(1) translateY(0);
-    opacity: 0.95;
-  }
-  25% {
-    transform: scale(1.08, 0.95) translateY(-0.5px);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(0.96, 1.05) translateY(0.5px);
-    opacity: 0.88;
-  }
-  75% {
-    transform: scale(1.05, 0.97) translateY(-0.5px);
-    opacity: 1;
-  }
-}
-
-.animate-diwali-sway {
-  animation: diwaliSway 4.5s ease-in-out infinite;
-}
-
-.animate-diwali-flicker {
-  animation: diwaliFlicker 1.6s ease-in-out infinite;
-}
-
-@keyframes festiveShimmer {
-  0%, 100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-}
-
-.animate-festive-shimmer {
-  background-size: 200% auto;
-  animation: festiveShimmer 3.5s ease infinite;
 }
 
 @keyframes shakeAlert {
@@ -409,6 +424,243 @@
   animation: gentlePulse 2.4s ease-in-out infinite;
 }
 
+/* ==========================================================================
+   LUXURY ARCHITECTURAL ADMIN & STAFF CONSOLE — STRICT GEOMETRY & TYPOGRAPHY
+   ========================================================================== */
+
+/* 1. Sharp 0px Architectural Square Edges (No Pill Buttons or Fuzzy Curves) */
+.admin-curator-console,
+.admin-curator-console * {
+  border-radius: 0px !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 2.A MICRO LABELS, SECTION HEADERS & EYEBROWS:
+   UPPERCASE, Weight 700/800, 10px–11px, Extended Tracking +0.18em (+0.16em to +0.22em), Muted Zinc #A1A1AA */
+.admin-curator-console label,
+.admin-curator-console label span,
+.admin-curator-console th,
+.admin-curator-console th span,
+.admin-curator-console .admin-card-label,
+.admin-curator-console .admin-card-label span,
+.admin-curator-console .admin-micro-label,
+.admin-curator-console .admin-micro-label span,
+.admin-curator-console .admin-badge,
+.admin-curator-console .admin-badge span,
+.admin-curator-console .admin-status-pill,
+.admin-curator-console .admin-status-pill span {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  text-transform: uppercase !important;
+  font-weight: 700 !important;
+  font-size: 10.5px !important;
+  letter-spacing: 0.18em !important;
+  color: var(--admin-muted) !important;
+}
+
+/* 2.B COMPONENT TITLES & CARD HEADINGS:
+   Weight 700, 12px–14px, Moderate Tracking +0.10em (+0.08em to +0.12em), High Contrast Pure White #FFFFFF */
+.admin-curator-console h1,
+.admin-curator-console h1 span,
+.admin-curator-console h2,
+.admin-curator-console h2 span,
+.admin-curator-console h3,
+.admin-curator-console h3 span,
+.admin-curator-console h4,
+.admin-curator-console h4 span,
+.admin-curator-console .admin-section-title,
+.admin-curator-console .card-heading {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  letter-spacing: 0.10em !important;
+  color: var(--admin-text) !important;
+}
+
+/* 2.C INPUT FIELDS & DROPDOWNS:
+   BG #18181D (Dark), 1px solid #2E2E36, 12px/13px Weight 600 SemiBold */
+.admin-curator-console input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+.admin-curator-console select,
+.admin-curator-console textarea {
+  background-color: var(--admin-input-bg) !important;
+  border: 1px solid var(--admin-border-strong) !important;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  color: var(--admin-text-secondary) !important;
+  letter-spacing: 0.04em !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+.admin-curator-console input::placeholder,
+.admin-curator-console textarea::placeholder {
+  color: #A1A1AA !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.14em !important;
+}
+
+.admin-curator-console input:focus,
+.admin-curator-console select:focus,
+.admin-curator-console textarea:focus {
+  border-color: var(--admin-text) !important;
+  outline: none !important;
+}
+
+/* Tabular Numbers for Currency, Prices, Dates, Order Codes, and Quantities */
+.admin-curator-console .font-mono,
+.admin-curator-console .font-price,
+.admin-curator-console .font-amount,
+.admin-curator-console [class*="font-mono"] {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  font-variant-numeric: tabular-nums !important;
+  font-feature-settings: "tnum" 1, "cv11" 1 !important;
+}
+
+/* 2.D ACTION BUTTONS, NAVIGATION TABS & CTA BADGES:
+   Sharp 0-radius, UPPERCASE, Weight 700, 11px/12px, Wide Tracking +0.18em (including nested spans) */
+.admin-curator-console button,
+.admin-curator-console button span,
+.admin-curator-console a.admin-action-btn,
+.admin-curator-console a.admin-action-btn span,
+.admin-curator-console .admin-action-btn,
+.admin-curator-console .admin-action-btn span,
+.admin-curator-console .admin-sub-tab,
+.admin-curator-console .admin-sub-tab span,
+.admin-curator-console .admin-filter-pill,
+.admin-curator-console .admin-filter-pill span,
+.admin-curator-console .admin-top-tab,
+.admin-curator-console .admin-top-tab span,
+.admin-curator-console nav button,
+.admin-curator-console nav button span {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  text-transform: uppercase !important;
+  font-weight: 700 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.18em !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* Primary Solid Architectural CTA Buttons:
+   Permanent Dark Mode -> Pure White #FFFFFF bg with #111111 text */
+.admin-curator-console button[type="submit"],
+.admin-curator-console .admin-primary-cta,
+.admin-curator-console button.bg-\[\#FF5500\],
+.admin-curator-console button.bg-\[\#FFFFFF\],
+.admin-curator-console button.bg-slate-950,
+.admin-curator-console button.bg-indigo-600 {
+  background-color: var(--admin-cta-bg) !important;
+  color: var(--admin-cta-text) !important;
+  border: 1px solid var(--admin-cta-bg) !important;
+}
+
+.admin-curator-console button[type="submit"] *,
+.admin-curator-console .admin-primary-cta *,
+.admin-curator-console button.bg-\[\#FF5500\] *,
+.admin-curator-console button.bg-\[\#FFFFFF\] *,
+.admin-curator-console button.bg-slate-950 *,
+.admin-curator-console button.bg-indigo-600 * {
+  color: var(--admin-cta-text) !important;
+}
+
+/* Product & Customer Names & Body Prose */
+.admin-curator-console .product-name,
+.admin-curator-console .customer-name {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, Inter, Helvetica, Arial, sans-serif !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1.4 !important;
+  font-weight: 700 !important;
+  color: var(--admin-text) !important;
+}
+
+.admin-curator-console .admin-prose,
+.admin-curator-console .product-desc,
+.admin-curator-console p:not([class*="uppercase"]) {
+  letter-spacing: 0.015em !important;
+  line-height: 1.5 !important;
+  font-weight: 400;
+}
+
+/* 3. PERMANENT OLED DARK MODE SURFACE, CANVAS & BORDER ADAPTATION */
+.admin-curator-console .bg-\[\#0A0A0A\],
+.admin-curator-console .bg-\[\#0A0A0C\],
+.admin-curator-console.bg-\[\#0A0A0A\],
+.admin-curator-console.bg-\[\#f1f5f9\],
+.admin-curator-console.bg-\[\#f8fafc\],
+.admin-curator-console.bg-slate-50,
+.admin-curator-console .bg-\[\#f1f5f9\],
+.admin-curator-console .bg-\[\#f8fafc\],
+.admin-curator-console .bg-slate-50 {
+  background-color: var(--admin-bg) !important;
+}
+
+.admin-curator-console .bg-\[\#18181B\],
+.admin-curator-console .bg-\[\#141418\],
+.admin-curator-console .bg-white,
+.admin-curator-console .bg-white\/95,
+.admin-curator-console .bg-slate-900 {
+  background-color: var(--admin-surface) !important;
+}
+
+.admin-curator-console .bg-\[\#121212\],
+.admin-curator-console .bg-\[\#18181D\],
+.admin-curator-console .bg-\[\#242427\],
+.admin-curator-console .bg-slate-100,
+.admin-curator-console .bg-slate-800 {
+  background-color: var(--admin-surface-elevated) !important;
+}
+
+.admin-curator-console .border-\[\#27272A\],
+.admin-curator-console .border-\[\#26262B\],
+.admin-curator-console .border-\[\#2E2E36\],
+.admin-curator-console .border-\[\#3F3F46\],
+.admin-curator-console .border-slate-200,
+.admin-curator-console .border-slate-200\/80,
+.admin-curator-console .border-slate-200\/90,
+.admin-curator-console .border-slate-300,
+.admin-curator-console .border-slate-700,
+.admin-curator-console .border-slate-800 {
+  border-color: var(--admin-border) !important;
+}
+
+.admin-curator-console .text-\[\#FFFFFF\]:not(button *):not(button),
+.admin-curator-console .text-white:not(button *):not(button),
+.admin-curator-console .text-slate-900:not(button *):not(button),
+.admin-curator-console .text-slate-800:not(button *):not(button) {
+  color: var(--admin-text) !important;
+}
+
+.admin-curator-console .text-\[\#A1A1AA\],
+.admin-curator-console .text-\[\#71717A\],
+.admin-curator-console .text-slate-500,
+.admin-curator-console .text-slate-400,
+.admin-curator-console .text-slate-600 {
+  color: var(--admin-muted) !important;
+}
+
+/* Accent Highlight Tokens: Academic Deep Red #CC0000 & Gold Warm Amber #B45309 */
+.admin-curator-console .text-\[\#EF4444\],
+.admin-curator-console .text-red-600,
+.admin-curator-console .text-rose-600 {
+  color: var(--admin-accent-red) !important;
+}
+
+.admin-curator-console .border-\[\#EF4444\],
+.admin-curator-console .border-red-500 {
+  border-color: var(--admin-accent-red) !important;
+}
+
+.admin-curator-console .text-\[\#F59E0B\],
+.admin-curator-console .text-amber-600,
+.admin-curator-console .text-orange-600 {
+  color: var(--admin-accent-amber) !important;
+}
+
+/* 0ms Zero-Lag Architecture: Eliminate transition overhead in Admin Console */
+.admin-curator-console button,
+.admin-curator-console a,
+.admin-curator-console div {
+  transition-duration: 0ms !important;
+  animation-duration: 0ms !important;
+}
 
 
 

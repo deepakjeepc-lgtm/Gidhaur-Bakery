@@ -4,6 +4,7 @@ import { applyServerBannerSettings } from './bannerService';
 type SyncEventHandlers = {
   onBannerSettings?: (settings: BannerSettings) => void;
   onOrdersUpdate?: (orders: Order[]) => void;
+  onOrdersDeleted?: (payload: { deletedIds?: string[]; clearAll?: boolean }) => void;
   onSettingsUpdate?: (settings: any) => void;
 };
 
@@ -74,6 +75,16 @@ export function initLiveSync(): () => void {
           subscribers.forEach((s) => s.onOrdersUpdate?.(orders));
         } catch (err) {
           console.warn('Error parsing orders_update sync event:', err);
+        }
+      });
+
+      // Real-time order deletion broadcast
+      eventSource.addEventListener('orders_deleted', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          subscribers.forEach((s) => s.onOrdersDeleted?.(payload));
+        } catch (err) {
+          console.warn('Error parsing orders_deleted sync event:', err);
         }
       });
 

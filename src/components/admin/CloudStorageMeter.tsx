@@ -1,14 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  HardDrive,
   RefreshCw,
   CheckCircle2,
-  AlertTriangle,
   Image as ImageIcon,
-  Sparkles,
-  Info,
-  ChevronDown,
-  ChevronUp,
   Cloud,
   Check
 } from 'lucide-react';
@@ -25,11 +19,9 @@ interface CloudStorageMeterProps {
 }
 
 export const CloudStorageMeter = React.memo<CloudStorageMeterProps>(({ products }) => {
-  // Instant initialization: ZERO delay on mount, reads from cache or instant catalog computation
   const [stats, setStats] = useState<StorageUsageStats>(() => getInitialStorageUsage(products));
   const [isScanning, setIsScanning] = useState(false);
   const [justRefreshed, setJustRefreshed] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
   const isMountedRef = useRef(true);
 
   useEffect(() => {
@@ -39,7 +31,6 @@ export const CloudStorageMeter = React.memo<CloudStorageMeterProps>(({ products 
     };
   }, []);
 
-  // Update immediately when products list changes
   useEffect(() => {
     setStats((prev) => {
       const updated = getInitialStorageUsage(products);
@@ -52,7 +43,6 @@ export const CloudStorageMeter = React.memo<CloudStorageMeterProps>(({ products 
     });
   }, [products]);
 
-  // Refresh handler: Guaranteed to finish in <= 1.2 seconds, never hangs
   const refreshStorage = useCallback(async () => {
     if (isScanning) return;
     setIsScanning(true);
@@ -80,164 +70,111 @@ export const CloudStorageMeter = React.memo<CloudStorageMeterProps>(({ products 
 
   const barColor =
     stats.status === 'critical'
-      ? 'bg-rose-500'
+      ? 'bg-[#EF4444]'
       : stats.status === 'warning'
-      ? 'bg-amber-500'
-      : 'bg-emerald-500';
+      ? 'bg-[#F59E0B]'
+      : 'bg-[#FF5500]';
 
-  const trackFillWidth = Math.max(stats.percentUsed, 1.2);
+  const trackFillWidth = Math.max(stats.percentUsed, 1.5);
 
   return (
-    <div className="bg-white rounded-2xl sm:rounded-3xl border border-stone-200/90 shadow-2xs p-4 sm:p-5 transition-all">
-      {/* Top Header: Responsive for Phone & Desktop */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        {/* Title & Status Badges */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl sm:rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 text-amber-700 shadow-2xs">
-            <HardDrive className="w-5 h-5 text-amber-600" />
-          </div>
+    <div className="bg-[#18181B] rounded-sm border border-[#27272A] p-4 sm:p-5 space-y-4">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#27272A] pb-3">
+        <div className="flex items-center gap-2.5">
+          <span className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] px-2 py-0.5 rounded-sm bg-[#0A0A0A] text-[#A1A1AA] border border-[#27272A]">
+            STORAGE
+          </span>
 
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="font-heading font-black text-sm sm:text-base text-stone-900 tracking-tight">
-                Storage Usage Meter
-              </h3>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center gap-1">
-                <CheckCircle2 className="w-2.5 h-2.5 stroke-[3]" />
-                {stats.percentUsed < 1 ? '< 1% Used' : `${stats.percentUsed}% Used`}
-              </span>
-            </div>
-            <p className="text-[11px] text-stone-500 font-medium">
-              Firebase Storage Spark Free Tier (5.0 GB Quota)
-            </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-bold text-sm text-[#FFFFFF]">
+              Cloud Storage Meter
+            </h3>
+            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-sm bg-[#0A0A0A] text-[#10B981] border border-[#10B981]/40 flex items-center gap-1 uppercase tabular-nums">
+              <CheckCircle2 className="w-2.5 h-2.5 stroke-[3]" />
+              {stats.percentUsed < 1 ? '< 1% USED' : `${stats.percentUsed}% USED`}
+            </span>
           </div>
         </div>
 
-        {/* Action Buttons: Refresh & Details */}
         <div className="flex items-center gap-2 self-start sm:self-center">
           <button
             type="button"
             onClick={refreshStorage}
             disabled={isScanning}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all active:scale-95 cursor-pointer disabled:opacity-70 ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm border text-[11px] font-mono font-bold uppercase tracking-[0.06em] cursor-pointer disabled:opacity-70 ${
               justRefreshed
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                : 'bg-stone-50 hover:bg-stone-100 border-stone-200 text-stone-700 shadow-2xs'
+                ? 'bg-[#10B981] border-[#10B981] text-[#0A0A0A]'
+                : 'bg-[#0A0A0A] hover:bg-[#242427] border-[#27272A] text-[#A1A1AA] hover:text-[#FFFFFF]'
             }`}
-            title="Scan cloud storage for live byte count"
           >
             {justRefreshed ? (
               <>
-                <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[3]" />
-                <span>Updated</span>
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>UPDATED</span>
               </>
             ) : (
               <>
-                <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin text-amber-600' : 'text-stone-500'}`} />
-                <span>{isScanning ? 'Scanning...' : 'Refresh'}</span>
+                <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin text-[#FF5500]' : ''}`} />
+                <span>{isScanning ? 'SCANNING...' : 'REFRESH'}</span>
               </>
             )}
           </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic('light');
-              setIsExpanded((prev) => !prev);
-            }}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-amber-800 bg-amber-50/70 hover:bg-amber-100/70 transition-colors cursor-pointer border border-amber-200/60"
-          >
-            <span>{isExpanded ? 'Less' : 'Details'}</span>
-            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-          </button>
         </div>
       </div>
 
-      {/* Responsive Stat Pills Grid: Stacks cleanly on Mobile without horizontal collisions */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 mt-4">
-        {/* Card 1: Used vs Total */}
-        <div className="bg-stone-50/80 border border-stone-200/70 rounded-xl p-2.5 flex items-center justify-between sm:flex-col sm:items-start sm:justify-center gap-1">
-          <span className="text-[10px] uppercase font-bold tracking-wider text-stone-400">
-            Storage Used
+      {/* Stat Cards Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="bg-[#0A0A0A] rounded-sm border border-[#27272A] p-3 flex items-center justify-between sm:flex-col sm:items-start sm:justify-center gap-1">
+          <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-[#71717A]">
+            STORAGE USED
           </span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-sm font-extrabold text-stone-900">{stats.usedFormatted}</span>
-            <span className="text-[11px] text-stone-500 font-medium">/ 5.0 GB</span>
+          <div className="flex items-baseline gap-1 font-mono tabular-nums">
+            <span className="text-sm font-bold text-[#FFFFFF]">{stats.usedFormatted}</span>
+            <span className="text-[11px] text-[#71717A]">/ 5.0 GB</span>
           </div>
         </div>
 
-        {/* Card 2: Remaining Free Space (User's specific requested label) */}
-        <div className="bg-blue-50/60 border border-blue-200/60 rounded-xl p-2.5 flex items-center justify-between sm:flex-col sm:items-start sm:justify-center gap-1">
-          <span className="text-[10px] uppercase font-bold tracking-wider text-blue-600 flex items-center gap-1">
-            <Cloud className="w-3 h-3 text-blue-500" />
-            <span>Remaining Free</span>
+        <div className="bg-[#0A0A0A] rounded-sm border border-[#27272A] p-3 flex items-center justify-between sm:flex-col sm:items-start sm:justify-center gap-1">
+          <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-[#71717A] flex items-center gap-1">
+            <Cloud className="w-3 h-3 text-[#71717A]" />
+            <span>REMAINING FREE</span>
           </span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-sm font-extrabold text-blue-900">{stats.remainingFormatted}</span>
-            <span className="text-[11px] text-blue-700/80 font-semibold">({stats.remainingPercent}% free)</span>
+          <div className="flex items-baseline gap-1 font-mono tabular-nums">
+            <span className="text-sm font-bold text-[#FFFFFF]">{stats.remainingFormatted}</span>
+            <span className="text-[11px] text-[#71717A]">({stats.remainingPercent}%)</span>
           </div>
         </div>
 
-        {/* Card 3: Cloud Photos Count */}
-        <div className="bg-stone-50/80 border border-stone-200/70 rounded-xl p-2.5 flex items-center justify-between sm:flex-col sm:items-start sm:justify-center gap-1">
-          <span className="text-[10px] uppercase font-bold tracking-wider text-stone-400 flex items-center gap-1">
-            <ImageIcon className="w-3 h-3 text-amber-500" />
-            <span>Uploads & Catalog</span>
+        <div className="bg-[#0A0A0A] rounded-sm border border-[#27272A] p-3 flex items-center justify-between sm:flex-col sm:items-start sm:justify-center gap-1">
+          <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-[#71717A] flex items-center gap-1">
+            <ImageIcon className="w-3 h-3 text-[#71717A]" />
+            <span>CLOUD PHOTOS</span>
           </span>
-          <div className="flex items-baseline gap-1.5 text-xs text-stone-700 font-semibold">
-            <span className="font-extrabold text-stone-900 text-sm">{stats.cloudPhotosCount}</span>
-            <span className="text-[11px] text-stone-500">cloud • {stats.totalMenuPhotos} total</span>
+          <div className="flex items-baseline gap-1.5 text-xs font-mono text-[#A1A1AA] tabular-nums">
+            <span className="font-bold text-[#FFFFFF] text-sm">{stats.cloudPhotosCount}</span>
+            <span className="text-[11px] text-[#71717A]">· {stats.totalMenuPhotos} total</span>
           </div>
         </div>
       </div>
 
-      {/* Visual Progress Bar (0% to 100% Capacity) */}
-      <div className="mt-4 pt-1">
-        <div className="w-full h-3 bg-stone-100 rounded-full overflow-hidden border border-stone-200/70 p-0.5 shadow-inner">
+      {/* Progress Bar */}
+      <div>
+        <div className="w-full h-2 rounded-sm bg-[#0A0A0A] overflow-hidden border border-[#27272A]">
           <div
-            className={`h-full rounded-full transition-all duration-700 ease-out ${barColor} shadow-xs`}
+            className={`h-full ${barColor}`}
             style={{ width: `${trackFillWidth}%` }}
           />
         </div>
 
-        {/* Clean labels below bar: Clean 2-column layout to prevent any mobile collision */}
-        <div className="flex items-center justify-between mt-1.5 text-[11px] font-semibold text-stone-400">
+        <div className="flex items-center justify-between mt-1.5 text-[10px] font-mono text-[#71717A] uppercase tabular-nums">
           <span>0% (0 MB)</span>
-          <span className="text-stone-600 font-bold hidden sm:inline-block">
-            {stats.remainingFormatted} available space
+          <span className="text-[#A1A1AA] font-bold hidden sm:inline-block">
+            {stats.remainingFormatted} AVAILABLE
           </span>
           <span>100% (5.0 GB)</span>
         </div>
       </div>
-
-      {/* Expandable Explanation Details */}
-      {isExpanded && (
-        <div className="mt-4 pt-3.5 border-t border-stone-200/80 text-xs text-stone-600 space-y-2.5 animate-in fade-in duration-150">
-          <div className="flex items-start gap-2.5 bg-amber-50/60 p-3 rounded-xl border border-amber-200/60">
-            <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <p className="font-bold text-amber-950 text-xs">
-                40% Compression Applied on Uploads
-              </p>
-              <p className="text-[11px] text-amber-900/90 leading-relaxed">
-                Images uploaded from your device are compressed at <strong>40% compression level</strong> (preserving 60% high-fidelity crisp quality in modern WebP format). This keeps photos sharp while saving massive storage space.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-start gap-2.5 bg-stone-50 p-3 rounded-xl border border-stone-200/70">
-            <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <p className="font-bold text-stone-900 text-xs">
-                Firebase 5.0 GB Free Tier Breakdown
-              </p>
-              <p className="text-[11px] text-stone-600 leading-relaxed">
-                You have used <strong>{stats.usedFormatted}</strong> out of <strong>5,120 MB (5 GB)</strong>. You have <strong>{stats.remainingFormatted}</strong> free space remaining, allowing you to comfortably host thousands of product photos with zero hosting cost.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 });

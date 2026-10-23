@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import { Product, Order, StaffSession } from './types';
 import {
   getSanitizedCachedProducts,
   getProductsFromIndexedDB,
   syncCatalogFromNetwork,
   sanitizeProducts,
-  syncDeletedProductsFromFirestore,
   purgeLocalHardcodedProducts,
 } from './services/productService';
 
@@ -28,18 +27,14 @@ import { BakeryClosedQuotaScreen } from './components/BakeryClosedQuotaScreen';
 import { Footer } from './components/Footer';
 import { AnimatedAmbientBackground } from './components/AnimatedAmbientBackground';
 import { ReadLimitProtectionBanner } from './components/ReadLimitProtectionBanner';
-import { lazyWithRetry } from './utils/lazyRetry';
 import { PortalErrorBoundary } from './components/PortalErrorBoundary';
-import { AVAILABLE_FONTS } from './utils/fontList';
+import AdminLogin from './components/admin/AdminLogin';
+import AdminDashboard from './components/admin/AdminDashboard';
+import KitchenDisplayPage from './components/kitchen/KitchenDisplayPage';
+import PreparingDisplayPage from './components/preparing/PreparingDisplayPage';
+import DeliveryAgentPortal from './components/delivery/DeliveryAgentPortal';
 
-// Lazy-load Admin, Kitchen, Preparing, and Delivery views with auto-retry and cache-busting resilience
-const AdminLogin = lazyWithRetry(() => import('./components/admin/AdminLogin'));
-const AdminDashboard = lazyWithRetry(() => import('./components/admin/AdminDashboard'));
-const KitchenDisplayPage = lazyWithRetry(() => import('./components/kitchen/KitchenDisplayPage'));
-const PreparingDisplayPage = lazyWithRetry(() => import('./components/preparing/PreparingDisplayPage'));
-const DeliveryAgentPortal = lazyWithRetry(() => import('./components/delivery/DeliveryAgentPortal'));
-
-import { getSavedStaffSession, clearStaffSession, seedStaffIfEmpty } from './services/staffService';
+import { getSavedStaffSession, clearStaffSession } from './services/staffService';
 import {
   subscribeToCategories,
   getCachedCategories,
@@ -54,11 +49,10 @@ import {
   getSavedActiveCategory,
   saveScrollPosition,
   restoreScrollPosition,
-  getScrollPosition
 } from './utils/scrollStateStorage';
 import { triggerHaptic } from './utils/haptics';
 
-import { UtensilsCrossed, RefreshCw, Heart, Search, X, Clock, AlertTriangle, ExternalLink } from 'lucide-react';
+import { UtensilsCrossed, RefreshCw, Heart, Search, X } from 'lucide-react';
 
 const PortalLoadingFallback: React.FC = () => (
   <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
@@ -71,11 +65,26 @@ const PortalLoadingFallback: React.FC = () => (
 
 function MainApp() {
   const { user, loading: authLoading, signOut } = useAuth();
-  const { setIsCartOpen, clearCart, addToCart } = useCart();
+  const { isCartOpen, setIsCartOpen, clearCart, addToCart } = useCart();
   const { settings } = useLocation();
 
   // Navigation views: 'home' | 'track' | 'admin' - Persisted cross-session
   const [currentView, setCurrentViewState] = useState<'home' | 'track' | 'admin'>(() => getSavedActiveView());
+
+  // Keep admin portal mounted in memory once visited or pre-warmed after startup
+  const [hasVisitedAdmin, setHasVisitedAdmin] = useState<boolean>(() => currentView === 'admin');
+
+  useEffect(() => {
+    if (currentView === 'admin') {
+      setHasVisitedAdmin(true);
+      return;
+    }
+    // Background pre-warm after 150ms so even the very first admin click is 0ms instant
+    const timer = setTimeout(() => {
+      setHasVisitedAdmin(true);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [currentView]);
 
   // Staff Session (Role-based: admin, kitchen, delivery)
   const [staffSession, setStaffSession] = useState<StaffSession | null>(() => getSavedStaffSession());
@@ -100,7 +109,6 @@ function MainApp() {
     return () => window.removeEventListener('gidhaur_quota_updated', handleQuota);
   }, []);
 
-  const [isQuotaWarningDismissed, setIsQuotaWarningDismissed] = useState(false);
   const [hasInitialLoadCompleted, setHasInitialLoadCompleted] = useState<boolean>(() => {
     return initialCachedProducts.length > 0;
   });
@@ -234,14 +242,6 @@ function MainApp() {
     );
   }, []);
 
-  const handleSelectCard = useCallback((id: string) => {
-    setSelectedCardId(id);
-  }, []);
-
-  const handleHoverChange = useCallback((id: string | null) => {
-    setHoveredCardId(id);
-  }, []);
-
   const favoritesSet = useMemo(() => new Set(favorites), [favorites]);
 
   const handleReorder = (orderItems: import('./types').OrderItem[]) => {
@@ -258,10 +258,8 @@ function MainApp() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Modals & Card Selection
+  // Modals
   const [selectedProductForModal, setSelectedProductForModal] = useState<Product | null>(null);
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
 
@@ -294,38 +292,51 @@ function MainApp() {
   const menuSectionRef = useRef<HTMLDivElement>(null);
 
   const [isNavVisible, setIsNavVisible] = useState(true);
+  const isNavVisibleRef = useRef(true);
   const downAccumRef = useRef(0);
   const upAccumRef = useRef(0);
   const rAFRef = useRef<number | null>(null);
   const lastScrollYRef = useRef(0);
   const scrollSaveDebounceRef = useRef<number | null>(null);
 
+  const updateNavVisibility = useCallback((visible: boolean) => {
+    if (isNavVisibleRef.current !== visible) {
+      isNavVisibleRef.current = visible;
+      setIsNavVisible(visible);
+    }
+  }, []);
+
   // Reset header visibility when switching views
   useEffect(() => {
-    setIsNavVisible(true);
-  }, [currentView]);
+    updateNavVisibility(true);
+  }, [currentView, updateNavVisibility]);
 
   // Synchronized scroll direction listener for both Header and MobileBottomNav:
-  // - Downscroll >= 16px: smoothly slides Header up and BottomNav down
-  // - Upscroll >= 10px or Page Top (<= 20px): smoothly slides them back into view
+  // - Downscroll >= 24px: smoothly slides Header up and BottomNav down
+  // - Upscroll >= 16px or Page Top (<= 24px): smoothly slides them back into view
   useEffect(() => {
     lastScrollYRef.current = typeof window !== 'undefined' ? window.scrollY || window.pageYOffset || 0 : 0;
 
     const onScroll = () => {
-      if (document.body.style.position === 'fixed') return;
+      if (
+        document.body.style.position === 'fixed' ||
+        document.body.style.overflow === 'hidden'
+      ) {
+        return;
+      }
       if (rAFRef.current !== null) return;
 
       rAFRef.current = window.requestAnimationFrame(() => {
         rAFRef.current = null;
 
-        const currentY = window.scrollY || window.pageYOffset || 0;
+        const currentY = Math.max(0, window.scrollY || window.pageYOffset || 0);
         const deltaY = currentY - lastScrollYRef.current;
 
         // When at or near the top of the page, always stay visible
-        if (currentY <= 20) {
+        if (currentY <= 24) {
           downAccumRef.current = 0;
           upAccumRef.current = 0;
-          setIsNavVisible(true);
+          updateNavVisibility(true);
         } else {
           if (deltaY > 0) {
             downAccumRef.current += deltaY;
@@ -335,22 +346,22 @@ function MainApp() {
             downAccumRef.current = 0;
           }
 
-          if (downAccumRef.current >= 16) {
-            setIsNavVisible(false);
-          } else if (upAccumRef.current >= 10) {
-            setIsNavVisible(true);
+          if (downAccumRef.current >= 24) {
+            updateNavVisibility(false);
+          } else if (upAccumRef.current >= 16) {
+            updateNavVisibility(true);
           }
         }
 
         lastScrollYRef.current = currentY;
 
-        // Debounce saving scroll position
+        // Debounce saving scroll position in memory/storage after scroll settles
         if (scrollSaveDebounceRef.current) {
           window.clearTimeout(scrollSaveDebounceRef.current);
         }
         scrollSaveDebounceRef.current = window.setTimeout(() => {
           saveScrollPosition(currentScrollKeyRef.current, currentY);
-        }, 500);
+        }, 600);
       });
     };
 
@@ -360,28 +371,43 @@ function MainApp() {
       if (rAFRef.current) window.cancelAnimationFrame(rAFRef.current);
       if (scrollSaveDebounceRef.current) window.clearTimeout(scrollSaveDebounceRef.current);
     };
+  }, [updateNavVisibility]);
+
+  // Fast catalog signature helper to prevent redundant re-renders when IDB/network returns identical catalog
+  const computeCatalogSignature = useCallback((list: Product[]): string => {
+    if (!list || list.length === 0) return '0';
+    let sig = `${list.length}:`;
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      sig += `${p.id}|${p.price}|${p.available !== false ? 1 : 0}|${p.stockQuantity ?? ''}|${p.sortOrder ?? ''}|${p.imageUrl || ''}|${p.images?.length || 0};`;
+    }
+    return sig;
   }, []);
+
+  const catalogSigRef = useRef<string>(computeCatalogSignature(initialCachedProducts));
+  const productsRef = useRef<Product[]>(initialCachedProducts);
+  productsRef.current = products;
+
+  const updateProductsIfChanged = useCallback((nextList: Product[]) => {
+    const nextSig = computeCatalogSignature(nextList);
+    if (nextSig !== catalogSigRef.current) {
+      catalogSigRef.current = nextSig;
+      productsRef.current = nextList;
+      setProducts(nextList);
+    }
+  }, [computeCatalogSignature]);
 
   // Load products: Instant IndexedDB + LocalStorage load, followed by single throttled syncCatalogFromNetwork.
   // Category filtering is strictly in-memory (products.filter(...)) with 0 network calls.
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Immediately render cached products from memory/localStorage for 0ms initial paint
-    const initialCached = getSanitizedCachedProducts();
-    if (initialCached && initialCached.length > 0) {
-      setProducts(initialCached);
-      setIsLoadingProducts(false);
-      setHasInitialLoadCompleted(true);
-      setFirestoreQuotaExceeded(false);
-    }
-
-    // 2. Read full persistent catalog immediately from IndexedDB
+    // 1. Read full persistent catalog immediately from IndexedDB
     getProductsFromIndexedDB()
       .then((idbProds) => {
         if (!isMounted) return;
         if (idbProds && idbProds.length > 0) {
-          setProducts(idbProds);
+          updateProductsIfChanged(idbProds);
           setIsLoadingProducts(false);
           setHasInitialLoadCompleted(true);
           setFirestoreQuotaExceeded(false);
@@ -391,12 +417,12 @@ function MainApp() {
         console.warn('IndexedDB initial load note:', err);
       });
 
-    // 3. Single throttled background catalog sync (fetches /api/products, caches in IDB, 0 Firestore reads)
+    // 2. Single throttled background catalog sync (fetches /api/products, caches in IDB, 0 Firestore reads)
     syncCatalogFromNetwork(false)
       .then((synced) => {
         if (!isMounted) return;
         if (synced && synced.length > 0) {
-          setProducts(synced);
+          updateProductsIfChanged(synced);
           setIsLoadingProducts(false);
           setHasInitialLoadCompleted(true);
           setFirestoreQuotaExceeded(false);
@@ -411,25 +437,25 @@ function MainApp() {
         setHasInitialLoadCompleted(true);
       });
 
-    // 4. Support instant local menu updates when admin modifies products
+    // 3. Support instant local menu updates when admin modifies products
     const handleLocalProductsUpdate = async (e: Event) => {
       try {
         const customEvt = e as CustomEvent;
         if (customEvt.detail && Array.isArray(customEvt.detail) && customEvt.detail.length > 0) {
           const clean = sanitizeProducts(customEvt.detail);
           if (clean.length > 0) {
-            setProducts(clean);
+            updateProductsIfChanged(clean);
             return;
           }
         }
         const idb = await getProductsFromIndexedDB();
         if (idb.length > 0) {
-          setProducts(idb);
+          updateProductsIfChanged(idb);
           return;
         }
         const cleanCached = getSanitizedCachedProducts();
         if (cleanCached.length > 0) {
-          setProducts(cleanCached);
+          updateProductsIfChanged(cleanCached);
         }
       } catch {}
     };
@@ -440,7 +466,7 @@ function MainApp() {
       isMounted = false;
       window.removeEventListener('swadeep_products_updated', handleLocalProductsUpdate);
     };
-  }, []);
+  }, [updateProductsIfChanged]);
 
   // Real-time custom categories & icons managed from Admin Panel
   const [managedCategories, setManagedCategories] = useState<string[]>(() => getCachedCategories());
@@ -619,9 +645,8 @@ function MainApp() {
   }, [products, activeCategory, favorites, searchQuery]);
 
   const handleOpenProductModal = useCallback((prod: Product) => {
-    setSelectedCardId(prod.id);
     if (prod.realProductId) {
-      const realParent = products.find((p) => p.id === prod.realProductId) || prod;
+      const realParent = productsRef.current.find((p) => p.id === prod.realProductId) || prod;
       setSelectedProductForModal({
         ...realParent,
         defaultVariantIndex: prod.defaultVariantIndex,
@@ -630,7 +655,7 @@ function MainApp() {
     } else {
       setSelectedProductForModal(prod);
     }
-  }, [products]);
+  }, []);
 
   const handleOrderSuccess = (order: Order) => {
     setIsCheckoutOpen(false);
@@ -645,7 +670,7 @@ function MainApp() {
     setTrackingOrderId(orderId);
     setTrackingPhone(phone);
     setCurrentView('track');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   const handleStaffLoginSuccess = (session: StaffSession) => {
@@ -658,67 +683,20 @@ function MainApp() {
     signOut();
   };
 
-  // If viewing admin or staff portal
-  if (currentView === 'admin') {
-    if (authLoading) {
-      return <PortalLoadingFallback />;
-    }
-
-    return (
-      <PortalErrorBoundary onBackToStore={() => setCurrentView('home')}>
-        <ReadLimitProtectionBanner />
-        <Suspense fallback={<PortalLoadingFallback />}>
-          {staffSession ? (
-            staffSession.role === 'kitchen' ? (
-              <KitchenDisplayPage
-                currentChef={staffSession.data}
-                onLogout={handleStaffLogout}
-                onBackToStore={() => setCurrentView('home')}
-              />
-            ) : staffSession.role === 'preparing' ? (
-              <PreparingDisplayPage
-                onBackToAdmin={handleStaffLogout}
-                onOpenStore={() => setCurrentView('home')}
-              />
-            ) : staffSession.role === 'delivery' ? (
-              <DeliveryAgentPortal
-                currentAgent={staffSession.data}
-                onLogout={handleStaffLogout}
-                onBackToStore={() => setCurrentView('home')}
-              />
-            ) : (
-              <AdminDashboard
-                products={products}
-                onUpdateProducts={setProducts}
-                onBackToStore={() => setCurrentView('home')}
-                onLogout={handleStaffLogout}
-              />
-            )
-          ) : user ? (
-            <AdminDashboard
-              products={products}
-              onUpdateProducts={setProducts}
-              onBackToStore={() => setCurrentView('home')}
-              onLogout={handleStaffLogout}
-            />
-          ) : (
-            <AdminLogin
-              onBackToStore={() => setCurrentView('home')}
-              onStaffLoginSuccess={handleStaffLoginSuccess}
-            />
-          )}
-        </Suspense>
-      </PortalErrorBoundary>
-    );
-  }
+  const isOverlayOpen = Boolean(selectedProductForModal || isCartOpen || isCheckoutOpen || confirmedOrder);
 
   return (
-    <div className="relative min-h-screen w-full max-w-full overflow-x-hidden flex flex-col justify-between selection:bg-slate-200 selection:text-slate-900 pb-8">
-      <ReadLimitProtectionBanner />
-      {/* Dynamic ambient background with still pattern & slow morphing gradient (Pink, Blue, Purple, White @ 5% opacity) */}
-      <AnimatedAmbientBackground />
+    <>
+      {/* Storefront View Root (0ms Instant Switch & Persistent State) */}
+      <div
+        id="storefront-view-root"
+        className={currentView === 'admin' ? 'hidden' : 'relative min-h-screen w-full max-w-full overflow-x-clip flex flex-col justify-between selection:bg-slate-200 selection:text-slate-900 pb-8'}
+      >
+        <ReadLimitProtectionBanner />
+        <AnimatedAmbientBackground />
 
-      {/* Header Container: Solid pure white matching phone status bar 100%, hides/shows in sync with bottom dock */}
+        <div className={isOverlayOpen ? 'contents invisible pointer-events-none' : 'contents'}>
+        {/* Header Container: Solid pure white matching phone status bar 100%, hides/shows in sync with bottom dock */}
       <header
         className={`fixed top-0 left-0 right-0 z-40 w-full transform-gpu transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] bg-white border-b border-slate-100/60 shadow-[0_1px_3px_rgba(15,23,42,0.03)] pt-[max(env(safe-area-inset-top,0.5rem),0.5rem)] sm:pt-3 pb-1 sm:pb-2.5 ${
           currentView !== 'home' ? 'hidden sm:block' : ''
@@ -809,7 +787,7 @@ function MainApp() {
 
       <main
         style={{ display: currentView === 'home' ? 'block' : 'none' }}
-        className="flex-1 w-full max-w-full overflow-x-hidden pt-[calc(max(env(safe-area-inset-top,0.5rem),0.5rem)+5.35rem)] sm:pt-48 pb-32 sm:pb-12 animate-in fade-in duration-150"
+        className="flex-1 w-full max-w-full overflow-x-clip pt-[calc(max(env(safe-area-inset-top,0.5rem),0.5rem)+5.35rem)] sm:pt-48 pb-32 sm:pb-12"
       >
         {/* Product Catalog Section */}
         <div
@@ -893,7 +871,6 @@ function MainApp() {
                 /* Product Grid - 2 columns on mobile, 3 on tablet, 4 on desktop directly without background patti */
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-5">
                   {filteredProducts.map((product, idx) => {
-                    const isCardSelected = (hoveredCardId || selectedCardId) === product.id;
                     const isFav = favoritesSet.has(product.realProductId || product.id);
                     return (
                       <ProductCard
@@ -902,9 +879,6 @@ function MainApp() {
                         onOpenDetail={handleOpenProductModal}
                         isFavorite={isFav}
                         onToggleFavorite={toggleFavorite}
-                        isSelected={isCardSelected}
-                        onSelect={handleSelectCard}
-                        onHoverChange={handleHoverChange}
                         priority={idx < 6}
                       />
                     );
@@ -917,7 +891,7 @@ function MainApp() {
       </main>
 
       {/* Unified Minimal Footer */}
-      <Footer onGoToAdmin={() => { setCurrentView('admin'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
+      <Footer onGoToAdmin={() => { setCurrentView('admin'); window.scrollTo({ top: 0, behavior: 'instant' }); }} />
 
       {/* Subdued Non-Intrusive Offline Status Indicator */}
       <OfflineIndicator />
@@ -927,13 +901,13 @@ function MainApp() {
         currentView={currentView}
         setCurrentView={setCurrentView}
         searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
         isVisible={isNavVisible}
         onOpenSearch={() => {
           setIsMobileSearchOpen(true);
           setIsNavVisible(true);
         }}
       />
+      </div>
 
       {/* Slide-over Cart Drawer */}
       <CartDrawer
@@ -970,7 +944,61 @@ function MainApp() {
           onTrackOrder={handleTrackFromSuccess}
         />
       )}
-    </div>
+      </div>
+
+      {/* Admin & Staff Portal View Root (Pre-warmed in memory for 0ms instantaneous switching) */}
+      {(hasVisitedAdmin || currentView === 'admin') && (
+        <div
+          id="admin-portal-view-root"
+          className={currentView === 'admin' ? 'min-h-screen w-full' : 'hidden'}
+        >
+          <PortalErrorBoundary onBackToStore={() => setCurrentView('home')}>
+            <ReadLimitProtectionBanner />
+            {authLoading ? (
+              <PortalLoadingFallback />
+            ) : staffSession ? (
+              staffSession.role === 'kitchen' ? (
+                <KitchenDisplayPage
+                  currentChef={staffSession.data}
+                  onLogout={handleStaffLogout}
+                  onBackToStore={() => setCurrentView('home')}
+                />
+              ) : staffSession.role === 'preparing' ? (
+                <PreparingDisplayPage
+                  onBackToAdmin={handleStaffLogout}
+                  onOpenStore={() => setCurrentView('home')}
+                />
+              ) : staffSession.role === 'delivery' ? (
+                <DeliveryAgentPortal
+                  currentAgent={staffSession.data}
+                  onLogout={handleStaffLogout}
+                  onBackToStore={() => setCurrentView('home')}
+                />
+              ) : (
+                <AdminDashboard
+                  products={products}
+                  onUpdateProducts={setProducts}
+                  onBackToStore={() => setCurrentView('home')}
+                  onLogout={handleStaffLogout}
+                />
+              )
+            ) : user ? (
+              <AdminDashboard
+                products={products}
+                onUpdateProducts={setProducts}
+                onBackToStore={() => setCurrentView('home')}
+                onLogout={handleStaffLogout}
+              />
+            ) : (
+              <AdminLogin
+                onBackToStore={() => setCurrentView('home')}
+                onStaffLoginSuccess={handleStaffLoginSuccess}
+              />
+            )}
+          </PortalErrorBoundary>
+        </div>
+      )}
+    </>
   );
 }
 

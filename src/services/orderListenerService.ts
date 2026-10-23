@@ -8,6 +8,7 @@ import { db } from '../firebase/config';
 import { Order } from '../types';
 import { dbConnectionService } from './dbConnectionService';
 import { guardedOnSnapshot } from './firestoreReadGuard';
+import { ARCHIVE_STORAGE_KEYS, getDeletedOrderIds, ensureCleanSlateReset } from './orderArchiveService';
 
 type OrderSubscriber = (orders: Order[]) => void;
 
@@ -19,13 +20,22 @@ class OrderListenerService {
   private isConnecting = false;
 
   constructor() {
-    // Load existing cached orders on service initialization
+    ensureCleanSlateReset();
+    // Load existing cached admin orders on service initialization
     try {
-      const raw = localStorage.getItem('swadeep_recent_orders');
+      const raw = localStorage.getItem(ARCHIVE_STORAGE_KEYS.ADMIN_LIVE_CACHE);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          this.cachedOrders = parsed;
+          const deletedSet = getDeletedOrderIds();
+          this.cachedOrders = parsed.filter((o) => {
+            if (!o || o.isArchived || o.archived || o.status === 'archived' || o.status === 'completed' || o.isDeleted) {
+              return false;
+            }
+            const id1 = String(o?.id || '').toLowerCase();
+            const id2 = String(o?.orderId || '').toLowerCase();
+            return !deletedSet.has(id1) && !deletedSet.has(id2);
+          });
         }
       }
     } catch {}
@@ -82,11 +92,11 @@ class OrderListenerService {
       this.isConnecting = true;
       const ordersCol = collection(db, 'orders');
 
-      // Requirement: where status in ['pending','accepted','preparing','out_for_delivery']
-      // No orderBy (zero composite index required), no restrictive limit.
+      // Include delivered and rejected so Today's delivered/cancelled orders remain visible in Today's tab until midnight
+      // and automatically sync to Archive without vanishing from the snapshot.
       const q = query(
         ordersCol,
-        where('status', 'in', ['pending', 'accepted', 'preparing', 'out_for_delivery'])
+        where('status', 'in', ['pending', 'accepted', 'preparing', 'out_for_delivery', 'delivered', 'rejected'])
       );
 
       this.activeUnsubscribe = guardedOnSnapshot(
@@ -94,9 +104,23 @@ class OrderListenerService {
         'orderListenerService.activeOrders',
         (snapshot: any) => {
           this.isConnecting = false;
+          const deletedSet = getDeletedOrderIds();
           const list: Order[] = [];
           snapshot.forEach((docSnap: any) => {
             const data = docSnap.data() as Order;
+            const id1 = String(docSnap.id || '').toLowerCase();
+            const id2 = String(data.orderId || docSnap.id || '').toLowerCase();
+            if (
+              deletedSet.has(id1) ||
+              deletedSet.has(id2) ||
+              (data as any).isDeleted ||
+              (data as any).isArchived ||
+              (data as any).archived ||
+              (data as any).status === 'archived' ||
+              (data as any).status === 'completed'
+            ) {
+              return;
+            }
             list.push({
               ...data,
               id: docSnap.id,
@@ -127,7 +151,7 @@ class OrderListenerService {
 
           this.cachedOrders = list;
           try {
-            localStorage.setItem('swadeep_recent_orders', JSON.stringify(list));
+            localStorage.setItem(ARCHIVE_STORAGE_KEYS.ADMIN_LIVE_CACHE, JSON.stringify(list));
           } catch {}
 
           dbConnectionService.recordSnapshotArrival(snapshot.metadata?.fromCache);

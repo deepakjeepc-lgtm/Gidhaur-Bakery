@@ -5,7 +5,6 @@ import {
   Bike,
   CheckCircle2,
   AlertCircle,
-  Bell,
   Volume2,
   VolumeX,
   LogOut,
@@ -14,8 +13,7 @@ import {
   Phone,
   Search,
   Timer,
-  PackageCheck,
-  AlertTriangle
+  PackageCheck
 } from 'lucide-react';
 import {
   doc,
@@ -28,12 +26,12 @@ import { Order, DeliveryAgent, KitchenStaff } from '../../types';
 import { subscribeToDeliveryAgents, getLocalRestaurantSettings } from '../../services/staffService';
 import { deductStockForAcceptedOrder } from '../../services/inventoryService';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
+import { isOrderFromToday } from '../../services/orderArchiveService';
 import { playOrderAlertChime } from '../../utils/sound';
 import {
   isFoodItem,
   isNonFoodItem,
   getOrderFoodItems,
-  getOrderNonFoodItems,
   getOrderCategoryClassification
 } from '../../utils/orderCategoryHelper';
 import {
@@ -96,11 +94,11 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
   // Checked items checklist state per order
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
 
-  // Real-time Orders Sync via Singleton Shared Listener
+  // Real-time Orders Sync via Singleton Shared Listener (Strictly today's orders only)
   useEffect(() => {
     const unsubscribe = subscribeToSharedOrders((fetched) => {
       setIsLoading(false);
-      setOrders(fetched);
+      setOrders(fetched.filter((o) => isOrderFromToday(o)));
     });
 
     return () => unsubscribe();
@@ -368,7 +366,7 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-[#f1f5f9] text-slate-900 pb-16 pt-[max(env(safe-area-inset-top,0px),0px)]">
+    <div className="admin-curator-console min-h-screen bg-[#f1f5f9] text-slate-900 pb-16 pt-[max(env(safe-area-inset-top,0px),0px)]">
       {/* Top Fixed Floating Kitchen Nav with Notch & Dynamic Island Safe Area */}
       <header className="sticky top-[max(calc(env(safe-area-inset-top,0px)+0.5rem),0.75rem)] z-40 px-3 sm:px-6 max-w-7xl mx-auto mb-4">
         <div className="bg-white/95 backdrop-blur-md rounded-2xl sm:rounded-full border border-slate-200 shadow-sm px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3">
@@ -576,7 +574,6 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
                     {(() => {
                       const orderCat = getOrderCategoryClassification(order);
                       const isMixed = orderCat === 'mixed';
-                      const isKitchenReady = !!order.kitchenReady;
                       const isPrepReady = !!order.preparingReady;
 
                       if (!isMixed) return null;

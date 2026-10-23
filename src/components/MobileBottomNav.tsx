@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Home, Search, ReceiptText, Phone, ShoppingCart, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Home, Search, ReceiptText, Phone, ShoppingCart } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useLocation } from '../context/LocationContext';
 import { triggerHaptic } from '../utils/haptics';
@@ -8,24 +8,19 @@ interface MobileBottomNavProps {
   currentView: 'home' | 'track' | 'admin';
   setCurrentView: (view: 'home' | 'track' | 'admin') => void;
   searchQuery: string;
-  setSearchQuery: (query: string) => void;
   isVisible?: boolean;
   onOpenSearch?: () => void;
 }
 
-export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
+export const MobileBottomNav: React.FC<MobileBottomNavProps> = React.memo(({
   currentView,
   setCurrentView,
   searchQuery,
-  setSearchQuery: _setSearchQuery,
-  isVisible: propIsVisible,
+  isVisible = true,
   onOpenSearch,
 }) => {
   const { totalItems, setIsCartOpen } = useCart();
   const { settings } = useLocation();
-  const [localVisible, setLocalVisible] = useState(true);
-  const setIsVisible = setLocalVisible;
-  const isVisible = propIsVisible !== undefined ? propIsVisible : localVisible;
 
   // Optimistic synchronized tab state for 0ms instantaneous icon rearrangement
   const [activeTab, setActiveTab] = useState<'home' | 'track'>(
@@ -38,84 +33,12 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
     }
   }, [currentView]);
 
-  const lastScrollYRef = useRef(0);
-  const rAFRef = useRef<number | null>(null);
-  const isProgrammaticSwitchRef = useRef(false);
-  const downAccumRef = useRef(0);
-  const upAccumRef = useRef(0);
-
-  // Pure transform-based scroll direction listener:
-  // - Downscroll: smoothly slides completely out of viewport (200px down so nothing peeks out)
-  // - Upscroll or Page Top: smoothly slides back into viewport
-  // - Fixed opacity: 1 avoids mobile backdrop-filter rasterization flash.
-  useEffect(() => {
-    lastScrollYRef.current =
-      typeof window !== 'undefined' ? window.scrollY || window.pageYOffset || 0 : 0;
-
-    const onScroll = () => {
-      if (rAFRef.current !== null) return;
-
-      rAFRef.current = window.requestAnimationFrame(() => {
-        rAFRef.current = null;
-
-        // If user just switched tabs programmatically, ignore scroll jumps during layout settling
-        if (isProgrammaticSwitchRef.current) {
-          lastScrollYRef.current = window.scrollY || window.pageYOffset || 0;
-          return;
-        }
-
-        const currentY = window.scrollY || window.pageYOffset || 0;
-        const deltaY = currentY - lastScrollYRef.current;
-
-        // When at or near the top of the page, always stay visible
-        if (currentY <= 20) {
-          downAccumRef.current = 0;
-          upAccumRef.current = 0;
-          setIsVisible(true);
-        } else {
-          if (deltaY > 0) {
-            downAccumRef.current += deltaY;
-            upAccumRef.current = 0;
-          } else if (deltaY < 0) {
-            upAccumRef.current += Math.abs(deltaY);
-            downAccumRef.current = 0;
-          }
-
-          if (downAccumRef.current >= 16) {
-            setIsVisible(false);
-          } else if (upAccumRef.current >= 10) {
-            setIsVisible(true);
-          }
-        }
-
-        lastScrollYRef.current = currentY;
-      });
-    };
-
-    window.addEventListener('scroll', onScroll, { passive: true });
-
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-      if (rAFRef.current) window.cancelAnimationFrame(rAFRef.current);
-    };
-  }, []);
-
   // Programmatic tab switch handler that updates optimistic state immediately for 0ms lag
   const handleSwitchTab = (targetView: 'home' | 'track') => {
     if (targetView === activeTab) return;
     triggerHaptic('selection');
-    // 1. Optimistic immediate state update: icons & text rearrange on the exact frame of the tap!
     setActiveTab(targetView);
-    isProgrammaticSwitchRef.current = true;
-    setIsVisible(true);
     setCurrentView(targetView);
-
-    // Keep scroll suppression active while browser handles scroll restoration smoothly
-    setTimeout(() => {
-      isProgrammaticSwitchRef.current = false;
-      lastScrollYRef.current =
-        typeof window !== 'undefined' ? window.scrollY || window.pageYOffset || 0 : 0;
-    }, 450);
   };
 
   // Handle direct phone call to Customer Support Number configured in Admin Panel
@@ -252,4 +175,4 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       </button>
     </nav>
   );
-};
+});

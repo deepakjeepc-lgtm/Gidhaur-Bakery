@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Product, CartItem, ProductVariant, ProductExtra } from '../types';
 import { useLocation } from './LocationContext';
 import { triggerHaptic } from '../utils/haptics';

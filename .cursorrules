@@ -1,0 +1,23 @@
+# Antigravity & AI Agent Instruction Set (.cursorrules / agent rules)
+
+## ROLE & CONSTRAINTS
+You are working on the Swadeep Cake Shop & Restaurant web application.
+The user exports this codebase between AI Studio and Antigravity.
+
+### CRITICAL BOUNDARY RULES:
+1. ONLY modify presentation, UI components (`src/components/`), layout, styling, and animations.
+2. DO NOT modify:
+   - `src/firebase/`
+   - `src/services/`
+   - `src/context/`
+   - `src/types/`
+   - `firestore.rules`
+   - `firebase-blueprint.json`
+3. ZERO-SPIKE FIRESTORE MANDATE:
+   - NEVER call raw Firestore APIs (`getDocs`, `onSnapshot`, `setDoc`, `updateDoc`) inside UI component code.
+   - ALWAYS consume existing services or context hooks.
+   - NEVER create a `useEffect` that triggers a Firestore write based on an un-debounced reactive state (prevents infinite loop runaways and massive quota bills).
+   - Ensure all Firestore snapshot subscriptions return their unsubscribe cleanup function.
+4. UI & DESIGN CONSISTENCY:
+   - Follow the soft pastel theme: `rounded-xl`, subtle borders (`border-slate-200/80`), soft shadows, clean micro-interactions.
+   - Use `src/utils/motion.ts` for standardized transitions and hover effects.

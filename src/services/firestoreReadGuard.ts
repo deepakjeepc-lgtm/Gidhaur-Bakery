@@ -6,8 +6,7 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
-  Unsubscribe,
-  SnapshotListenOptions
+  Unsubscribe
 } from 'firebase/firestore';
 
 /**

@@ -1,14 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ArrowLeft,
   Plus,
   Search,
-  Sparkles,
-  Edit2,
   Trash2,
   CheckCircle2,
   X,
-  Power,
   RotateCcw
 } from 'lucide-react';
 import { ProductExtra } from '../../types';
@@ -27,18 +24,16 @@ interface ExtrasManagementScreenProps {
   onBack: () => void;
 }
 
-export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ onBack }) => {
+export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = React.memo(({ onBack }) => {
   const [extras, setExtras] = useState<ProductExtra[]>(() => getCachedExtras());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
-  // Modal states
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingExtra, setEditingExtra] = useState<ProductExtra | null>(null);
   const [deletingExtra, setDeletingExtra] = useState<ProductExtra | null>(null);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
 
-  // Form fields
   const [name, setName] = useState('');
   const [price, setPrice] = useState<number | string>(20);
   const [category, setCategory] = useState('Toppings');
@@ -98,11 +93,11 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
     const numPrice = Number(price);
 
     if (!cleanName) {
-      setFormError('Please enter an extra name (e.g. Extra Cheese).');
+      setFormError('Please enter an extra name.');
       return;
     }
     if (isNaN(numPrice) || numPrice < 0) {
-      setFormError('Please enter a valid price (₹0 or higher).');
+      setFormError('Please enter a valid price.');
       return;
     }
 
@@ -116,7 +111,7 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
           price: numPrice,
           category: category.trim() || 'General',
         });
-        setFeedback(`✓ "${cleanName}" updated successfully!`);
+        setFeedback(`✓ "${cleanName}" updated`);
       } else {
         await addExtra({
           name: cleanName,
@@ -124,7 +119,7 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
           category: category.trim() || 'General',
           available: true,
         });
-        setFeedback(`✓ "${cleanName}" added to extras catalog!`);
+        setFeedback(`✓ "${cleanName}" added`);
       }
       setIsFormModalOpen(false);
       setTimeout(() => setFeedback(null), 3000);
@@ -147,7 +142,7 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
     setIsSubmitting(true);
     try {
       await deleteExtra(deletingExtra.id);
-      setFeedback(`🗑️ "${deletingExtra.name}" removed from library`);
+      setFeedback(`✓ "${deletingExtra.name}" removed`);
       setDeletingExtra(null);
       setTimeout(() => setFeedback(null), 3000);
       triggerHaptic('medium');
@@ -163,7 +158,7 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
     setIsSubmitting(true);
     try {
       await saveExtras(DEFAULT_PRODUCT_EXTRAS);
-      setFeedback('✓ Restored default extras & add-ons!');
+      setFeedback('✓ Restored default extras');
       setTimeout(() => setFeedback(null), 3000);
       triggerHaptic('medium');
     } catch (err: any) {
@@ -174,263 +169,240 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
   };
 
   return (
-    <div className="space-y-6 pb-20 animate-fadeIn">
+    <div className="space-y-4 pb-20">
       {/* Top Header Bar */}
-      <div className="bg-white/95 backdrop-blur-md sticky top-0 z-20 py-3 border-b border-slate-200/80 -mx-3 sm:mx-0 px-3 sm:px-0 mb-4">
-        <div className="flex items-center justify-between gap-3 max-w-6xl mx-auto">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 rounded-full text-xs font-bold text-slate-700 transition-all shadow-2xs active:scale-95 cursor-pointer"
-              id="back-to-catalog-btn"
-            >
-              <ArrowLeft className="w-4 h-4 stroke-[2.5]" />
-              <span>Back to Menu</span>
-            </button>
+      <div className="flex items-center justify-between gap-3 bg-[#18181B] border border-[#27272A] rounded-md p-4">
+        <div className="flex items-center gap-4 min-w-0">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#121212] hover:bg-[#242427] border border-[#27272A] hover:border-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#FFFFFF] cursor-pointer shrink-0"
+            id="back-to-catalog-btn"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#A1A1AA]" />
+            <span>BACK</span>
+          </button>
 
-            <div>
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-600 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <h1 className="font-heading font-extrabold text-lg sm:text-xl text-slate-900 tracking-tight leading-tight">
-                  Extras & Add-ons Library ({extras.length})
-                </h1>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenAdd}
-              className="px-4 py-2 bg-slate-950 hover:bg-slate-800 active:scale-95 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
-              id="add-extra-btn"
-            >
-              <Plus className="w-4 h-4" />
-              <span>+ Add Extra</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {feedback && (
-        <div className="max-w-6xl mx-auto p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-bold text-emerald-800 flex items-center gap-2 animate-fadeIn">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          <span>{feedback}</span>
-        </div>
-      )}
-
-      {/* Main Container */}
-      <div className="max-w-6xl mx-auto space-y-5">
-        {/* Search & Category Filter Bar */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search extras (e.g. Cheese, Corn, Spicy)..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-200/90 rounded-xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-slate-900"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
-            <button
-              type="button"
-              onClick={() => setSelectedCategory('all')}
-              className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                selectedCategory === 'all'
-                  ? 'bg-slate-900 text-white shadow-2xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              All ({extras.length})
-            </button>
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                  selectedCategory === cat
-                    ? 'bg-slate-900 text-white shadow-2xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <h1 className="font-bold text-sm sm:text-base uppercase tracking-[-0.02em] text-[#FFFFFF] truncate">
+              Extras &amp; Add-ons
+            </h1>
+            <span className="text-[11px] font-mono font-bold text-[#A1A1AA] bg-[#0A0A0A] border border-[#27272A] px-2 py-0.5 rounded-sm tabular-nums shrink-0 uppercase tracking-[0.06em]">
+              {extras.length} ITEMS
+            </span>
           </div>
         </div>
 
-        {/* Direct Boxes / Cards Grid (No dropdowns!) */}
-        {filteredExtras.length === 0 ? (
-          <div className="bg-white rounded-3xl p-12 text-center border border-slate-200/80 space-y-3">
-            <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
-              <Sparkles className="w-6 h-6" />
-            </div>
-            <h3 className="font-heading font-bold text-base text-slate-800">
-              No extras found
-            </h3>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Add toppings, sauces, cheese, dips, and spice extras so you can attach them to your menu items.
-            </p>
-            <button
-              type="button"
-              onClick={handleOpenAdd}
-              className="px-4 py-2 bg-slate-950 text-white font-bold text-xs rounded-full shadow-xs cursor-pointer"
-            >
-              + Create First Extra
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
-            {filteredExtras.map((extra) => (
-              <div
-                key={extra.id}
-                className={`bg-white rounded-2xl p-4 border transition-all flex flex-col justify-between shadow-2xs hover:shadow-xs hover:border-slate-300 ${
-                  extra.available !== false
-                    ? 'border-slate-200/90'
-                    : 'border-slate-200 bg-slate-50/60 opacity-60'
-                }`}
-              >
-                <div className="space-y-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/80 uppercase tracking-wider inline-block mb-1">
-                        {extra.category || 'Topping'}
-                      </span>
-                      <h3 className="font-heading font-extrabold text-sm text-slate-950 truncate leading-snug">
-                        {extra.name}
-                      </h3>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleToggleAvailability(extra)}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold transition-all shrink-0 cursor-pointer ${
-                        extra.available !== false
-                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
-                          : 'bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200'
-                      }`}
-                      title="Toggle active status"
-                    >
-                      <Power className="w-2.5 h-2.5" />
-                      <span>{extra.available !== false ? 'Active' : 'Off'}</span>
-                    </button>
-                  </div>
-
-                  {/* Price Box */}
-                  <div className="flex items-baseline gap-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                    <span className="text-xs font-bold text-slate-400">+₹</span>
-                    <span className="font-heading font-black text-lg text-slate-950">
-                      {extra.price}
-                    </span>
-                    <span className="text-[10px] font-semibold text-slate-500 ml-auto">
-                      per item
-                    </span>
-                  </div>
-                </div>
-
-                {/* Card Action Buttons */}
-                <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-end gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEdit(extra)}
-                    className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                    title="Edit Extra"
-                  >
-                    <Edit2 className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDeletingExtra(extra)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                    title="Delete Extra"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Restore Defaults Footer Shortcut */}
-        <div className="pt-4 border-t border-slate-200/80 flex items-center justify-between">
-          <span className="text-xs text-slate-500">
-            Need default bakery toppings and sauces?
-          </span>
+        <div className="flex items-center gap-2 font-mono">
           <button
             type="button"
             onClick={() => setShowRestoreModal(true)}
-            className="px-3.5 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 rounded-sm bg-[#121212] hover:bg-[#242427] border border-[#27272A] text-[#A1A1AA] hover:text-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.06em] flex items-center gap-1.5 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Default Extras</span>
+            <span className="hidden sm:inline">Reset Defaults</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleOpenAdd}
+            className="px-3.5 py-1.5 rounded-sm bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.06em] flex items-center gap-1.5 cursor-pointer"
+            id="add-extra-btn"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Extra</span>
           </button>
         </div>
       </div>
 
+      {feedback && (
+        <div className="p-3 rounded-sm bg-[#18181B] border border-[#10B981]/50 text-[#FFFFFF] text-xs font-mono font-bold flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+          <span>{feedback}</span>
+        </div>
+      )}
+
+      {/* Search & Category Filter Bar */}
+      <div className="bg-[#18181B] rounded-md border border-[#27272A] p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar font-mono">
+          <button
+            type="button"
+            onClick={() => setSelectedCategory('all')}
+            className={`px-3 py-1.5 rounded-sm text-[11px] uppercase tracking-[0.06em] shrink-0 cursor-pointer border ${
+              selectedCategory === 'all'
+                ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF] font-bold'
+                : 'bg-[#121212] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:border-[#3F3F46]'
+            }`}
+          >
+            ALL ({extras.length})
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              onClick={() => setSelectedCategory(cat)}
+              className={`px-3 py-1.5 rounded-sm text-[11px] uppercase tracking-[0.06em] shrink-0 cursor-pointer border ${
+                selectedCategory === cat
+                  ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF] font-bold'
+                  : 'bg-[#121212] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:border-[#3F3F46]'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        <div className="relative w-full sm:w-64 shrink-0 font-mono">
+          <Search className="w-3.5 h-3.5 text-[#71717A] absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="FILTER EXTRAS..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-8 pr-7 py-1.5 rounded-sm bg-[#0A0A0A] border border-[#27272A] focus:border-[#FFFFFF] text-xs font-mono text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-hidden"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[#71717A] hover:text-[#FFFFFF] cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Extras Grid */}
+      {filteredExtras.length === 0 ? (
+        <div className="bg-[#18181B] p-12 text-center rounded-md border border-[#27272A] space-y-3 font-mono">
+          <h3 className="font-bold text-sm uppercase tracking-[0.06em] text-[#FFFFFF]">
+            No Extras Found
+          </h3>
+          <button
+            type="button"
+            onClick={handleOpenAdd}
+            className="px-4 py-2 rounded-sm bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-bold text-[11px] uppercase tracking-[0.06em] cursor-pointer"
+          >
+            + Create Extra
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          {filteredExtras.map((extra) => (
+            <div
+              key={extra.id}
+              className={`bg-[#18181B] p-4 rounded-md border flex flex-col justify-between ${
+                extra.available !== false
+                  ? 'border-[#27272A] hover:border-[#3F3F46] hover:bg-[#242427]'
+                  : 'border-[#27272A] bg-[#121212] opacity-60'
+              }`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <span className="inline-block text-[10px] font-mono font-bold text-[#A1A1AA] bg-[#0A0A0A] border border-[#27272A] px-1.5 py-0.5 rounded-sm uppercase tracking-[0.06em] mb-1">
+                      {extra.category || 'TOPPING'}
+                    </span>
+                    <h3 className="font-bold text-sm text-[#FFFFFF] tracking-[-0.02em] truncate">
+                      {extra.name}
+                    </h3>
+                  </div>
+
+                  {/* Matte Switch */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={extra.available !== false}
+                    onClick={() => handleToggleAvailability(extra)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border p-0.5 focus:outline-hidden ${
+                      extra.available !== false ? 'bg-[#10B981]/20 border-[#10B981]' : 'bg-[#0A0A0A] border-[#27272A]'
+                    }`}
+                    title={extra.available !== false ? 'Active' : 'Disabled'}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full ${
+                        extra.available !== false ? 'translate-x-4 bg-[#10B981]' : 'translate-x-0 bg-[#71717A]'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-baseline justify-between bg-[#0A0A0A] px-3 py-2 rounded-sm border border-[#27272A] font-mono">
+                  <span className="font-bold text-base text-[#FFFFFF] tabular-nums">
+                    +₹{extra.price}
+                  </span>
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[#71717A]">
+                    PER ITEM
+                  </span>
+                </div>
+              </div>
+
+              <div className="pt-3 mt-3 border-t border-[#27272A] flex items-center justify-end gap-1.5 font-mono">
+                <button
+                  type="button"
+                  onClick={() => handleOpenEdit(extra)}
+                  className="px-2 py-1 rounded-sm text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#0A0A0A] cursor-pointer"
+                  title="Edit Extra"
+                >
+                  EDIT
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeletingExtra(extra)}
+                  className="p-1 rounded-sm text-[#71717A] hover:text-[#EF4444] cursor-pointer"
+                  title="Delete Extra"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Add / Edit Extra Modal */}
       {isFormModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <h3 className="font-heading font-extrabold text-base text-slate-900">
-                  {editingExtra ? 'Edit Extra' : 'Add New Extra'}
-                </h3>
-              </div>
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#18181B] max-w-sm w-full p-5 rounded-md border border-[#27272A] space-y-4">
+            <div className="flex items-center justify-between border-b border-[#27272A] pb-3">
+              <span className="text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#FFFFFF]">
+                {editingExtra ? 'EDIT EXTRA' : 'ADD EXTRA'}
+              </span>
               <button
                 type="button"
                 onClick={() => setIsFormModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                className="text-[#71717A] hover:text-[#FFFFFF] p-1 cursor-pointer"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             {formError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-700 font-bold">
+              <div className="p-3 rounded-sm bg-[#0A0A0A] border border-[#EF4444] text-xs text-[#EF4444] font-mono font-semibold">
                 {formError}
               </div>
             )}
 
             <form onSubmit={handleSave} className="space-y-3.5">
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Extra Name *
+                <label className="block text-[11px] font-mono font-bold text-[#A1A1AA] uppercase tracking-[0.06em] mb-1">
+                  EXTRA NAME *
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Extra Cheese, Extra Corn, Extra Spicy"
+                  placeholder="e.g. Extra Cheese, Extra Corn"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-slate-900"
+                  className="w-full px-3 py-2 rounded-sm bg-[#0A0A0A] border border-[#27272A] focus:border-[#FFFFFF] text-xs font-mono font-semibold text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-hidden"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Additional Price (₹) *
+                  <label className="block text-[11px] font-mono font-bold text-[#A1A1AA] uppercase tracking-[0.06em] mb-1">
+                    PRICE (₹) *
                   </label>
                   <input
                     type="number"
@@ -440,36 +412,35 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
                     placeholder="30"
                     value={price}
                     onChange={(e) => setPrice(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-slate-900"
+                    className="w-full px-3 py-2 rounded-sm bg-[#0A0A0A] border border-[#27272A] focus:border-[#FFFFFF] text-xs font-mono font-bold text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-hidden"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Category Tag
+                  <label className="block text-[11px] font-mono font-bold text-[#A1A1AA] uppercase tracking-[0.06em] mb-1">
+                    CATEGORY TAG
                   </label>
                   <input
                     type="text"
-                    placeholder="Toppings / Dips"
+                    placeholder="Toppings"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:bg-white focus:border-slate-900"
+                    className="w-full px-3 py-2 rounded-sm bg-[#0A0A0A] border border-[#27272A] focus:border-[#FFFFFF] text-xs font-mono font-semibold text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-hidden"
                   />
                 </div>
               </div>
 
-              {/* Quick Preset Categories */}
-              <div className="flex items-center gap-1.5 flex-wrap pt-1">
+              <div className="flex items-center gap-1.5 flex-wrap pt-1 font-mono">
                 {['Toppings', 'Cheese & Dips', 'Seasoning', 'Dessert & Sweets', 'Party Accessories'].map(
                   (c) => (
                     <button
                       key={c}
                       type="button"
                       onClick={() => setCategory(c)}
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
+                      className={`text-[10px] font-bold uppercase tracking-[0.06em] px-2 py-1 rounded-sm border cursor-pointer ${
                         category === c
-                          ? 'bg-amber-100 text-amber-900 border-amber-300'
-                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                          ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF]'
+                          : 'bg-[#0A0A0A] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF]'
                       }`}
                     >
                       {c}
@@ -478,20 +449,20 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
                 )}
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#27272A] font-mono">
                 <button
                   type="button"
                   onClick={() => setIsFormModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+                  className="px-4 py-2 rounded-sm bg-[#121212] border border-[#27272A] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] text-[11px] uppercase tracking-[0.06em] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                  className="px-4 py-2 rounded-sm bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-bold text-[11px] uppercase tracking-[0.06em] disabled:opacity-50 cursor-pointer"
                 >
-                  {isSubmitting ? 'Saving...' : editingExtra ? 'Save Changes' : 'Create Extra'}
+                  {isSubmitting ? 'Saving...' : editingExtra ? 'Save' : 'Create'}
                 </button>
               </div>
             </form>
@@ -499,26 +470,23 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
         </div>
       )}
 
-      {/* Delete Confirmation Modal (Zero window.confirm) */}
+      {/* Delete Confirmation Modal */}
       {deletingExtra && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4 animate-in zoom-in-95 text-center">
-            <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto border border-red-100">
-              <Trash2 className="w-6 h-6" />
-            </div>
-            <div>
-              <h4 className="font-heading font-extrabold text-base text-slate-900">
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#18181B] rounded-md border border-[#27272A] max-w-sm w-full p-5 space-y-4">
+            <div className="space-y-1">
+              <span className="text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#EF4444] block">
+                DELETE EXTRA
+              </span>
+              <h4 className="font-bold text-base text-[#FFFFFF] tracking-[-0.02em]">
                 Delete "{deletingExtra.name}"?
               </h4>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                Are you sure you want to remove this extra option (+₹{deletingExtra.price}) from the library?
-              </p>
             </div>
-            <div className="flex items-center gap-2 pt-2">
+            <div className="flex items-center gap-2 pt-2 font-mono">
               <button
                 type="button"
                 onClick={() => setDeletingExtra(null)}
-                className="flex-1 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                className="flex-1 py-2 rounded-sm text-[11px] font-bold uppercase tracking-[0.06em] text-[#A1A1AA] hover:text-[#FFFFFF] bg-[#121212] border border-[#27272A] cursor-pointer"
               >
                 Cancel
               </button>
@@ -526,9 +494,9 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
                 type="button"
                 disabled={isSubmitting}
                 onClick={handleConfirmDelete}
-                className="flex-1 py-2.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                className="flex-1 py-2 rounded-sm text-[11px] font-bold uppercase tracking-[0.06em] text-[#FFFFFF] bg-[#EF4444] hover:bg-[#dc2626] cursor-pointer disabled:opacity-50"
               >
-                Delete Extra
+                Delete
               </button>
             </div>
           </div>
@@ -537,24 +505,21 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
 
       {/* Restore Default Extras Confirmation Modal */}
       {showRestoreModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4 animate-in zoom-in-95 text-center">
-            <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-100">
-              <RotateCcw className="w-6 h-6" />
-            </div>
-            <div>
-              <h4 className="font-heading font-extrabold text-base text-slate-900">
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#18181B] rounded-md border border-[#27272A] max-w-sm w-full p-5 space-y-4">
+            <div className="space-y-1">
+              <span className="text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#A1A1AA] block">
+                RESTORE DEFAULTS
+              </span>
+              <h4 className="font-bold text-base text-[#FFFFFF] tracking-[-0.02em]">
                 Reset Default Extras?
               </h4>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                This will restore the standard set of toppings, cheese, seasonings, and accessories (Extra Cheese, Corn, Spicy, Paneer, Dips, etc.).
-              </p>
             </div>
-            <div className="flex items-center gap-2 pt-2">
+            <div className="flex items-center gap-2 pt-2 font-mono">
               <button
                 type="button"
                 onClick={() => setShowRestoreModal(false)}
-                className="flex-1 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                className="flex-1 py-2 rounded-sm text-[11px] font-bold uppercase tracking-[0.06em] text-[#A1A1AA] hover:text-[#FFFFFF] bg-[#121212] border border-[#27272A] cursor-pointer"
               >
                 Cancel
               </button>
@@ -562,9 +527,9 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
                 type="button"
                 disabled={isSubmitting}
                 onClick={handleRestoreDefaults}
-                className="flex-1 py-2.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                className="flex-1 py-2 rounded-sm text-[11px] font-bold uppercase tracking-[0.06em] text-[#FFFFFF] bg-[#FF5500] hover:bg-[#e04b00] cursor-pointer disabled:opacity-50"
               >
-                Reset Extras
+                Reset
               </button>
             </div>
           </div>
@@ -572,4 +537,6 @@ export const ExtrasManagementScreen: React.FC<ExtrasManagementScreenProps> = ({ 
       )}
     </div>
   );
-};
+});
+
+ExtrasManagementScreen.displayName = 'ExtrasManagementScreen';

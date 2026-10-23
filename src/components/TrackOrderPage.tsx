@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, ArrowLeft, Package, Phone,
   ChefHat, Bike, PackageCheck, Loader2, AlertCircle, 
-  RefreshCw, XCircle, ChevronDown, ChevronUp, Clock,
-  ShoppingBag, MapPin, FileText, Trash2, CheckCircle2,
+  RefreshCw, XCircle, Clock,
+  ShoppingBag, MapPin, FileText, CheckCircle2,
   Ban, AlertTriangle, Info
 } from 'lucide-react';
 import { db } from '../firebase/config';
@@ -11,7 +11,16 @@ import { doc, collection, query, where, limit, updateDoc, serverTimestamp } from
 import { guardedGetDoc, guardedGetDocs, guardedOnSnapshot } from '../services/firestoreReadGuard';
 import { Order, OrderStatus } from '../types';
 import { subscribeToLiveSync } from '../services/syncService';
-import { isOrderFromToday, clearAllTrackingHistory } from '../services/orderArchiveService';
+import {
+  isOrderFromToday,
+  getTodayDateString,
+  getCustomerOwnOrders,
+  removeCustomerOwnOrder,
+  getDeletedOrderIds,
+  markOrderPermanentlyDeleted,
+  clearAllTrackingHistory,
+  ensureCleanSlateReset,
+} from '../services/orderArchiveService';
 import { triggerHaptic } from '../utils/haptics';
 import { getOrderCategoryClassification } from '../utils/orderCategoryHelper';
 import { checkAndNotifyCustomerOrderStatus, registerCustomerOrderForNotifications } from '../services/customerNotificationService';
@@ -90,18 +99,30 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSearchBoxOpen, setIsSearchBoxOpen] = useState(true);
   const unsubscribeRef = React.useRef<(() => void) | null>(null);
+  const orderListenersMapRef = React.useRef<Map<string, () => void>>(new Map());
+
+  const clearAllActiveListeners = React.useCallback(() => {
+    if (unsubscribeRef.current) {
+      try {
+        unsubscribeRef.current();
+      } catch {}
+      unsubscribeRef.current = null;
+    }
+    orderListenersMapRef.current.forEach((unsub) => {
+      try {
+        unsub();
+      } catch {}
+    });
+    orderListenersMapRef.current.clear();
+  }, []);
 
   // Overall component unmount cleanup: kill all pending order listeners
   useEffect(() => {
+    ensureCleanSlateReset();
     return () => {
-      if (unsubscribeRef.current) {
-        try {
-          unsubscribeRef.current();
-        } catch {}
-        unsubscribeRef.current = null;
-      }
+      clearAllActiveListeners();
     };
-  }, []);
+  }, [clearAllActiveListeners]);
 
   // Monitor order status updates and notify customer on phone/browser
   useEffect(() => {
@@ -113,9 +134,6 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     }
   }, [orders]);
 
-  // Saved device orders & profile
-  const [savedDeviceOrders, setSavedDeviceOrders] = useState<any[]>([]);
-  const [savedPhone, setSavedPhone] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
   const normalizeOrder = (data: any): Order => {
@@ -154,6 +172,37 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     };
   };
 
+  const [currentDateStr, setCurrentDateStr] = useState(() => getTodayDateString());
+
+  // Helper to purge deleted/archived orders from local storage and state
+  const purgeOrderFromLocalCache = (identifier: string, extraKeys: string[] = []) => {
+    try {
+      removeCustomerOwnOrder(identifier, extraKeys);
+    } catch (e) {
+      console.warn('Error purging order from cache:', e);
+    }
+  };
+
+  const purgePhoneOrdersFromLocalCache = (phoneDigits: string) => {
+    try {
+      const cleanDigits = phoneDigits.replace(/\D/g, '');
+      const ownOrders = getCustomerOwnOrders();
+      const matchingIds: string[] = [];
+      ownOrders.forEach((o: any) => {
+        const oPhone = String(o.phone || '').replace(/\D/g, '');
+        if (oPhone === cleanDigits || (cleanDigits.length >= 10 && oPhone.endsWith(cleanDigits))) {
+          if (o.id) matchingIds.push(o.id);
+          if (o.orderId) matchingIds.push(o.orderId);
+        }
+      });
+      if (matchingIds.length > 0) {
+        removeCustomerOwnOrder(matchingIds[0], matchingIds.slice(1));
+      }
+    } catch (e) {
+      console.warn('Error purging phone orders from cache:', e);
+    }
+  };
+
   const fetchFallbackOrders = async (
     identifier: string,
     isPhone: boolean
@@ -161,17 +210,57 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     const clean = identifier.trim().toLowerCase();
     const cleanNoHyphen = clean.replace(/-/g, '');
     const cleanDigits = identifier.replace(/\D/g, '');
+    const deletedSet = getDeletedOrderIds();
+    const todayStr = getTodayDateString();
     const results: Order[] = [];
 
-    // 1. Check local backend Express API (which holds store.json orders)
+    const isEligibleOrder = (o: any): boolean => {
+      if (!o || (!o.orderId && !o.id)) return false;
+      if (!Array.isArray(o.items) || o.items.length === 0) return false;
+      if (
+        o.isArchived ||
+        o.archived ||
+        o.status === 'archived' ||
+        o.status === 'completed' ||
+        o.isDeleted
+      ) {
+        return false;
+      }
+      const id1 = String(o.id || '').toLowerCase();
+      const id2 = String(o.orderId || '').toLowerCase();
+      if ((id1 && deletedSet.has(id1)) || (id2 && deletedSet.has(id2))) return false;
+      return isOrderFromToday(o, todayStr);
+    };
+
+    // 1. Check customer's own device orders first
+    try {
+      const localList = getCustomerOwnOrders();
+      localList.forEach((o) => {
+        if (!isEligibleOrder(o)) return;
+        const oPhone = String(o.phone || '').replace(/\D/g, '');
+        const oId = String(o.orderId || o.id || '').toLowerCase();
+        const oIdNoHyphen = oId.replace(/-/g, '');
+        const matches = isPhone
+          ? oPhone === cleanDigits || (cleanDigits.length >= 10 && oPhone.endsWith(cleanDigits))
+          : oId === clean ||
+            oIdNoHyphen === cleanNoHyphen ||
+            (cleanDigits.length > 0 && (oId === cleanDigits || oId.endsWith(cleanDigits)));
+        if (matches && !results.some((r) => r.orderId === (o.orderId || o.id))) {
+          results.push(normalizeOrder(o));
+        }
+      });
+    } catch (err) {
+      console.warn('LocalStorage orders fallback notice:', err);
+    }
+
+    // 2. Check local backend Express API strictly for matching ID/phone from today
     try {
       const res = await fetch('/api/orders');
       if (res.ok) {
         const apiOrders = (await res.json()) as any[];
         if (Array.isArray(apiOrders)) {
           apiOrders.forEach((o) => {
-            const hasValidItems = Array.isArray(o.items) && o.items.length > 0;
-            if (!hasValidItems) return;
+            if (!isEligibleOrder(o)) return;
             const oPhone = String(o.phone || '').replace(/\D/g, '');
             const oId = String(o.orderId || o.id || '').toLowerCase();
             const oIdNoHyphen = oId.replace(/-/g, '');
@@ -190,110 +279,137 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       console.warn('API orders fetch notice:', err);
     }
 
-    // 2. Check localStorage recent orders
-    try {
-      const saved =
-        localStorage.getItem('gidhaur_recent_orders') ||
-        localStorage.getItem('swadeep_recent_orders');
-      if (saved) {
-        const localList = JSON.parse(saved);
-        if (Array.isArray(localList)) {
-          localList.forEach((o) => {
-            const hasValidItems = Array.isArray(o.items) && o.items.length > 0;
-            if (!hasValidItems) return;
-            const oPhone = String(o.phone || '').replace(/\D/g, '');
-            const oId = String(o.orderId || o.id || '').toLowerCase();
-            const oIdNoHyphen = oId.replace(/-/g, '');
-            const matches = isPhone
-              ? oPhone === cleanDigits || (cleanDigits.length >= 10 && oPhone.endsWith(cleanDigits))
-              : oId === clean ||
-                oIdNoHyphen === cleanNoHyphen ||
-                (cleanDigits.length > 0 && (oId === cleanDigits || oId.endsWith(cleanDigits)));
-            if (matches && !results.some((r) => r.orderId === (o.orderId || o.id))) {
-              results.push(normalizeOrder(o));
-            }
-          });
-        }
-      }
-    } catch (err) {
-      console.warn('LocalStorage orders fallback notice:', err);
-    }
-
     return results;
   };
 
-  // Helper to purge deleted/archived orders from local storage
-  const purgeOrderFromLocalCache = (identifier: string, extraKeys: string[] = []) => {
-    try {
-      const keys = [identifier, ...extraKeys].map((k) => String(k).toLowerCase());
-      const cleanStored = (storageKey: string) => {
-        const stored = localStorage.getItem(storageKey);
-        if (stored) {
-          const list = JSON.parse(stored);
-          if (Array.isArray(list)) {
-            const updated = list.filter((o: any) => {
-              const oId = String(o.orderId || o.id || '').toLowerCase();
-              return !keys.includes(oId);
-            });
-            localStorage.setItem(storageKey, JSON.stringify(updated));
-            setSavedDeviceOrders(updated);
+  // Automatic Midnight Date Rollover on Customer Side:
+  // As soon as the next calendar date arrives, clear all previous-day orders from customer view & localStorage
+  useEffect(() => {
+    const checkDateRollover = () => {
+      const today = getTodayDateString();
+      if (today !== currentDateStr) {
+        setCurrentDateStr(today);
+        getCustomerOwnOrders();
+        setOrders((prev) => {
+          const valid = prev.filter((o) => isOrderFromToday(o, today));
+          if (valid.length === 0) {
+            clearAllActiveListeners();
+            setIsSearchBoxOpen(true);
+            setErrorMessage(null);
+            setItemsModalOrder(null);
+            setOrderToCancel(null);
           }
-        }
-      };
-      cleanStored('swadeep_recent_orders');
-      cleanStored('gidhaur_recent_orders');
-    } catch (e) {
-      console.warn('Error purging order from cache:', e);
-    }
-  };
+          return valid;
+        });
+      }
+    };
 
-  const purgePhoneOrdersFromLocalCache = (phoneDigits: string) => {
-    try {
-      const cleanStored = (storageKey: string) => {
-        const stored = localStorage.getItem(storageKey);
-        if (stored) {
-          const list = JSON.parse(stored);
-          if (Array.isArray(list)) {
-            const updated = list.filter((o: any) => {
-              const oPhone = String(o.phone || '').replace(/\D/g, '');
-              return oPhone !== phoneDigits && !oPhone.endsWith(phoneDigits);
-            });
-            localStorage.setItem(storageKey, JSON.stringify(updated));
-            setSavedDeviceOrders(updated);
-          }
-        }
-      };
-      cleanStored('swadeep_recent_orders');
-      cleanStored('gidhaur_recent_orders');
-    } catch (e) {
-      console.warn('Error purging phone orders from cache:', e);
-    }
-  };
+    const timer = setInterval(checkDateRollover, 15000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkDateRollover();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [currentDateStr, clearAllActiveListeners]);
 
-  // Real-time SSE live updates from server engine
+  // Real-time SSE live updates & instant Admin archive/deletion sync
   useEffect(() => {
     const unsub = subscribeToLiveSync({
       onOrdersUpdate: (incomingOrders) => {
         if (!Array.isArray(incomingOrders)) return;
+        const deletedSet = getDeletedOrderIds();
+        const todayStr = getTodayDateString();
         setOrders((prev) => {
           if (prev.length === 0) return prev;
-          return prev
-            .filter((ord) =>
-              incomingOrders.some(
-                (io) =>
-                  (io.id === ord.id || io.orderId === ord.orderId) &&
-                  !io.isArchived &&
-                  !io.archivedAt &&
-                  (io as any).status !== 'archived'
-              )
-            )
+          const next = prev
+            .filter((ord) => {
+              const id1 = String(ord.id || '').toLowerCase();
+              const id2 = String(ord.orderId || '').toLowerCase();
+              if (deletedSet.has(id1) || deletedSet.has(id2)) {
+                purgeOrderFromLocalCache(ord.id, [ord.orderId]);
+                return false;
+              }
+              const match = incomingOrders.find(
+                (io) => io.id === ord.id || io.orderId === ord.orderId
+              );
+              if (!match) {
+                purgeOrderFromLocalCache(ord.id, [ord.orderId]);
+                return false;
+              }
+              if (
+                match.isArchived ||
+                match.archivedAt ||
+                (match as any).archived ||
+                (match as any).status === 'archived' ||
+                (match as any).status === 'completed' ||
+                (match as any).isDeleted ||
+                !isOrderFromToday(match, todayStr)
+              ) {
+                purgeOrderFromLocalCache(ord.id, [ord.orderId, match.id, match.orderId]);
+                return false;
+              }
+              return true;
+            })
             .map((ord) => {
               const updated = incomingOrders.find(
                 (io) => io.id === ord.id || io.orderId === ord.orderId
               );
               return updated ? normalizeOrder(updated) : ord;
             });
+
+          if (next.length === 0 && prev.length > 0) {
+            clearAllActiveListeners();
+            setIsSearchBoxOpen(true);
+            setErrorMessage(null);
+            setSearchInput('');
+            setItemsModalOrder(null);
+            setOrderToCancel(null);
+          }
+          return next;
         });
+      },
+      onOrdersDeleted: (payload) => {
+        if (!payload) return;
+        if (payload.clearAll) {
+          clearAllTrackingHistory();
+          clearAllActiveListeners();
+          setOrders([]);
+          setIsSearchBoxOpen(true);
+          setErrorMessage(null);
+          setSearchInput('');
+          setItemsModalOrder(null);
+          setOrderToCancel(null);
+          return;
+        }
+
+        if (Array.isArray(payload.deletedIds) && payload.deletedIds.length > 0) {
+          const firstId = payload.deletedIds[0];
+          const restIds = payload.deletedIds.slice(1);
+          markOrderPermanentlyDeleted(firstId, restIds);
+          purgeOrderFromLocalCache(firstId, restIds);
+          const delLower = new Set(payload.deletedIds.map((id) => String(id).toLowerCase()));
+          setOrders((prev) => {
+            const next = prev.filter(
+              (o) =>
+                !delLower.has(String(o.id || '').toLowerCase()) &&
+                !delLower.has(String(o.orderId || '').toLowerCase())
+            );
+            if (next.length === 0) {
+              clearAllActiveListeners();
+              setIsSearchBoxOpen(true);
+              setErrorMessage(null);
+              setSearchInput('');
+              setItemsModalOrder(null);
+              setOrderToCancel(null);
+            }
+            return next;
+          });
+        }
       },
     });
 
@@ -301,9 +417,27 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       const detail = (e as CustomEvent).detail;
       if (!detail) return;
       const key = detail.orderId || detail.id;
+      const extra = [detail.id, detail.orderId].filter(Boolean);
       if (key) {
-        setOrders((prev) => prev.filter((o) => o.orderId !== key && o.id !== key));
-        setSavedDeviceOrders((prev) => prev.filter((o) => o.orderId !== key && o.id !== key));
+        markOrderPermanentlyDeleted(key, extra);
+        purgeOrderFromLocalCache(key, extra);
+        const delSet = new Set(extra.map((id) => String(id).toLowerCase()));
+        setOrders((prev) => {
+          const next = prev.filter(
+            (o) =>
+              !delSet.has(String(o.id || '').toLowerCase()) &&
+              !delSet.has(String(o.orderId || '').toLowerCase())
+          );
+          if (next.length === 0) {
+            clearAllActiveListeners();
+            setIsSearchBoxOpen(true);
+            setErrorMessage(null);
+            setSearchInput('');
+            setItemsModalOrder(null);
+            setOrderToCancel(null);
+          }
+          return next;
+        });
       }
     };
     window.addEventListener('swadeep_order_removed', handleOrderRemoved);
@@ -312,94 +446,7 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       unsub();
       window.removeEventListener('swadeep_order_removed', handleOrderRemoved);
     };
-  }, []);
-
-  const handleClearTrackingHistory = () => {
-    clearAllTrackingHistory();
-    setOrders([]);
-    setSavedDeviceOrders([]);
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-      unsubscribeRef.current = null;
-    }
-    setIsSearchBoxOpen(true);
-    setSearchInput('');
-    setErrorMessage(null);
-    setSuccessNotice('Order tracking history cleared successfully.');
-    setTimeout(() => setSuccessNotice(null), 3500);
-  };
-
-  useEffect(() => {
-    let mounted = true;
-    const init = async () => {
-      try {
-        const savedOrdersStr =
-          localStorage.getItem('gidhaur_recent_orders') ||
-          localStorage.getItem('swadeep_recent_orders');
-        let ordersList: any[] = [];
-        if (savedOrdersStr) {
-          const parsed = JSON.parse(savedOrdersStr);
-          if (Array.isArray(parsed)) {
-            // Keep valid orders with valid items
-            ordersList = parsed.filter(
-              (o) => o && (o.orderId || o.id) && Array.isArray(o.items) && o.items.length > 0
-            );
-            if (mounted) setSavedDeviceOrders(ordersList);
-          }
-        }
-        const savedProfileStr =
-          localStorage.getItem('gidhaur_customer_profile') ||
-          localStorage.getItem('swadeep_customer_profile');
-        let pPhone = '';
-        if (savedProfileStr) {
-          const prof = JSON.parse(savedProfileStr);
-          if (prof.phone) {
-            pPhone = prof.phone;
-            if (mounted) setSavedPhone(prof.phone);
-          }
-        }
-
-        const phoneToUse = initialPhone || pPhone || (ordersList.length > 0 ? ordersList[0].phone : null);
-        const orderIdToUse = initialOrderId || (ordersList.length > 0 ? ordersList[0].orderId : null);
-
-        if (initialOrderId) {
-          await subscribeToSingleOrder(initialOrderId);
-        } else if (initialPhone) {
-          await subscribeToPhoneOrders(initialPhone);
-        } else if (orderIdToUse && ordersList.length > 0) {
-          await subscribeToSingleOrder(orderIdToUse);
-        } else if (phoneToUse && phoneToUse.length >= 10) {
-          await subscribeToPhoneOrders(phoneToUse);
-        } else {
-          // If fallback API has recent orders, load them
-          try {
-            const res = await fetch('/api/orders');
-            if (res.ok) {
-              const apiOrders = await res.json();
-              if (Array.isArray(apiOrders) && apiOrders.length > 0) {
-                const norm = apiOrders.map(normalizeOrder);
-                if (mounted) {
-                  setOrders(norm.slice(0, 5));
-                  setExpandedOrders(new Set([norm[0].orderId]));
-                  setIsSearchBoxOpen(false);
-                  return;
-                }
-              }
-            }
-          } catch {}
-          if (mounted) setIsSearchBoxOpen(true);
-        }
-      } catch (e) {
-        console.warn('Could not read saved localStorage:', e);
-        if (mounted) setIsSearchBoxOpen(true);
-      }
-    };
-
-    init();
-    return () => {
-      mounted = false;
-    };
-  }, [initialOrderId, initialPhone]);
+  }, [clearAllActiveListeners]);
 
   const mapDocToOrder = (docSnap: any): Order => {
     const data = docSnap.data();
@@ -438,6 +485,127 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       cancellationResolvedAt: data.cancellationResolvedAt,
     };
   };
+
+  /**
+   * Attaches real-time Firestore onSnapshot listeners to each active order for the current user.
+   * Immediately triggers a local state update to remove any order marked as 'archived', 'completed',
+   * deleted, or rolled over past midnight in the Admin Panel.
+   */
+  const attachRealtimeListenersForOrders = (targetOrders: Order[], extraAliases: string[] = []) => {
+    clearAllActiveListeners();
+
+    targetOrders.slice(0, 5).forEach((ord) => {
+      const docId = ord.id || ord.orderId;
+      if (!docId || orderListenersMapRef.current.has(docId)) return;
+
+      const unsub = guardedOnSnapshot(
+        doc(db, 'orders', docId),
+        `TrackOrderPage.liveDoc.${docId}`,
+        (snap: any) => {
+          const removeThisOrder = (markTombstone: boolean) => {
+            const singleUnsub = orderListenersMapRef.current.get(docId);
+            if (singleUnsub) {
+              try {
+                singleUnsub();
+              } catch {}
+              orderListenersMapRef.current.delete(docId);
+            }
+            const allKeys = [docId, ord.id, ord.orderId, ...extraAliases].filter(Boolean);
+            if (markTombstone) {
+              markOrderPermanentlyDeleted(docId, allKeys);
+            }
+            purgeOrderFromLocalCache(docId, allKeys);
+
+            const keySet = new Set(allKeys.map((k) => String(k).toLowerCase()));
+            setOrders((prev) => {
+              const next = prev.filter(
+                (o) =>
+                  !keySet.has(String(o.id || '').toLowerCase()) &&
+                  !keySet.has(String(o.orderId || '').toLowerCase())
+              );
+              if (next.length === 0) {
+                setIsSearchBoxOpen(true);
+                setErrorMessage(null);
+                setSearchInput('');
+                setItemsModalOrder(null);
+                setOrderToCancel(null);
+              }
+              return next;
+            });
+          };
+
+          if (!snap.exists()) {
+            removeThisOrder(true);
+            return;
+          }
+
+          const liveData = snap.data();
+          const updatedOrder = mapDocToOrder(snap);
+          if (
+            liveData.isArchived ||
+            liveData.archived ||
+            liveData.status === 'archived' ||
+            liveData.status === 'completed' ||
+            liveData.isDeleted ||
+            !isOrderFromToday(updatedOrder)
+          ) {
+            removeThisOrder(false);
+            return;
+          }
+
+          setOrders((prev) =>
+            prev.map((o) =>
+              o.id === docId || o.orderId === ord.orderId || o.id === ord.id ? updatedOrder : o
+            )
+          );
+        },
+        (err: any) => {
+          console.warn('Direct order doc listener note (offline/quota):', err);
+        }
+      );
+
+      orderListenersMapRef.current.set(docId, unsub);
+    });
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    const init = async () => {
+      try {
+        ensureCleanSlateReset();
+        // Strict Privacy: Only load orders explicitly placed on this specific device TODAY
+        const ownDeviceOrders = getCustomerOwnOrders();
+
+        if (initialOrderId) {
+          await subscribeToSingleOrder(initialOrderId, false);
+        } else if (initialPhone) {
+          await subscribeToPhoneOrders(initialPhone, false);
+        } else if (ownDeviceOrders.length > 0) {
+          const latestOwnOrderId = ownDeviceOrders[0].orderId || ownDeviceOrders[0].id;
+          await subscribeToSingleOrder(latestOwnOrderId, true);
+        } else {
+          // Brand new install or no orders placed on this device today:
+          // Strictly show blank search screen with ZERO global orders leaked
+          if (mounted) {
+            setOrders([]);
+            setIsSearchBoxOpen(true);
+            setErrorMessage(null);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not read saved localStorage:', e);
+        if (mounted) {
+          setOrders([]);
+          setIsSearchBoxOpen(true);
+        }
+      }
+    };
+
+    init();
+    return () => {
+      mounted = false;
+    };
+  }, [initialOrderId, initialPhone]);
 
   const getStepTime = (ord: Order, stepKey: string, stepIndex: number, currentStepIndex: number): string | null => {
     // 1. Check statusTimestamps map
@@ -484,15 +652,28 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     return null;
   };
 
-  const subscribeToSingleOrder = async (rawId: string) => {
+  const subscribeToSingleOrder = async (rawId: string, isSilentAutoLoad = false) => {
     const rawClean = rawId.trim();
     if (!rawClean) return;
 
     const cleanNoHash = rawClean.replace(/^#+/, '').trim();
+    const deletedSet = getDeletedOrderIds();
+    if (
+      deletedSet.has(rawClean.toLowerCase()) ||
+      (cleanNoHash && deletedSet.has(cleanNoHash.toLowerCase()))
+    ) {
+      purgeOrderFromLocalCache(rawClean, [cleanNoHash]);
+      setOrders([]);
+      setIsSearchBoxOpen(true);
+      setIsLoading(false);
+      setErrorMessage(isSilentAutoLoad ? null : `No order found with ID "${rawClean}".`);
+      return;
+    }
+
     setIsLoading(true);
     setErrorMessage(null);
 
-    // 1. Check local backend and localStorage for instant feedback
+    // 1. Check local customer storage and backend for instant feedback
     const localMatches = await fetchFallbackOrders(rawClean, false);
     if (localMatches.length > 0) {
       setOrders(localMatches);
@@ -511,63 +692,62 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
 
       if (targetSnap.exists()) {
         const data = targetSnap.data();
-        if (!data.isArchived && !data.archived && data.status !== 'archived' && !data.isDeleted) {
-          const mapped = mapDocToOrder(targetSnap);
+        const mapped = mapDocToOrder(targetSnap);
+        const isDeletedOrExpired =
+          data.isArchived ||
+          data.archived ||
+          data.status === 'archived' ||
+          data.status === 'completed' ||
+          data.isDeleted ||
+          !isOrderFromToday(mapped);
+
+        if (!isDeletedOrExpired) {
           setOrders([mapped]);
           setExpandedOrders(new Set([mapped.orderId]));
           setIsSearchBoxOpen(false);
           setIsLoading(false);
           setErrorMessage(null);
 
-          // Open onSnapshot on this SINGLE document only
-          if (unsubscribeRef.current) unsubscribeRef.current();
-          unsubscribeRef.current = guardedOnSnapshot(
-            doc(db, 'orders', targetSnap.id),
-            'TrackOrderPage.liveDoc',
-            (snap: any) => {
-              if (snap.exists()) {
-                const updatedOrder = mapDocToOrder(snap);
-                setOrders([updatedOrder]);
-                // Automatically unsubscribe when terminal state reached
-                if (updatedOrder.status === 'delivered' || updatedOrder.status === 'rejected') {
-                  if (unsubscribeRef.current) {
-                    try {
-                      unsubscribeRef.current();
-                    } catch {}
-                    unsubscribeRef.current = null;
-                  }
-                }
-              }
-            },
-            (err: any) => {
-              console.warn('Direct order doc listener note (offline/quota):', err);
-            }
-          );
+          // Attach real-time Firestore onSnapshot listener to immediately remove if archived/completed/deleted
+          attachRealtimeListenersForOrders([mapped], [rawClean, cleanNoHash]);
           return;
         }
       }
 
-      // If document was not found
+      // If document was not found in Firestore (deleted/archived by Admin or rolled over)
+      purgeOrderFromLocalCache(rawClean, [cleanNoHash]);
+      clearAllActiveListeners();
+      setOrders([]);
       setIsLoading(false);
-      if (localMatches.length === 0) {
-        setErrorMessage(`No order found with ID "${rawClean}". Please verify the Order ID.`);
+      setIsSearchBoxOpen(true);
+      setItemsModalOrder(null);
+      setOrderToCancel(null);
+      if (!isSilentAutoLoad) {
+        setErrorMessage(`No active order found with ID "${rawClean}".`);
+      } else {
+        setErrorMessage(null);
       }
     } catch (e: any) {
       setIsLoading(false);
-      if (localMatches.length === 0) {
-        setErrorMessage(e?.message || `No order found with ID "${rawClean}".`);
+      if (localMatches.length > 0) {
+        attachRealtimeListenersForOrders(localMatches, [rawClean, cleanNoHash]);
+      } else {
+        setIsSearchBoxOpen(true);
+        if (!isSilentAutoLoad) {
+          setErrorMessage(e?.message || `No order found with ID "${rawClean}".`);
+        }
       }
     }
   };
 
-  const subscribeToPhoneOrders = async (rawPhone: string) => {
+  const subscribeToPhoneOrders = async (rawPhone: string, isSilentAutoLoad = false) => {
     const cleanPhone = rawPhone.trim().replace(/\D/g, '');
     if (!cleanPhone || cleanPhone.length < 10) return;
 
     setIsLoading(true);
     setErrorMessage(null);
 
-    // 1. Check local backend and localStorage for instant feedback
+    // 1. Check local customer storage and backend for instant feedback
     const localMatches = await fetchFallbackOrders(cleanPhone, true);
     if (localMatches.length > 0) {
       localMatches.sort((a, b) => {
@@ -582,41 +762,51 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       setErrorMessage(null);
     }
 
-    // 2. One-time getDocs query with limit(10) (STRICTLY NO onSnapshot for phone searches)
+    // 2. One-time getDocs query with limit(10)
     try {
       const ordersCol = collection(db, 'orders');
       const q = query(ordersCol, where('phone', '==', cleanPhone), limit(10));
       const querySnapshot = await guardedGetDocs(q, 'TrackOrderPage.phoneOrdersOneTime');
 
       setIsLoading(false);
-      if (querySnapshot.empty) {
-        if (localMatches.length > 0) {
-          setOrders(localMatches);
-          setExpandedOrders(new Set([localMatches[0].orderId]));
-          setIsSearchBoxOpen(false);
-          return;
-        }
-        setIsSearchBoxOpen(true);
-        setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
-        return;
+      const deletedSet = getDeletedOrderIds();
+      const todayStr = getTodayDateString();
+      const fetchedOrders: Order[] = [];
+
+      if (!querySnapshot.empty) {
+        querySnapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (
+            data.isArchived ||
+            data.archived ||
+            data.status === 'archived' ||
+            data.status === 'completed' ||
+            data.isDeleted
+          ) {
+            return;
+          }
+          const id1 = String(docSnap.id || '').toLowerCase();
+          const id2 = String(data.orderId || '').toLowerCase();
+          if (deletedSet.has(id1) || deletedSet.has(id2)) return;
+          const mapped = mapDocToOrder(docSnap);
+          if (!isOrderFromToday(mapped, todayStr)) return;
+          fetchedOrders.push(mapped);
+        });
       }
 
-      const fetchedOrders: Order[] = [];
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data.isArchived || data.archived || data.status === 'archived' || data.isDeleted) return;
-        fetchedOrders.push(mapDocToOrder(docSnap));
-      });
-
       if (fetchedOrders.length === 0) {
-        if (localMatches.length > 0) {
-          setOrders(localMatches);
-          setExpandedOrders(new Set([localMatches[0].orderId]));
-          setIsSearchBoxOpen(false);
-          return;
-        }
+        // Firestore confirmed no active today orders exist for this phone (deleted/archived or expired)
+        purgePhoneOrdersFromLocalCache(cleanPhone);
+        clearAllActiveListeners();
+        setOrders([]);
         setIsSearchBoxOpen(true);
-        setErrorMessage(`No active orders found for mobile "${cleanPhone}".`);
+        setItemsModalOrder(null);
+        setOrderToCancel(null);
+        if (!isSilentAutoLoad) {
+          setErrorMessage(`No active orders from today found for mobile "${cleanPhone}".`);
+        } else {
+          setErrorMessage(null);
+        }
         return;
       }
 
@@ -631,12 +821,16 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       setIsSearchBoxOpen(false);
       setErrorMessage(null);
 
+      // Attach live single-doc listeners on ALL active orders for this user so Admin archive/deletions sync immediately
+      attachRealtimeListenersForOrders(fetchedOrders);
+
       // Auto-expand latest order
       setExpandedOrders((prev) => {
         const newSet = new Set(prev);
-        if (fetchedOrders.length === 1) {
+        if (fetchedOrders.length >= 1) {
           newSet.add(fetchedOrders[0].orderId);
-        } else if (initialOrderId) {
+        }
+        if (initialOrderId) {
           const found = fetchedOrders.find(
             (o) => o.orderId === initialOrderId || o.id === initialOrderId
           );
@@ -646,8 +840,13 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
       });
     } catch (e: any) {
       setIsLoading(false);
-      if (localMatches.length === 0) {
-        setErrorMessage(e?.message || `No orders found for mobile "${cleanPhone}".`);
+      if (localMatches.length > 0) {
+        attachRealtimeListenersForOrders(localMatches);
+      } else {
+        setIsSearchBoxOpen(true);
+        if (!isSilentAutoLoad) {
+          setErrorMessage(e?.message || `No orders found for mobile "${cleanPhone}".`);
+        }
       }
     }
   };
@@ -666,15 +865,6 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     } else {
       await subscribeToSingleOrder(queryStr);
     }
-  };
-
-  const toggleExpand = (orderId: string) => {
-    setExpandedOrders(prev => {
-      const next = new Set(prev);
-      if (next.has(orderId)) next.delete(orderId);
-      else next.add(orderId);
-      return next;
-    });
   };
 
   const handleConfirmCancelRequest = async () => {

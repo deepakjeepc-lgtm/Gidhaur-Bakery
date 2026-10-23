@@ -35,6 +35,7 @@ import { recordCustomerEmail, sendOrderStatusEmail } from '../services/customerE
 import { QuotaExhaustedModal } from './QuotaExhaustedModal';
 import { isQuotaExhausted, markQuotaExhausted, isFirestoreQuotaError } from '../services/quotaService';
 import { WhatsAppOrderDetails } from '../utils/whatsappOrder';
+import { saveCustomerOwnOrder } from '../services/orderArchiveService';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -371,10 +372,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     };
 
     try {
-      const recentOrders = JSON.parse(localStorage.getItem('gidhaur_recent_orders') || localStorage.getItem('swadeep_recent_orders') || '[]');
-      const updated = [fullRecentOrder, ...recentOrders.filter((o: any) => o.orderId !== generatedOrderId && o.id !== generatedOrderId)];
-      localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updated.slice(0, 15)));
-      localStorage.setItem('swadeep_recent_orders', JSON.stringify(updated.slice(0, 15)));
+      saveCustomerOwnOrder(fullRecentOrder);
     } catch (e) {
       console.warn('LocalStorage recent orders error:', e);
     }
@@ -476,10 +474,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           }),
         }).catch(() => {});
 
-        const recentOrders = JSON.parse(localStorage.getItem('gidhaur_recent_orders') || localStorage.getItem('swadeep_recent_orders') || '[]');
-        const updated = [{ ...fallbackOrderData, createdAt: new Date().toISOString() }, ...recentOrders.filter((o: any) => o.orderId !== generatedOrderId && o.id !== generatedOrderId)];
-        localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updated.slice(0, 10)));
-        localStorage.setItem('swadeep_recent_orders', JSON.stringify(updated.slice(0, 10)));
+        saveCustomerOwnOrder({ ...fallbackOrderData, createdAt: new Date().toISOString() });
       } catch {}
 
       clearCart();
@@ -505,7 +500,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#f8fafc] flex flex-col overflow-hidden select-none animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 bg-[#f8fafc] flex flex-col overflow-hidden select-none"
       id="checkout-fullscreen-view"
     >
       {/* Full Screen Dedicated View on Mobile & Desktop - Zero popup lag, Zero backdrop stutter */}
@@ -515,7 +510,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         id="checkout-modal"
       >
         {/* Header */}
-        <header className="px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between bg-white border-b border-slate-200/80 sticky top-0 z-20 shadow-[0_1px_4px_rgba(0,0,0,0.02)]">
+        <header className="px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between bg-white border-b border-slate-200/80 shrink-0 z-20">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -543,7 +538,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           <button
             type="button"
             onClick={handleCloseNavigation}
-            className="hidden sm:flex w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 items-center justify-center transition-all hover:scale-105 active:scale-90 border border-slate-200/80 cursor-pointer shadow-2xs"
+            className="hidden sm:flex w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 items-center justify-center transition-transform active:scale-90 border border-slate-200/80 cursor-pointer shadow-2xs"
             aria-label="Close modal"
           >
             <XIcon className="w-4.5 h-4.5 stroke-[2.2]" />
@@ -551,7 +546,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         </header>
 
         {/* Form Body with Smooth Native Scroll */}
-        <form onSubmit={handleSubmitOrder} className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-4 select-text pb-32 sm:pb-36">
+        <form onSubmit={handleSubmitOrder} className="modal-scroll-container flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 select-text pb-32 sm:pb-36">
           {serverError && (
             <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-2xl flex items-center gap-2">
               <AlertCircleIcon className="w-4 h-4 shrink-0" />
@@ -585,7 +580,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       if (errors.customerName) setErrors((prev) => ({ ...prev, customerName: '' }));
                     }}
                     placeholder="Full Name *"
-                    className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-all ${
+                    className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-colors ${
                       errors.customerName ? 'border-red-400 bg-red-50/30 ring-1 ring-red-400' : 'border-slate-200 hover:border-slate-300'
                     }`}
                     id="checkout-name-input"
@@ -611,7 +606,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     }}
                     placeholder="10-digit Mobile *"
                     maxLength={10}
-                    className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-all ${
+                    className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-colors ${
                       errors.phone ? 'border-red-400 bg-red-50/30 ring-1 ring-red-400' : 'border-slate-200 hover:border-slate-300'
                     }`}
                     id="checkout-phone-input"
@@ -636,7 +631,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   }}
                   placeholder="Complete Delivery Address (House No, Flat/Street, Landmark) *"
                   rows={2}
-                  className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-all resize-none leading-relaxed ${
+                  className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-colors resize-none leading-relaxed ${
                     errors.address ? 'border-red-400 bg-red-50/30 ring-1 ring-red-400' : 'border-slate-200 hover:border-slate-300'
                   }`}
                   id="checkout-address-input"
@@ -660,7 +655,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     if (errors.customerEmail) setErrors((prev) => ({ ...prev, customerEmail: '' }));
                   }}
                   placeholder={settings?.isEmailMandatory ? "Email for order status *" : "Email for order status"}
-                  className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-all ${
+                  className={`w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-colors ${
                     errors.customerEmail ? 'border-red-400 bg-red-50/30 ring-1 ring-red-400' : 'border-slate-200 hover:border-slate-300'
                   }`}
                   id="checkout-email-input"
@@ -681,7 +676,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   onFocus={() => triggerHaptic('selection')}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="Cooking / delivery note (optional)"
-                  className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-all"
+                  className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border border-slate-200 hover:border-slate-300 rounded-2xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900 transition-colors"
                   id="checkout-notes-input"
                 />
               </div>
@@ -693,7 +688,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     key={qNote}
                     type="button"
                     onClick={() => handleAddQuickNote(qNote)}
-                    className="text-[10px] font-semibold whitespace-nowrap px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 border border-slate-200/80 transition-all cursor-pointer shrink-0"
+                    className="text-[10px] font-semibold whitespace-nowrap px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 border border-slate-200/80 transition-colors cursor-pointer shrink-0"
                   >
                     + {qNote}
                   </button>
@@ -954,7 +949,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </div>
         </form>
 
-        {/* Floating Clean Bottom CTA Footer - Single Unified White Frosted Glass Capsule Button */}
+        {/* Floating Clean Bottom CTA Footer - Crisp Solid Capsule Button for 120fps Scroll */}
         <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-none p-2.5 sm:p-3.5 pb-[max(env(safe-area-inset-bottom,0.75rem),1.15rem)] flex items-center justify-center">
           <button
             type="button"
@@ -963,10 +958,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             onPointerDown={() => {
               if (!isSubmitting) triggerHaptic('heavy');
             }}
-            className={`pointer-events-auto max-w-xl w-full h-16 px-6 sm:px-8 active:scale-[0.98] backdrop-blur-xl rounded-full border transition-all duration-200 cursor-pointer group select-none disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-between ${
+            className={`pointer-events-auto max-w-xl w-full h-16 px-6 sm:px-8 active:scale-[0.98] rounded-full border transition-colors duration-150 cursor-pointer group select-none disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-between ${
               paymentMethod
-                ? 'bg-slate-950 hover:bg-slate-900 text-white border-slate-900 shadow-[0_14px_38px_rgba(15,23,42,0.35),0_2px_8px_rgba(15,23,42,0.12)] ring-1.5 ring-slate-800'
-                : 'bg-white/45 hover:bg-white/65 text-slate-800 border-white/60 shadow-[0_12px_36px_rgba(15,23,42,0.08),0_2px_8px_rgba(15,23,42,0.02)]'
+                ? 'bg-slate-950 hover:bg-slate-900 text-white border-slate-900 shadow-[0_12px_32px_rgba(15,23,42,0.28)] ring-1.5 ring-slate-800'
+                : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200/90 shadow-[0_10px_28px_rgba(15,23,42,0.08)]'
             }`}
             id="checkout-confirm-btn"
           >

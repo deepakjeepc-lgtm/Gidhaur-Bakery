@@ -1,4 +1,4 @@
-import { doc, setDoc, updateDoc, writeBatch, collection, query, where } from 'firebase/firestore';
+import { doc, setDoc, writeBatch, collection, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { guardedGetDoc, guardedGetDocs } from './firestoreReadGuard';
 import { getSessionCached, setSessionCached, invalidateSessionCache } from './sessionCache';

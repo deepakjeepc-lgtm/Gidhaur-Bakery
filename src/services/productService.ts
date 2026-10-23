@@ -4,7 +4,7 @@ import { Product } from '../types';
 
 // Hardcoded sample/dummy products (empty set - all real products in catalog are preserved)
 export const HARDCODED_PRODUCT_NAMES = new Set<string>();
-export const CATALOG_CACHE_VERSION = 'swadeep_v5_264_synced';
+export const CATALOG_CACHE_VERSION = 'swadeep_v6_264_static_images';
 const STORAGE_KEY_CATALOG_VERSION = 'swadeep_catalog_version';
 
 const STORAGE_KEY_DELETED_IDS = 'swadeep_deleted_product_ids';

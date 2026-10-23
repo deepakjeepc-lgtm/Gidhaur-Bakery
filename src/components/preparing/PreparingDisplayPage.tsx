@@ -9,13 +9,11 @@ import {
   Search,
   Volume2,
   VolumeX,
-  LogOut,
   ArrowLeft,
   Store,
   Boxes,
   Check,
   AlertTriangle,
-  UserCheck,
   ChefHat,
   Timer
 } from 'lucide-react';
@@ -31,18 +29,15 @@ import {
   subscribeToDeliveryAgents,
   subscribeToPreparingStaff,
   getSavedStaffSession,
-  saveStaffSession,
-  clearStaffSession,
   getLocalRestaurantSettings
 } from '../../services/staffService';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
 import { deductStockForAcceptedOrder } from '../../services/inventoryService';
+import { isOrderFromToday } from '../../services/orderArchiveService';
 import {
   getOrderNonFoodItems,
-  getOrderFoodItems,
   getOrderCategoryClassification,
-  isNonFoodItem,
-  isFoodItem
+  isNonFoodItem
 } from '../../utils/orderCategoryHelper';
 
 interface PreparingDisplayPageProps {
@@ -141,11 +136,12 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
     }
   };
 
-  // Subscribe to Realtime Orders via Singleton Shared Listener
+  // Subscribe to Realtime Orders via Singleton Shared Listener (Strictly today's orders only)
   useEffect(() => {
     const unsub = subscribeToSharedOrders((list) => {
-      // Filter only orders that contain NON-FOOD items!
+      // Filter only today's orders that contain NON-FOOD items!
       const nonFoodOrders = list.filter((ord) => {
+        if (!isOrderFromToday(ord)) return false;
         const nonFoodItems = getOrderNonFoodItems(ord);
         return nonFoodItems.length > 0;
       });
@@ -412,7 +408,7 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
   ).length;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans pb-12">
+    <div className="admin-curator-console min-h-screen bg-slate-50 flex flex-col font-sans pb-12">
       {/* Top Navbar */}
       <header className="sticky top-0 z-40 bg-slate-900 text-white shadow-md border-b border-slate-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">

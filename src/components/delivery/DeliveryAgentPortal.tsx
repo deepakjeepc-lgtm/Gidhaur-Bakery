@@ -3,23 +3,14 @@ import {
   Bike,
   Phone,
   MapPin,
-  QrCode,
-  IndianRupee,
   CheckCircle2,
   Navigation,
-  Check,
-  Volume2,
-  VolumeX,
   LogOut,
   Store,
-  Clock,
-  Sparkles,
   ExternalLink,
   ChevronDown,
   ChevronUp,
-  AlertCircle,
-  PackageCheck,
-  Layers
+  PackageCheck
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import confetti from 'canvas-confetti';
@@ -31,8 +22,9 @@ import {
 import { db } from '../../firebase/config';
 import { subscribeToSharedOrders } from '../../services/orderListenerService';
 import { Order, DeliveryAgent, RestaurantSettings } from '../../types';
-import { subscribeToRestaurantSettings, getLocalRestaurantSettings } from '../../services/staffService';
+import { getLocalRestaurantSettings } from '../../services/staffService';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
+import { isOrderFromToday, recordDeliveredOrderInArchive } from '../../services/orderArchiveService';
 import { playOrderAlertChime } from '../../utils/sound';
 import { SwipeToDeliver } from './SwipeToDeliver';
 import {
@@ -54,7 +46,7 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
   onBackToStore
 }) => {
   const [orders, setOrders] = useState<Order[]>([]);
-  const [settings, setSettings] = useState<RestaurantSettings>(getLocalRestaurantSettings());
+  const [settings] = useState<RestaurantSettings>(getLocalRestaurantSettings());
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTabState] = useState<'active' | 'completed'>(() =>
     getSavedActiveDeliveryTab('active')
@@ -84,7 +76,7 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
     return () => window.removeEventListener('scroll', onScroll);
   }, [activeTab]);
 
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled] = useState(true);
   const [isOnline, setIsOnline] = useState(true);
 
   // Payment UI state per order
@@ -112,14 +104,16 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
     return () => unsubscribe();
   }, []);
 
-  // Filter orders for this agent
+  // Filter orders for this agent (Strictly today's orders only)
   const myActiveOrders = orders.filter((o) => {
+    if (!isOrderFromToday(o)) return false;
     if (o.status !== 'out_for_delivery') return false;
     if (!o.assignedAgentId || o.assignedAgentId === 'unassigned') return true;
     return o.assignedAgentId === currentAgent.id || o.assignedAgentName === currentAgent.name;
   });
 
   const myCompletedOrders = orders.filter((o) => {
+    if (!isOrderFromToday(o)) return false;
     if (o.status !== 'delivered') return false;
     return o.assignedAgentId === currentAgent.id || o.assignedAgentName === currentAgent.name;
   });
@@ -239,6 +233,50 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
       .filter((_, idx) => !deliveredItemIndices.includes(idx))
       .map((i) => i.name || (i as any).product?.name || 'Item');
 
+    const deliveredOrderSnapshot: Order = {
+      ...order,
+      status: 'delivered',
+      paymentStatus: 'paid',
+      paymentMethod: paymentType,
+      deliveredAmount: finalAmount,
+      deliveryFee: customDeliveryFee,
+      subtotal: dishesAmount,
+      totalAmount: finalAmount,
+      dispatchedItems: deliveredItems,
+      dispatchedItemIndices: deliveredItemIndices,
+      untickedItems: undeliveredItems,
+      deliveredAt: new Date().toISOString(),
+      assignedAgentId: currentAgent.id,
+      assignedAgentName: currentAgent.name,
+      assignedAgentPhone: currentAgent.phone || '',
+      assignedAgentVehicle: ('vehicleType' in currentAgent ? currentAgent.vehicleType : '') || 'Bike',
+      assignedAgentVehicleNumber: ('vehicleNumber' in currentAgent ? currentAgent.vehicleNumber : '') || '',
+    };
+
+    // Immediately record delivered order into Admin Archive & sync with backend server
+    recordDeliveredOrderInArchive(deliveredOrderSnapshot);
+    try {
+      fetch(`/api/orders/${order.id || order.orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'delivered',
+          paymentStatus: 'paid',
+          paymentMethod: paymentType,
+          deliveredAmount: finalAmount,
+          deliveryFee: customDeliveryFee,
+          subtotal: dishesAmount,
+          totalAmount: finalAmount,
+          dispatchedItems: deliveredItems,
+          dispatchedItemIndices: deliveredItemIndices,
+          untickedItems: undeliveredItems,
+          deliveredAt: deliveredOrderSnapshot.deliveredAt,
+          assignedAgentId: currentAgent.id,
+          assignedAgentName: currentAgent.name,
+        }),
+      }).catch(() => {});
+    } catch {}
+
     setIsProcessingDelivery(order.id);
     try {
       const orderRef = doc(db, 'orders', order.id);
@@ -318,7 +356,7 @@ export const DeliveryAgentPortal: React.FC<DeliveryAgentPortalProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 pt-[max(env(safe-area-inset-top,0px),0px)]">
+    <div className="admin-curator-console min-h-screen bg-[#f8fafc] text-slate-900 pb-20 pt-[max(env(safe-area-inset-top,0px),0px)]">
       {/* Mobile Floating App Header with Notch & Dynamic Island Safe Area */}
       <header className="sticky top-[max(calc(env(safe-area-inset-top,0px)+0.5rem),0.75rem)] z-40 px-3 sm:px-6 max-w-2xl mx-auto mb-3">
         <div className="bg-white/95 backdrop-blur-md rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm px-3.5 py-2.5 sm:px-4 sm:py-3 flex items-center justify-between gap-2.5">

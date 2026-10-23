@@ -1,7 +1,7 @@
-import { doc, updateDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { doc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { Product, Order } from '../types';
-import { getSanitizedCachedProducts, sanitizeProducts } from './productService';
+import { getSanitizedCachedProducts } from './productService';
 
 const STORAGE_KEY_CACHED_PRODUCTS = 'swadeep_cached_products';
 const STORAGE_KEY_DEDUCTED_ORDERS = 'swadeep_deducted_order_ids';

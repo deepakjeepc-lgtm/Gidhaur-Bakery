@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: RestaurantSettings = {
   isStoreOpen: true,
   minOrderAmount: 99,
   defaultPrepTimeMinutes: 15,
+  homeCardShape: 'rounded',
   websiteTitle: 'Gidhaur Bakery',
   websiteTagline: 'Freshly Baked Every Morning with Premium Love',
   websiteDescription: 'Order freshly baked artisan cakes, hot pizzas, gourmet burgers, snacks and beverages with lightning-fast delivery in Gidhaur.',

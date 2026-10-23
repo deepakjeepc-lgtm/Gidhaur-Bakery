@@ -1,27 +1,20 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
-  Boxes,
-  CheckCircle2,
+  Package,
   AlertTriangle,
   XCircle,
-  TrendingUp,
+  CheckCircle2,
   Search,
-  Filter,
-  ArrowUpDown,
-  Download,
-  Printer,
   Plus,
   Minus,
-  Sparkles,
   RefreshCw,
-  SlidersHorizontal,
+  Download,
+  Printer,
+  TrendingUp,
   ChevronDown,
-  X,
-  Package,
-  Layers,
-  Check,
-  Eye,
-  Store
+  Boxes,
+  ArrowUpDown,
+  X
 } from 'lucide-react';
 import { Product } from '../../types';
 import {
@@ -29,60 +22,54 @@ import {
   getProductLowStockThreshold,
   isItemLowStock,
   isItemOutOfStock,
-  updateProductStockQuantity,
   bulkUpdateInventory,
+  updateProductStockQuantity,
   exportInventoryToCSV,
   printInventoryAuditSheet
 } from '../../services/inventoryService';
+import { triggerHaptic } from '../../utils/haptics';
 
 interface InventoryManagementViewProps {
   products: Product[];
+  categories?: string[];
   onRefreshCatalog?: () => void;
 }
 
-type StockFilterType = 'all' | 'in_stock' | 'low_stock' | 'out_of_stock';
-type StockSortType = 'lowest_stock' | 'highest_stock' | 'name_asc' | 'price_desc' | 'price_asc';
+type StockFilterType = 'all' | 'low_stock' | 'out_of_stock' | 'in_stock';
+type StockSortType = 'name_asc' | 'lowest_stock' | 'highest_stock' | 'price_desc' | 'price_asc';
 
 export const InventoryManagementView = React.memo<InventoryManagementViewProps>(({
   products,
+  categories = [],
   onRefreshCatalog
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<StockFilterType>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [filterType, setFilterType] = useState<StockFilterType>('all');
   const [sortBy, setSortBy] = useState<StockSortType>('lowest_stock');
-  
-  // Multi-select for bulk actions
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  
-  // Custom toast notification
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Local editing inputs state for quantity inputs
+  // Local state for inline editing of custom quantities before Enter/Blur
   const [editingQuantities, setEditingQuantities] = useState<Record<string, string>>({});
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 2500);
+    }, 2800);
   }, []);
 
-  // Compute Categories from products
-  const availableCategories = useMemo(() => {
-    const cats = Array.from(new Set(products.map((p) => p.category))).filter(Boolean);
-    return ['all', ...cats];
-  }, [products]);
-
-  // 1. KPI Calculations
+  // Compute KPI metrics
   const kpis = useMemo(() => {
     const totalItems = products.length;
     let inStockCount = 0;
     let lowStockCount = 0;
     let outOfStockCount = 0;
+    let totalUnitsInStore = 0;
     let totalRetailValue = 0;
 
-    products.forEach((p) => {
+    for (const p of products) {
       const stock = getProductStock(p);
       const isOut = isItemOutOfStock(p);
       const isLow = isItemLowStock(p);
@@ -96,50 +83,58 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
         }
       }
 
-      totalRetailValue += (Number(p.price) || 0) * stock;
-    });
+      if (!isOut) {
+        totalUnitsInStore += stock;
+        totalRetailValue += stock * (Number(p.price) || 0);
+      }
+    }
+
+    const inStockPercent = totalItems > 0 ? Math.round((inStockCount / totalItems) * 100) : 100;
 
     return {
       totalItems,
       inStockCount,
       lowStockCount,
       outOfStockCount,
+      totalUnitsInStore,
       totalRetailValue,
-      inStockPercent: totalItems > 0 ? Math.round((inStockCount / totalItems) * 100) : 0,
+      inStockPercent
     };
   }, [products]);
 
-  // 2. Filter & Search Logic
-  const filteredProducts = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
+  // Unique categories list
+  const availableCategories = useMemo(() => {
+    const catSet = new Set<string>(categories);
+    products.forEach((p) => {
+      if (p.category) catSet.add(p.category);
+    });
+    return ['all', ...Array.from(catSet)];
+  }, [categories, products]);
 
-    return products.filter((p) => {
-      // Search match
-      if (query) {
-        const matchesName = (p.name || '').toLowerCase().includes(query);
-        const matchesCategory = (p.category || '').toLowerCase().includes(query);
-        const matchesId = (p.id || '').toLowerCase().includes(query);
-        if (!matchesName && !matchesCategory && !matchesId) return false;
+  // Filtered and Sorted Products
+  const filteredProducts = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    const filtered = products.filter((p) => {
+      if (q) {
+        const matchName = p.name.toLowerCase().includes(q);
+        const matchCat = (p.category || '').toLowerCase().includes(q);
+        const matchId = p.id.toLowerCase().includes(q);
+        if (!matchName && !matchCat && !matchId) return false;
       }
 
-      // Category match
       if (selectedCategory !== 'all' && p.category !== selectedCategory) {
         return false;
       }
 
-      // Filter chip match
-      if (filterType === 'in_stock') {
-        return !isItemOutOfStock(p);
-      }
-      if (filterType === 'low_stock') {
-        return isItemLowStock(p);
-      }
-      if (filterType === 'out_of_stock') {
-        return isItemOutOfStock(p);
-      }
+      if (filterType === 'out_of_stock' && !isItemOutOfStock(p)) return false;
+      if (filterType === 'low_stock' && !isItemLowStock(p)) return false;
+      if (filterType === 'in_stock' && isItemOutOfStock(p)) return false;
 
       return true;
-    }).sort((a, b) => {
+    });
+
+    return filtered.sort((a, b) => {
       const stockA = getProductStock(a);
       const stockB = getProductStock(b);
 
@@ -148,64 +143,99 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
           return stockA - stockB;
         case 'highest_stock':
           return stockB - stockA;
-        case 'name_asc':
-          return (a.name || '').localeCompare(b.name || '');
         case 'price_desc':
           return (b.price || 0) - (a.price || 0);
         case 'price_asc':
           return (a.price || 0) - (b.price || 0);
+        case 'name_asc':
         default:
-          return 0;
+          return a.name.localeCompare(b.name);
       }
     });
   }, [products, searchQuery, selectedCategory, filterType, sortBy]);
 
-  // Quick quantity increment/decrement handler
-  const handleAdjustQuantity = (product: Product, delta: number) => {
-    const currentStock = getProductStock(product);
-    const newStock = Math.max(0, currentStock + delta);
-    updateProductStockQuantity(product.id, newStock, undefined, undefined, products);
-    showToast(`✓ "${product.name}" stock updated to ${newStock} units`);
-  };
+  // Handle +1, -1, +5, +10, +25 quick adjust
+  const handleAdjustQuantity = useCallback(
+    (product: Product, delta: number) => {
+      triggerHaptic('light');
+      const currentStock = getProductStock(product);
+      const nextStock = Math.max(0, currentStock + delta);
+      updateProductStockQuantity(
+        product.id,
+        nextStock,
+        nextStock > 0,
+        getProductLowStockThreshold(product),
+        products
+      );
+      setEditingQuantities((prev) => {
+        const copy = { ...prev };
+        delete copy[product.id];
+        return copy;
+      });
+      showToast(
+        `${product.name}: ${delta > 0 ? `+${delta}` : delta} → ${nextStock} IN STOCK`
+      );
+    },
+    [products, showToast]
+  );
 
-  // Direct quantity input change
-  const handleQuantityInputChange = (productId: string, valStr: string) => {
-    setEditingQuantities((prev) => ({ ...prev, [productId]: valStr }));
+  // Handle direct typing of stock quantity
+  const handleQuantityInputChange = (productId: string, val: string) => {
+    setEditingQuantities((prev) => ({ ...prev, [productId]: val }));
   };
 
   const handleQuantityInputBlur = (product: Product) => {
     const rawVal = editingQuantities[product.id];
-    if (rawVal !== undefined && rawVal.trim() !== '') {
-      const parsed = parseInt(rawVal, 10);
-      if (!isNaN(parsed) && parsed >= 0) {
-        updateProductStockQuantity(product.id, parsed, undefined, undefined, products);
-        showToast(`✓ "${product.name}" stock updated to ${parsed} units`);
-      }
-      setEditingQuantities((prev) => {
-        const clone = { ...prev };
-        delete clone[product.id];
-        return clone;
-      });
+    if (rawVal === undefined) return;
+
+    const parsed = parseInt(rawVal, 10);
+    if (!isNaN(parsed) && parsed >= 0) {
+      triggerHaptic('medium');
+      updateProductStockQuantity(
+        product.id,
+        parsed,
+        parsed > 0,
+        getProductLowStockThreshold(product),
+        products
+      );
+      showToast(`✓ UPDATED "${product.name}" STOCK TO ${parsed}`);
     }
+
+    setEditingQuantities((prev) => {
+      const copy = { ...prev };
+      delete copy[product.id];
+      return copy;
+    });
   };
 
-  // Toggle in-stock / out-of-stock
+  // Toggle Availability (Mark Out of Stock / In Stock)
   const handleToggleAvailability = (product: Product) => {
-    const currentOut = isItemOutOfStock(product);
-    if (currentOut) {
-      // Mark In Stock (set to 25 if was 0)
+    triggerHaptic('medium');
+    const currentlyOut = isItemOutOfStock(product);
+    if (currentlyOut) {
       const currentStock = getProductStock(product);
-      const newStock = currentStock > 0 ? currentStock : 25;
-      updateProductStockQuantity(product.id, newStock, true, undefined, products);
-      showToast(`✓ "${product.name}" marked In Stock (${newStock} units)`);
+      const restoredQty = currentStock > 0 ? currentStock : 25;
+      updateProductStockQuantity(
+        product.id,
+        restoredQty,
+        true,
+        getProductLowStockThreshold(product),
+        products
+      );
+      showToast(`✓ "${product.name}" MARKED IN STOCK (${restoredQty} UNITS)`);
     } else {
-      // Mark Out of Stock (0 units)
-      updateProductStockQuantity(product.id, 0, false, undefined, products);
-      showToast(`⚠️ "${product.name}" marked Out of Stock`);
+      updateProductStockQuantity(
+        product.id,
+        0,
+        false,
+        getProductLowStockThreshold(product),
+        products
+      );
+      showToast(`"${product.name}" MARKED OUT OF STOCK`);
     }
   };
 
-  // Selection handlers
+  // Bulk Selection Handlers
   const handleToggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -223,185 +253,168 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
     }
   };
 
-  // Bulk actions
-  const handleBulkAction = (action: 'markInStock' | 'markOutOfStock' | 'add25') => {
+  const handleBulkAction = (action: 'restock25' | 'add10' | 'markOut') => {
+    if (selectedIds.size === 0) return;
+    triggerHaptic('heavy');
     const ids = Array.from(selectedIds);
-    if (ids.length === 0) return;
 
-    if (action === 'markInStock') {
-      bulkUpdateInventory(ids, 'markInStock', undefined, products);
-      showToast(`✓ ${ids.length} items marked In Stock`);
-    } else if (action === 'markOutOfStock') {
-      bulkUpdateInventory(ids, 'markOutOfStock', undefined, products);
-      showToast(`⚠️ ${ids.length} items marked Out of Stock`);
-    } else if (action === 'add25') {
-      bulkUpdateInventory(ids, 'addQuantity', 25, products);
-      showToast(`✓ Restocked +25 units to ${ids.length} items`);
+    if (action === 'restock25') {
+      bulkUpdateInventory(ids, 'setQuantity', 25, products);
+    } else if (action === 'add10') {
+      bulkUpdateInventory(ids, 'addQuantity', 10, products);
+    } else if (action === 'markOut') {
+      bulkUpdateInventory(ids, 'markOutOfStock', 0, products);
     }
+
+    showToast(`✓ APPLIED BULK UPDATE TO ${ids.length} ITEMS`);
     setSelectedIds(new Set());
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-4">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-slate-700 animate-slide-up">
-          <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-          <span className="text-sm font-semibold">{toastMessage}</span>
+        <div className="fixed bottom-6 right-6 z-50 rounded-sm bg-[#18181B] text-[#FFFFFF] px-4 py-3 flex items-center gap-2.5 border border-[#3F3F46]">
+          <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+          <span className="text-[11px] font-mono font-bold uppercase tracking-[0.06em]">{toastMessage}</span>
         </div>
       )}
 
-      {/* Top Header Card */}
-      <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-extrabold uppercase tracking-wider">
-            <Boxes className="w-3.5 h-3.5 text-rose-600" />
-            <span>Smart Inventory Control</span>
-          </div>
-          <h2 className="font-heading font-extrabold text-2xl text-slate-900">
-            Stock & Baking Batch Manager
+      {/* Top Header Bar (LEKHIX Style with breathable spacing) */}
+      <div className="pb-4 border-b border-[#27272A] flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-[#FFFFFF]">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-[18px] font-bold uppercase tracking-[0.04em] text-[#FFFFFF] font-['Plus_Jakarta_Sans',sans-serif]">
+            STOCK
           </h2>
-          <p className="text-xs text-slate-500 font-medium">
-            Instant 1-click stock updates, automated kitchen deduction on order acceptance, and zero-leak sync.
-          </p>
+          <span className="px-2 py-0.5 border border-[#FFFFFF] bg-[#0A0A0A] text-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.12em]">
+            INVENTORY
+          </span>
+          <span className="text-[11px] font-mono font-medium text-[#A1A1AA] uppercase tracking-[0.14em]">
+            {kpis.totalItems} ITEMS · {kpis.totalUnitsInStore} UNITS IN STORE
+          </span>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => exportInventoryToCSV(products)}
             title="Download full inventory CSV spreadsheet"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-all cursor-pointer shadow-2xs"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10.5px] font-mono font-semibold uppercase tracking-[0.1em] text-[#E4E4E7] hover:text-[#FFFFFF] bg-[#18181B] hover:bg-[#242427] border border-[#27272A] cursor-pointer rounded-none"
           >
-            <Download className="w-3.5 h-3.5 text-slate-500" />
-            <span>Export CSV</span>
+            <Download className="w-3.5 h-3.5 text-[#A1A1AA]" />
+            <span>EXPORT CSV</span>
           </button>
 
           <button
             onClick={() => printInventoryAuditSheet(products)}
             title="Print daily morning kitchen baking audit sheet"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-all cursor-pointer shadow-2xs"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10.5px] font-mono font-semibold uppercase tracking-[0.1em] text-[#E4E4E7] hover:text-[#FFFFFF] bg-[#18181B] hover:bg-[#242427] border border-[#27272A] cursor-pointer rounded-none"
           >
-            <Printer className="w-3.5 h-3.5 text-slate-500" />
-            <span>Print Audit Sheet</span>
+            <Printer className="w-3.5 h-3.5 text-[#A1A1AA]" />
+            <span>PRINT AUDIT</span>
           </button>
 
           {onRefreshCatalog && (
             <button
               onClick={onRefreshCatalog}
               title="Refresh inventory from local catalog"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-all cursor-pointer shadow-2xs"
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-mono font-bold uppercase tracking-[0.08em] text-[#0A0A0A] bg-[#FFFFFF] hover:bg-zinc-200 border border-[#FFFFFF] cursor-pointer"
             >
-              <RefreshCw className="w-3.5 h-3.5 text-rose-600" />
-              <span>Sync</span>
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>SYNC</span>
             </button>
           )}
         </div>
       </div>
 
       {/* 1. 5 KPI CARDS */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         {/* Total Tracked Items */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 sm:p-5 space-y-1">
-          <div className="flex items-center justify-between text-slate-400">
-            <span className="text-[11px] font-bold uppercase tracking-wider">TRACKED ITEMS</span>
-            <Package className="w-4 h-4 text-slate-400" />
+        <div className="bg-[#18181B] rounded-sm border border-[#27272A] p-4 space-y-1">
+          <div className="flex items-center justify-between text-[#71717A]">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.08em]">TRACKED ITEMS</span>
+            <Package className="w-3.5 h-3.5 text-[#71717A]" />
           </div>
-          <div className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900">
+          <div className="font-mono font-bold text-2xl text-[#FFFFFF] tabular-nums">
             {kpis.totalItems}
           </div>
-          <span className="text-[11px] text-slate-500 font-medium block">
-            Catalog items
-          </span>
         </div>
 
         {/* In Stock Items */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 sm:p-5 space-y-1">
-          <div className="flex items-center justify-between text-emerald-600">
-            <span className="text-[11px] font-bold uppercase tracking-wider">IN STOCK</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+        <div className="bg-[#18181B] rounded-sm border border-[#27272A] p-4 space-y-1">
+          <div className="flex items-center justify-between text-[#71717A]">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.08em]">IN STOCK</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-[#10B981]" />
           </div>
-          <div className="font-heading font-extrabold text-2xl sm:text-3xl text-emerald-600">
+          <div className="font-mono font-bold text-2xl text-[#10B981] tabular-nums">
             {kpis.inStockCount}
           </div>
-          <span className="text-[11px] text-emerald-700 font-medium block">
-            {kpis.inStockPercent}% of menu live
-          </span>
         </div>
 
         {/* Low Stock Alert */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 sm:p-5 space-y-1">
-          <div className="flex items-center justify-between text-amber-500">
-            <span className="text-[11px] font-bold uppercase tracking-wider">LOW STOCK (≤ 5)</span>
-            <AlertTriangle className="w-4 h-4 text-amber-500" />
+        <div className="bg-[#18181B] rounded-sm border border-[#27272A] p-4 space-y-1">
+          <div className="flex items-center justify-between text-[#71717A]">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.08em]">LOW STOCK (≤ 5)</span>
+            <AlertTriangle className="w-3.5 h-3.5 text-[#F59E0B]" />
           </div>
-          <div className="font-heading font-extrabold text-2xl sm:text-3xl text-amber-600">
+          <div className="font-mono font-bold text-2xl text-[#F59E0B] tabular-nums">
             {kpis.lowStockCount}
           </div>
-          <span className="text-[11px] text-amber-700 font-medium block">
-            Needs fresh batch bake
-          </span>
         </div>
 
         {/* Out of Stock / Sold Out */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 sm:p-5 space-y-1">
-          <div className="flex items-center justify-between text-rose-500">
-            <span className="text-[11px] font-bold uppercase tracking-wider">SOLD OUT (0)</span>
-            <XCircle className="w-4 h-4 text-rose-500" />
+        <div className="bg-[#18181B] rounded-sm border border-[#27272A] p-4 space-y-1">
+          <div className="flex items-center justify-between text-[#71717A]">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.08em]">SOLD OUT (0)</span>
+            <XCircle className="w-3.5 h-3.5 text-[#EF4444]" />
           </div>
-          <div className="font-heading font-extrabold text-2xl sm:text-3xl text-rose-600">
+          <div className="font-mono font-bold text-2xl text-[#EF4444] tabular-nums">
             {kpis.outOfStockCount}
           </div>
-          <span className="text-[11px] text-rose-700 font-medium block">
-            Unavailable on menu
-          </span>
         </div>
 
         {/* Retail Inventory Value */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 sm:p-5 space-y-1 col-span-2 lg:col-span-1">
-          <div className="flex items-center justify-between text-slate-500">
-            <span className="text-[11px] font-bold uppercase tracking-wider">RETAIL VALUE</span>
-            <TrendingUp className="w-4 h-4 text-emerald-600" />
+        <div className="bg-[#18181B] rounded-sm border border-[#27272A] p-4 space-y-1 col-span-2 lg:col-span-1">
+          <div className="flex items-center justify-between text-[#71717A]">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.08em]">RETAIL VALUE</span>
+            <TrendingUp className="w-3.5 h-3.5 text-[#FF5500]" />
           </div>
-          <div className="font-amount font-extrabold text-2xl sm:text-3xl text-slate-900 font-mono">
+          <div className="font-mono font-bold text-2xl text-[#FFFFFF] tabular-nums">
             ₹{kpis.totalRetailValue.toLocaleString('en-IN')}
           </div>
-          <span className="text-[11px] text-slate-400 font-medium block">
-            Current on-shelf stock
-          </span>
         </div>
       </div>
 
       {/* 2. SMART SEARCH & FILTER TOOLBAR */}
-      <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-4 sm:p-5 space-y-4">
+      <div className="bg-[#18181B] rounded-sm border border-[#27272A] p-4 space-y-3">
         <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
           {/* Live Search */}
           <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <Search className="w-3.5 h-3.5 text-[#71717A] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search items by name, category, or SKU..."
-              className="w-full pl-10 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all"
+              placeholder="Filter items by name, category, or SKU..."
+              className="w-full pl-8 pr-8 py-2 rounded-sm bg-[#0A0A0A] border border-[#27272A] text-xs font-mono text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-none focus:border-[#FFFFFF]"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#71717A] hover:text-[#FFFFFF]"
               >
-                <X className="w-4 h-4" />
+                <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
 
-          {/* Category Dropdown */}
+          {/* Category & Sort Dropdowns */}
           <div className="flex items-center gap-2">
             <div className="relative shrink-0">
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="appearance-none pl-3 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-rose-500/20"
+                className="appearance-none pl-3 pr-8 py-2 rounded-sm bg-[#0A0A0A] border border-[#27272A] text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#FFFFFF] cursor-pointer focus:outline-none focus:border-[#FFFFFF]"
               >
                 <option value="all">All Categories</option>
                 {availableCategories
@@ -412,15 +425,14 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                     </option>
                   ))}
               </select>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <ChevronDown className="w-3.5 h-3.5 text-[#71717A] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
 
-            {/* Sort Dropdown */}
             <div className="relative shrink-0">
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as StockSortType)}
-                className="appearance-none pl-3 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-rose-500/20"
+                className="appearance-none pl-3 pr-8 py-2 rounded-sm bg-[#0A0A0A] border border-[#27272A] text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#FFFFFF] cursor-pointer focus:outline-none focus:border-[#FFFFFF]"
               >
                 <option value="lowest_stock">Lowest Stock First</option>
                 <option value="highest_stock">Highest Stock First</option>
@@ -428,19 +440,19 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                 <option value="price_desc">Price: High to Low</option>
                 <option value="price_asc">Price: Low to High</option>
               </select>
-              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <ArrowUpDown className="w-3.5 h-3.5 text-[#71717A] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
           </div>
         </div>
 
-        {/* Quick Filter Chips */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
+        {/* Quick Filter Tabs */}
+        <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-[#27272A]">
           <button
             onClick={() => setFilterType('all')}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer ${
+            className={`px-3 py-1.5 rounded-sm text-[11px] font-mono uppercase tracking-[0.06em] border cursor-pointer tabular-nums ${
               filterType === 'all'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF] font-bold'
+                : 'bg-[#0A0A0A] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
             }`}
           >
             All Items ({products.length})
@@ -448,78 +460,75 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
 
           <button
             onClick={() => setFilterType('in_stock')}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-sm text-[11px] font-mono uppercase tracking-[0.06em] border cursor-pointer flex items-center gap-1.5 tabular-nums ${
               filterType === 'in_stock'
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF] font-bold'
+                : 'bg-[#0A0A0A] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
             }`}
           >
-            <CheckCircle2 className="w-3 h-3" />
             <span>In Stock ({kpis.inStockCount})</span>
           </button>
 
           <button
             onClick={() => setFilterType('low_stock')}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-sm text-[11px] font-mono uppercase tracking-[0.06em] border cursor-pointer flex items-center gap-1.5 tabular-nums ${
               filterType === 'low_stock'
-                ? 'bg-amber-500 text-white shadow-xs'
-                : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
+                ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF] font-bold'
+                : 'bg-[#0A0A0A] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
             }`}
           >
-            <AlertTriangle className="w-3 h-3" />
             <span>Low Stock ({kpis.lowStockCount})</span>
           </button>
 
           <button
             onClick={() => setFilterType('out_of_stock')}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-sm text-[11px] font-mono uppercase tracking-[0.06em] border cursor-pointer flex items-center gap-1.5 tabular-nums ${
               filterType === 'out_of_stock'
-                ? 'bg-rose-600 text-white shadow-xs'
-                : 'bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100'
+                ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF] font-bold'
+                : 'bg-[#0A0A0A] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
             }`}
           >
-            <XCircle className="w-3 h-3" />
             <span>Sold Out ({kpis.outOfStockCount})</span>
           </button>
 
-          <div className="ml-auto text-xs text-slate-400 font-medium">
-            Showing <strong className="text-slate-700">{filteredProducts.length}</strong> items
+          <div className="ml-auto text-[11px] text-[#71717A] font-mono uppercase tracking-[0.06em] tabular-nums">
+            Showing <strong className="text-[#FFFFFF]">{filteredProducts.length}</strong> items
           </div>
         </div>
       </div>
 
       {/* Floating Bulk Action Bar when items selected */}
       {selectedIds.size > 0 && (
-        <div className="bg-slate-900 text-white rounded-2xl p-3 sm:p-4 shadow-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3 animate-slide-up">
+        <div className="bg-[#18181B] text-[#FFFFFF] p-3.5 rounded-sm border border-[#FF5500] flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span className="w-6 h-6 rounded-full bg-rose-600 flex items-center justify-center text-xs font-bold">
+            <span className="px-2 py-0.5 rounded-sm bg-[#FF5500] text-[#FFFFFF] font-mono text-xs font-bold tabular-nums">
               {selectedIds.size}
             </span>
-            <span className="text-xs sm:text-sm font-semibold">Items Selected</span>
+            <span className="text-[11px] font-bold uppercase tracking-[0.06em] font-mono">Items Selected</span>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => handleBulkAction('add25')}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl transition-all cursor-pointer"
+              onClick={() => handleBulkAction('add10')}
+              className="px-3 py-1.5 rounded-sm bg-[#0A0A0A] hover:bg-[#242427] border border-[#27272A] text-[11px] font-bold uppercase tracking-[0.06em] cursor-pointer font-mono text-[#FFFFFF]"
             >
-              +25 Units Restock
+              +10 Units
             </button>
             <button
-              onClick={() => handleBulkAction('markInStock')}
-              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-xs font-bold rounded-xl transition-all cursor-pointer"
+              onClick={() => handleBulkAction('restock25')}
+              className="px-3 py-1.5 rounded-sm bg-[#FF5500] text-[#FFFFFF] hover:bg-[#E04B00] border border-[#FF5500] text-[11px] font-bold uppercase tracking-[0.06em] cursor-pointer font-mono"
             >
-              Mark In Stock
+              Set 25 In Stock
             </button>
             <button
-              onClick={() => handleBulkAction('markOutOfStock')}
-              className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-xs font-bold rounded-xl transition-all cursor-pointer"
+              onClick={() => handleBulkAction('markOut')}
+              className="px-3 py-1.5 rounded-sm bg-[#0A0A0A] hover:bg-[#242427] border border-[#EF4444]/40 text-[#EF4444] text-[11px] font-bold uppercase tracking-[0.06em] cursor-pointer font-mono"
             >
               Mark Sold Out
             </button>
             <button
               onClick={() => setSelectedIds(new Set())}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg"
+              className="p-1.5 text-[#71717A] hover:text-[#FFFFFF] cursor-pointer"
               title="Clear selection"
             >
               <X className="w-4 h-4" />
@@ -529,20 +538,15 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
       )}
 
       {/* 3. STOCK CONTROL TABLE / LIST */}
-      <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs overflow-hidden">
+      <div className="bg-[#18181B] rounded-sm border border-[#27272A] overflow-hidden">
         {filteredProducts.length === 0 ? (
           <div className="text-center py-16 px-4 space-y-3">
-            <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
-              <Boxes className="w-7 h-7" />
+            <div className="w-12 h-12 rounded-sm bg-[#0A0A0A] border border-[#27272A] flex items-center justify-center mx-auto text-[#71717A]">
+              <Boxes className="w-6 h-6" />
             </div>
-            <h3 className="font-heading font-extrabold text-base text-slate-800">
+            <h3 className="font-bold text-sm uppercase tracking-[0.06em] text-[#FFFFFF] font-mono">
               No inventory items found
             </h3>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              {searchQuery
-                ? `No products matched "${searchQuery}". Try searching with another keyword or clear filters.`
-                : 'There are no products in this stock category right now.'}
-            </p>
             {searchQuery && (
               <button
                 onClick={() => {
@@ -550,7 +554,7 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                   setFilterType('all');
                   setSelectedCategory('all');
                 }}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 rounded-xl transition-all cursor-pointer"
+                className="px-4 py-2 rounded-sm bg-[#0A0A0A] hover:bg-[#242427] border border-[#27272A] text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#FFFFFF] cursor-pointer"
               >
                 Reset All Filters
               </button>
@@ -560,23 +564,23 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
           <div className="overflow-x-auto">
             <table className="w-full min-w-[700px] text-left border-collapse text-xs sm:text-sm">
               <thead>
-                <tr className="bg-slate-50/75 border-b border-slate-200/80 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  <th className="py-3.5 pl-4 pr-2 w-10">
+                <tr className="bg-[#0A0A0A] border-b border-[#27272A] text-[10px] font-mono font-bold text-[#71717A] uppercase tracking-[0.12em]">
+                  <th className="py-3 pl-4 pr-2 w-10">
                     <input
                       type="checkbox"
                       checked={selectedIds.size > 0 && selectedIds.size === filteredProducts.length}
                       onChange={handleSelectAll}
-                      className="rounded-sm border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer w-4 h-4"
+                      className="rounded-sm border-[#27272A] bg-[#0A0A0A] accent-[#FF5500] cursor-pointer w-4 h-4"
                     />
                   </th>
-                  <th className="py-3.5 px-3">Item Details</th>
-                  <th className="py-3.5 px-3">Price</th>
-                  <th className="py-3.5 px-3 text-center">Live Status</th>
-                  <th className="py-3.5 px-3 text-center">Quick Stock Adjuster</th>
-                  <th className="py-3.5 pr-4 pl-3 text-right">Instant Toggle</th>
+                  <th className="py-3 px-3">Item Details</th>
+                  <th className="py-3 px-3">Price</th>
+                  <th className="py-3 px-3 text-center">Live Status</th>
+                  <th className="py-3 px-3 text-center">Quick Stock Adjuster</th>
+                  <th className="py-3 pr-4 pl-3 text-right">Instant Toggle</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-[#27272A]">
                 {filteredProducts.map((product) => {
                   const stock = getProductStock(product);
                   const isOut = isItemOutOfStock(product);
@@ -587,45 +591,46 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                   return (
                     <tr
                       key={product.id}
-                      className={`hover:bg-slate-50/60 transition-colors ${
-                        isSelected ? 'bg-rose-50/30' : ''
+                      className={`hover:bg-[#242427] ${
+                        isSelected ? 'bg-[#242427]' : ''
                       }`}
                     >
                       {/* Checkbox */}
-                      <td className="py-3.5 pl-4 pr-2">
+                      <td className="py-3 pl-4 pr-2">
                         <input
                           type="checkbox"
                           checked={isSelected}
                           onChange={() => handleToggleSelect(product.id)}
-                          className="rounded-sm border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer w-4 h-4"
+                          className="rounded-sm border-[#27272A] bg-[#0A0A0A] accent-[#FF5500] cursor-pointer w-4 h-4"
                         />
                       </td>
 
                       {/* Item Details (Thumbnail, Name, Category) */}
-                      <td className="py-3.5 px-3">
+                      <td className="py-3 px-3">
                         <div className="flex items-center gap-3">
-                          <div className="w-11 h-11 rounded-xl overflow-hidden bg-slate-100 shrink-0 border border-slate-200/80">
+                          <div className="w-11 h-11 rounded-sm overflow-hidden bg-[#0A0A0A] shrink-0 border border-[#27272A] aspect-square">
                             {product.imageUrl ? (
                               <img
                                 src={product.imageUrl}
                                 alt={product.name}
                                 className="w-full h-full object-cover"
                                 loading="lazy"
+                                decoding="async"
                               />
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center text-slate-300">
-                                <Package className="w-5 h-5" />
+                              <div className="w-full h-full flex items-center justify-center text-[#71717A]">
+                                <Package className="w-4 h-4" />
                               </div>
                             )}
                           </div>
                           <div className="min-w-0">
-                            <h4 className="font-heading font-extrabold text-xs sm:text-sm text-slate-900 truncate max-w-[200px] sm:max-w-xs">
+                            <h4 className="font-bold text-xs sm:text-sm text-[#FFFFFF] truncate max-w-[200px] sm:max-w-xs">
                               {product.name}
                             </h4>
-                            <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                              <span className="font-medium">{product.category || 'Bakery'}</span>
-                              <span>•</span>
-                              <span className="font-mono text-slate-400 text-[10px]">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.06em] text-[#A1A1AA] font-mono">
+                              <span className="font-bold text-[#A1A1AA]">{product.category || 'Bakery'}</span>
+                              <span>·</span>
+                              <span className="text-[#71717A]">
                                 SKU: {product.id.slice(-6)}
                               </span>
                             </div>
@@ -634,31 +639,28 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                       </td>
 
                       {/* Retail Price */}
-                      <td className="py-3.5 px-3 font-amount font-extrabold text-slate-800 font-mono text-xs sm:text-sm">
+                      <td className="py-3 px-3 font-mono font-bold text-[#FFFFFF] text-xs sm:text-sm tabular-nums">
                         ₹{product.price}
                       </td>
 
                       {/* Live Stock Badge & Threshold Customizer */}
-                      <td className="py-3.5 px-3 text-center">
+                      <td className="py-3 px-3 text-center">
                         <div>
                           {isOut ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-bold">
-                              <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" />
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-[10px] font-mono font-bold uppercase tracking-[0.06em] bg-[#0A0A0A] text-[#EF4444] border border-[#EF4444]/40 line-through tabular-nums">
                               Sold Out (0)
                             </span>
                           ) : isLow ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-[10px] font-mono font-bold uppercase tracking-[0.06em] bg-[#0A0A0A] text-[#F59E0B] border border-[#F59E0B]/40 tabular-nums">
                               Low Stock ({stock})
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-[10px] font-mono font-bold uppercase tracking-[0.06em] bg-[#0A0A0A] text-[#10B981] border border-[#10B981]/40 tabular-nums">
                               In Stock ({stock})
                             </span>
                           )}
 
-                          <div className="mt-1.5 flex items-center justify-center gap-1 text-[10px] text-slate-400">
+                          <div className="mt-1.5 flex items-center justify-center gap-1 text-[10px] text-[#71717A] font-mono">
                             <span>Alert if ≤</span>
                             <input
                               type="number"
@@ -669,7 +671,7 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                                 const val = parseInt(e.target.value, 10);
                                 if (!isNaN(val) && val >= 0) {
                                   updateProductStockQuantity(product.id, stock, undefined, val, products);
-                                  showToast(`✓ Alert threshold set to ≤ ${val} for "${product.name}"`);
+                                  showToast(`✓ ALERT THRESHOLD SET TO ≤ ${val} FOR "${product.name}"`);
                                 }
                               }}
                               onKeyDown={(e) => {
@@ -678,36 +680,33 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                                 }
                               }}
                               title="Set low stock alert threshold for this item (default 5)"
-                              className="w-8 text-center font-mono font-bold text-[10px] bg-slate-100 hover:bg-slate-200 focus:bg-white border border-slate-200 rounded px-1 py-0.5 text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-rose-500/40"
+                              className="w-9 text-center font-mono font-bold text-[10px] rounded-sm bg-[#0A0A0A] border border-[#27272A] px-1 py-0.5 text-[#FFFFFF] focus:outline-none focus:border-[#FFFFFF] tabular-nums"
                             />
                           </div>
                         </div>
                       </td>
 
                       {/* Quick Adjust Stepper: [-5] [-1] [Direct Input] [+1] [+5] */}
-                      <td className="py-3.5 px-3 text-center">
-                        <div className="inline-flex items-center gap-1 bg-slate-50 p-1 rounded-2xl border border-slate-200">
-                          {/* -5 Button */}
+                      <td className="py-3 px-3 text-center">
+                        <div className="inline-flex items-center gap-1 bg-[#0A0A0A] p-1 rounded-sm border border-[#27272A]">
                           <button
                             onClick={() => handleAdjustQuantity(product, -5)}
                             disabled={stock <= 0}
                             title="Deduct 5 items"
-                            className="px-2 py-1 text-[11px] font-extrabold text-slate-600 hover:text-slate-900 hover:bg-white rounded-lg transition-all disabled:opacity-30 cursor-pointer"
+                            className="px-2 py-1 rounded-sm text-[11px] font-mono font-bold text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#18181B] disabled:opacity-30 cursor-pointer"
                           >
                             -5
                           </button>
 
-                          {/* -1 Button */}
                           <button
                             onClick={() => handleAdjustQuantity(product, -1)}
                             disabled={stock <= 0}
                             title="Deduct 1 item"
-                            className="p-1 text-slate-600 hover:text-slate-900 hover:bg-white rounded-lg transition-all disabled:opacity-30 cursor-pointer"
+                            className="p-1 rounded-sm text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#18181B] disabled:opacity-30 cursor-pointer"
                           >
                             <Minus className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Direct Input Number Field */}
                           <input
                             type="number"
                             min="0"
@@ -717,24 +716,22 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') handleQuantityInputBlur(product);
                             }}
-                            className="w-14 text-center font-mono font-bold text-xs sm:text-sm bg-white border border-slate-200 rounded-lg py-1 px-1 focus:outline-hidden focus:ring-2 focus:ring-rose-500/20 text-slate-900"
+                            className="w-14 text-center font-mono font-bold text-xs rounded-sm bg-[#18181B] border border-[#27272A] py-1 px-1 focus:outline-none focus:border-[#FFFFFF] text-[#FFFFFF] tabular-nums"
                             title="Type exact stock number and press Enter or click outside"
                           />
 
-                          {/* +1 Button */}
                           <button
                             onClick={() => handleAdjustQuantity(product, 1)}
                             title="Add 1 item"
-                            className="p-1 text-slate-600 hover:text-slate-900 hover:bg-white rounded-lg transition-all cursor-pointer"
+                            className="p-1 rounded-sm text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#18181B] cursor-pointer"
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* +5 Button */}
                           <button
                             onClick={() => handleAdjustQuantity(product, 5)}
                             title="Add 5 items"
-                            className="px-2 py-1 text-[11px] font-extrabold text-slate-600 hover:text-slate-900 hover:bg-white rounded-lg transition-all cursor-pointer"
+                            className="px-2 py-1 rounded-sm text-[11px] font-mono font-bold text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#18181B] cursor-pointer"
                           >
                             +5
                           </button>
@@ -742,13 +739,13 @@ export const InventoryManagementView = React.memo<InventoryManagementViewProps>(
                       </td>
 
                       {/* Quick Toggle: Mark In Stock / Out of Stock */}
-                      <td className="py-3.5 pr-4 pl-3 text-right">
+                      <td className="py-3 pr-4 pl-3 text-right">
                         <button
                           onClick={() => handleToggleAvailability(product)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          className={`px-3 py-1.5 rounded-sm text-[11px] font-mono font-bold uppercase tracking-[0.06em] border cursor-pointer ${
                             isOut
-                              ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
-                              : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
+                              ? 'bg-[#FF5500] text-[#FFFFFF] border-[#FF5500] hover:bg-[#E04B00]'
+                              : 'bg-[#0A0A0A] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427] border-[#27272A]'
                           }`}
                         >
                           {isOut ? 'Restock (+25)' : 'Mark Sold Out'}

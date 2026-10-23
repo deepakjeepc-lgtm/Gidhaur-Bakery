@@ -8,11 +8,9 @@ import {
   Trash2,
   CheckCircle2,
   ArrowRight,
-  Sparkles,
   Receipt,
   UtensilsCrossed,
-  ShieldCheck,
-  AlertTriangle
+  ShieldCheck
 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { CartItem } from '../types';
@@ -31,7 +29,7 @@ interface CartItemRowProps {
   onRequestRemove: (item: CartItem) => void;
 }
 
-const CartItemRow: React.FC<CartItemRowProps> = ({
+const CartItemRow: React.FC<CartItemRowProps> = React.memo(({
   item,
   onIncrease,
   onDecrease,
@@ -66,13 +64,19 @@ const CartItemRow: React.FC<CartItemRowProps> = ({
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    if (isHorizontalRef.current === false) return;
+
     const deltaX = e.touches[0].clientX - startXRef.current;
     const deltaY = e.touches[0].clientY - startYRef.current;
 
     if (isHorizontalRef.current === null) {
       if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
         isHorizontalRef.current = Math.abs(deltaX) > Math.abs(deltaY);
+        if (isHorizontalRef.current && cardRef.current) {
+          cardRef.current.style.willChange = 'transform';
+        }
       }
+      if (!isHorizontalRef.current) return;
     }
 
     if (isHorizontalRef.current && cardRef.current) {
@@ -97,6 +101,7 @@ const CartItemRow: React.FC<CartItemRowProps> = ({
     if (cardRef.current) {
       cardRef.current.style.transition = 'transform 260ms cubic-bezier(0.16, 1, 0.3, 1)';
       cardRef.current.style.transform = 'translate3d(0, 0, 0)';
+      cardRef.current.style.willChange = 'auto';
     }
 
     if (leftRevealRef.current) {
@@ -164,16 +169,13 @@ const CartItemRow: React.FC<CartItemRowProps> = ({
         </div>
       </div>
 
-      {/* Foreground Swipeable Card - Direct GPU Hardware Accelerated Transform */}
+      {/* Foreground Swipeable Card */}
       <div
         ref={cardRef}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        style={{
-          willChange: 'transform',
-        }}
-        className="relative z-10 bg-white p-3 sm:p-3.5 flex items-center gap-3 sm:gap-3.5 hover:bg-slate-50/40 transition-colors"
+        className="relative z-10 bg-white p-3 sm:p-3.5 flex items-center gap-3 sm:gap-3.5"
       >
         {/* Dish Thumbnail: Blends 100% with white background (NO border, NO shadow) */}
         <div className="w-20 sm:w-22 aspect-[4/3] rounded-xl bg-transparent overflow-hidden shrink-0 relative">
@@ -271,7 +273,7 @@ const CartItemRow: React.FC<CartItemRowProps> = ({
       </div>
     </div>
   );
-};
+});
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onCheckout }) => {
   const {
@@ -406,7 +408,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#f8fafc] flex flex-col overflow-hidden select-none animate-in fade-in duration-200 touch-manipulation"
+      className="fixed inset-0 z-50 bg-[#f8fafc] flex flex-col overflow-hidden select-none touch-manipulation"
       id="cart-fullscreen-view"
       onTouchStart={handleViewTouchStart}
       onTouchEnd={handleViewTouchEnd}
@@ -420,7 +422,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
         <header
           onTouchStart={handleHeaderTouchStart}
           onTouchEnd={handleHeaderTouchEnd}
-          className="px-4 py-3 sm:px-6 sm:py-4 bg-white border-b border-slate-200/80 flex items-center justify-between shrink-0 sticky top-0 z-20 shadow-[0_1px_4px_rgba(0,0,0,0.02)]"
+          className="px-4 py-3 sm:px-6 sm:py-4 bg-white border-b border-slate-200/80 flex items-center justify-between shrink-0 z-20"
         >
           <div className="flex items-center gap-3">
             {/* Top Left Proper Circular Back Button - Optimized 44px apple-touch target */}
@@ -493,7 +495,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
         )}
 
         {/* Scrollable Items List & Bill Breakdown */}
-        <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-4 select-text pb-32 sm:pb-36">
+        <div className="modal-scroll-container flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 select-text pb-32 sm:pb-36">
           {items.length === 0 ? (
             /* Empty State */
             <div className="py-20 flex flex-col items-center justify-center text-center space-y-4 text-slate-400">
@@ -606,13 +608,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout, onC
           )}
         </div>
 
-        {/* Floating Action Footer: Unified Floating Glass Capsule Checkout Button */}
+        {/* Floating Action Footer: Unified Crisp Capsule Checkout Button */}
         {items.length > 0 && (
           <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-none p-2.5 sm:p-3.5 pb-[max(env(safe-area-inset-bottom,0.75rem),1.15rem)] flex items-center justify-center">
             <button
               type="button"
               onClick={handleCheckoutClick}
-              className="pointer-events-auto max-w-xl w-full h-16 px-6 sm:px-8 bg-white/35 hover:bg-white/55 active:scale-[0.98] backdrop-blur-xl rounded-full border border-white/50 shadow-[0_12px_36px_rgba(15,23,42,0.1),0_2px_8px_rgba(15,23,42,0.03)] flex items-center justify-between transition-all cursor-pointer group select-none"
+              className="pointer-events-auto max-w-xl w-full h-16 px-6 sm:px-8 bg-white hover:bg-slate-50 active:scale-[0.98] rounded-full border border-slate-200/90 shadow-[0_10px_28px_rgba(15,23,42,0.1)] flex items-center justify-between transition-transform cursor-pointer group select-none"
               id="checkout-proceed-btn"
             >
               {/* Left: Just the amount */}

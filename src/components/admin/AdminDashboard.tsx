@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   ShoppingBag,
-  Clock,
   CheckCircle2,
   XCircle,
   ChefHat,
@@ -9,42 +8,26 @@ import {
   PackageCheck,
   Phone,
   MapPin,
-  FileText,
   Volume2,
   VolumeX,
   LogOut,
   Search,
   Bell,
-  Utensils,
   TrendingUp,
   Store,
-  Shield,
-  Calendar,
-  Layers,
   ChevronDown,
-  Settings as SettingsGearIcon,
-  Users,
-  Eye,
-  Smartphone,
-  UtensilsCrossed,
-  MonitorPlay,
   ArrowLeft,
   X,
   Trash2,
-  Play,
   Check,
   Loader2,
   Sliders,
   AlertTriangle,
   Archive,
-  Activity,
-  Boxes
+  Boxes,
+  ArrowUpRight
 } from 'lucide-react';
 import {
-  collection,
-  query,
-  orderBy,
-  limit,
   doc,
   updateDoc,
   deleteDoc,
@@ -55,7 +38,6 @@ import { db } from '../../firebase/config';
 import { subscribeToSharedOrders } from '../../services/orderListenerService';
 import { useAuth } from '../../context/AuthContext';
 import { Order, OrderStatus, Product, DeliveryAgent, KitchenStaff, RestaurantSettings } from '../../types';
-import { OperationType, handleFirestoreError } from '../../firebase/errors';
 import { ProductManagement } from './ProductManagement';
 import { DeliveryAgentsManagement } from './DeliveryAgentsManagement';
 import { KitchenStaffManagement } from './KitchenStaffManagement';
@@ -67,13 +49,21 @@ import { InventoryManagementView } from './InventoryManagementView';
 import { deductStockForAcceptedOrder, isItemLowStock } from '../../services/inventoryService';
 import { OrderHistoryView } from './OrderHistoryView';
 import {
+  ARCHIVE_STORAGE_KEYS,
   performDailyOrderRollover,
+  partitionDailyOrdersPure,
+  getDeletedOrderIds,
   getArchivedOrders,
   deleteArchivedOrder,
   clearAllArchivedOrders,
   archiveSingleOrder,
+  recordDeliveredOrderInArchive,
+  syncArchivedOrdersFromServer,
   getTodayDateString,
-  isOrderFromToday
+  isOrderFromToday,
+  removeCustomerOwnOrder,
+  markOrderPermanentlyDeleted,
+  clearAllTrackingHistory
 } from '../../services/orderArchiveService';
 import { KitchenDisplayPage } from '../kitchen/KitchenDisplayPage';
 import { PreparingDisplayPage } from '../preparing/PreparingDisplayPage';
@@ -88,28 +78,22 @@ import {
   getLocalRestaurantSettings,
   getLocalPreparingStaff,
   getLocalDeliveryAgents,
-  getLocalKitchenStaff,
-  seedStaffIfEmpty
+  getLocalKitchenStaff
 } from '../../services/staffService';
 import { PreparingStaff } from '../../types';
 import {
   getOrderCategoryClassification,
-  getOrderFoodItems,
-  getOrderNonFoodItems,
   isFoodItem,
   isNonFoodItem
 } from '../../utils/orderCategoryHelper';
 import { sendOrderStatusEmail } from '../../services/customerEmailService';
 import {
   playOrderAlertChime,
-  shouldNotifyNewOrder,
-  markInitialOrdersAsSeen,
   sendNativeNotification
 } from '../../utils/sound';
 import {
   saveActiveAdminTab,
   getSavedActiveAdminTab,
-  saveScrollPosition,
   restoreScrollPosition
 } from '../../utils/scrollStateStorage';
 import { triggerHaptic } from '../../utils/haptics';
@@ -179,18 +163,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     restoreScrollPosition(`admin_${activeTab}`, 1);
   }, []);
 
-  // Save scroll on page scroll
-  useEffect(() => {
-    const onScroll = () => {
-      saveScrollPosition(`admin_${activeTab}`, window.scrollY);
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [activeTab]);
-
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersSubTab, setOrdersSubTab] = useState<'today' | 'history'>('today');
   const [archivedOrders, setArchivedOrders] = useState<Order[]>(() => getArchivedOrders());
+  const purgedPastOrderIdsRef = useRef<Set<string>>(new Set());
 
   // Live Inventory & Catalog Reactive State
   const [liveProducts, setLiveProducts] = useState<Product[]>(products);
@@ -214,8 +190,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return liveProducts.filter((p) => isItemLowStock(p)).length;
   }, [liveProducts]);
 
-  // Listen to background history updates
+  // Listen to background history updates and sync server archive once on mount
   useEffect(() => {
+    syncArchivedOrdersFromServer().then((merged) => {
+      setArchivedOrders(merged);
+    });
     const handleHistoryUpdate = (e: any) => {
       if (e.detail && Array.isArray(e.detail)) {
         setArchivedOrders(e.detail);
@@ -228,38 +207,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, []);
 
   // Daily Order Rollover Rule:
-  // As soon as date changes, all orders from previous days (pending, accepted, delivered, unapproved)
+  // As soon as date changes, all orders from previous days (pending, accepted, preparing, out_for_delivery, delivered, rejected)
   // are automatically cleared from today's live queue and moved into the Order History Archive.
   const [currentDateStr, setCurrentDateStr] = useState(() => getTodayDateString());
 
-  // Check every 20 seconds if calendar date rolled over (midnight auto-reset)
+  // Check every 15 seconds and on tab wake if calendar date rolled over (midnight auto-reset)
   useEffect(() => {
-    const timer = setInterval(() => {
+    const checkRollover = () => {
       const today = getTodayDateString();
       if (today !== currentDateStr) {
         setCurrentDateStr(today);
       }
-    }, 20000);
-    return () => clearInterval(timer);
+    };
+    const timer = setInterval(checkRollover, 15000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkRollover();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [currentDateStr]);
 
-  const { todayOrders, archivedOrders: currentArchived } = useMemo(() => {
-    return performDailyOrderRollover(orders);
+  // Pure render-safe computation of todayOrders (zero synchronous localStorage writes during render)
+  const todayOrders = useMemo(() => {
+    const { todayOrders: activeToday } = partitionDailyOrdersPure(
+      orders,
+      currentDateStr,
+      getDeletedOrderIds()
+    );
+    return activeToday;
   }, [orders, currentDateStr]);
 
+  // Side-effect effect: persist rolled-over past-day orders & delivered orders to Archive,
+  // and remove previous-day orders from active Firestore queue so they only live in Archive
   useEffect(() => {
-    if (currentArchived.length > 0) {
-      setArchivedOrders((prev) => {
-        if (
-          prev.length === currentArchived.length &&
-          (prev[0]?.id === currentArchived[0]?.id || prev[0]?.orderId === currentArchived[0]?.orderId)
-        ) {
-          return prev;
-        }
-        return currentArchived;
-      });
+    const { archivedOrders: updatedArchive, pastOrderIdsToPurge } = performDailyOrderRollover(orders);
+    setArchivedOrders((prev) => {
+      if (
+        prev.length === updatedArchive.length &&
+        (prev[0]?.id === updatedArchive[0]?.id || prev[0]?.orderId === updatedArchive[0]?.orderId) &&
+        prev[0]?.status === updatedArchive[0]?.status
+      ) {
+        return prev;
+      }
+      return updatedArchive;
+    });
+
+    if (pastOrderIdsToPurge.length > 0) {
+      const unpurgedIds = pastOrderIdsToPurge.filter(
+        (id) => id && !purgedPastOrderIdsRef.current.has(id)
+      );
+      if (unpurgedIds.length > 0) {
+        unpurgedIds.forEach((id) => purgedPastOrderIdsRef.current.add(id));
+        unpurgedIds.forEach((docId) => {
+          deleteDoc(doc(db, 'orders', docId)).catch(() => {});
+          try {
+            fetch(`/api/orders/${docId}`, { method: 'DELETE' }).catch(() => {});
+          } catch {}
+        });
+      }
     }
-  }, [currentArchived]);
+  }, [orders, currentDateStr]);
 
   const [deliveryAgents, setDeliveryAgents] = useState<DeliveryAgent[]>([]);
   const [kitchenStaff, setKitchenStaff] = useState<KitchenStaff[]>([]);
@@ -411,20 +423,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isDeletingLoading, setIsDeletingLoading] = useState(false);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
 
+  // Stable memoized callbacks to prevent heavy child re-renders on tab switch or dropdown toggle
+  const onUpdateProductsRef = useRef(onUpdateProducts);
+  useEffect(() => {
+    onUpdateProductsRef.current = onUpdateProducts;
+  }, [onUpdateProducts]);
+
+  const handleUpdateProductsStable = useCallback((updated: Product[]) => {
+    setLiveProducts(updated);
+    if (onUpdateProductsRef.current) onUpdateProductsRef.current(updated);
+  }, []);
+
+  const handleRefreshCatalogStable = useCallback(() => {
+    try {
+      window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: liveProducts }));
+    } catch {}
+  }, [liveProducts]);
+
+  const handleSettingsUpdateStable = useCallback((newSettings: any) => {
+    setSettings(newSettings);
+  }, []);
+
+  const handlePreviewChefStable = useCallback((chef: any) => setPreviewChef(chef), []);
+  const handlePreviewPrepStable = useCallback((st: any) => setPreviewPreparingStaff(st), []);
+  const handlePreviewAgentStable = useCallback((ag: any) => setPreviewAgent(ag), []);
+
+
   const handleDeleteArchivedOrder = async (orderId: string) => {
-    deleteArchivedOrder(orderId);
-    setArchivedOrders((prev) => prev.filter((o) => (o.orderId || o.id) !== orderId));
-    setOrders((prev) => prev.filter((o) => (o.orderId || o.id) !== orderId));
+    const match =
+      orders.find((o) => (o.orderId || o.id) === orderId || o.id === orderId) ||
+      archivedOrders.find((o) => (o.orderId || o.id) === orderId || o.id === orderId);
+    const docId = match?.id || orderId;
+    const displayOrderId = match?.orderId || orderId;
+
+    deleteArchivedOrder(orderId, docId);
+    if (displayOrderId !== orderId) {
+      deleteArchivedOrder(displayOrderId, docId);
+    }
+    setArchivedOrders((prev) =>
+      prev.filter((o) => o.orderId !== orderId && o.id !== orderId && o.id !== docId)
+    );
+    setOrders((prev) =>
+      prev.filter((o) => o.orderId !== orderId && o.id !== orderId && o.id !== docId)
+    );
 
     try {
-      fetch(`/api/orders/${orderId}`, { method: 'DELETE' }).catch(() => {});
+      window.dispatchEvent(
+        new CustomEvent('swadeep_order_removed', { detail: { orderId: displayOrderId, id: docId } })
+      );
     } catch {}
 
     try {
-      const match = orders.find((o) => (o.orderId || o.id) === orderId) ||
-                    archivedOrders.find((o) => (o.orderId || o.id) === orderId);
-      const docId = match?.id || orderId;
+      fetch(`/api/orders/${docId}`, { method: 'DELETE' }).catch(() => {});
+      if (displayOrderId && displayOrderId !== docId) {
+        fetch(`/api/orders/${displayOrderId}`, { method: 'DELETE' }).catch(() => {});
+      }
+    } catch {}
+
+    try {
       await deleteDoc(doc(db, 'orders', docId));
+      if (displayOrderId && displayOrderId !== docId) {
+        await deleteDoc(doc(db, 'orders', displayOrderId)).catch(() => {});
+      }
     } catch (e) {
       console.warn('Firestore order deletion note:', e);
     }
@@ -486,10 +546,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     // 3. Purge from customer recent orders in local storage
     try {
-      const recent = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
-      const updatedRecent = recent.filter((o: any) => o.orderId !== order.orderId && o.id !== order.id);
-      localStorage.setItem('swadeep_recent_orders', JSON.stringify(updatedRecent));
-      localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updatedRecent));
+      removeCustomerOwnOrder(order.orderId || order.id, [order.id, order.orderId]);
       window.dispatchEvent(new CustomEvent('swadeep_order_removed', { detail: { orderId: order.orderId, id: order.id } }));
     } catch {}
   };
@@ -532,6 +589,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     const unsubscribe = subscribeToSharedOrders((fetchedOrders) => {
       setIsLoadingOrders(false);
+
+      // One-time complete clean-slate wipe of legacy Firestore orders & server store
+      try {
+        if (localStorage.getItem(ARCHIVE_STORAGE_KEYS.FIRESTORE_CLEAN_SLATE_V2) !== 'done') {
+          localStorage.setItem(ARCHIVE_STORAGE_KEYS.FIRESTORE_CLEAN_SLATE_V2, 'done');
+          clearAllArchivedOrders();
+          clearAllTrackingHistory();
+          setArchivedOrders([]);
+          setOrders([]);
+          try {
+            fetch('/api/orders/clear-all', { method: 'POST' }).catch(() => {});
+          } catch {}
+          if (fetchedOrders.length > 0) {
+            const batch = writeBatch(db);
+            fetchedOrders.forEach((o) => {
+              const docId = o.id || o.orderId;
+              if (docId) {
+                markOrderPermanentlyDeleted(docId, [o.orderId, o.id]);
+                batch.delete(doc(db, 'orders', docId));
+              }
+            });
+            batch.commit().catch(() => {});
+          }
+          return;
+        }
+      } catch {}
+
       setOrders(fetchedOrders);
     });
 
@@ -543,12 +627,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     nextStatus: OrderStatus,
     extraUpdates: Record<string, any> = {}
   ) => {
+    const targetOrder = orders.find((o) => o.id === orderId || o.orderId === orderId);
+
     // 1. Immediate optimistic UI state update for instant 0ms feedback
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId || o.orderId === orderId ? { ...o, status: nextStatus, ...extraUpdates } : o
       )
     );
+
+    // 2. If marked as delivered, immediately record in Admin Archive for counting & revenue audit
+    // while keeping it in Today's Delivered list until midnight
+    if (nextStatus === 'delivered' && targetOrder) {
+      const updatedArchive = recordDeliveredOrderInArchive({
+        ...targetOrder,
+        status: 'delivered',
+        deliveredAt: new Date().toISOString(),
+        ...extraUpdates,
+      });
+      setArchivedOrders(updatedArchive);
+    }
 
     // Sync to backend API immediately
     try {
@@ -576,15 +674,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
 
       // Auto Stock Deduction when order is accepted
-      if (nextStatus === 'accepted') {
-        const targetOrder = orders.find((o) => o.id === orderId || o.orderId === orderId);
-        if (targetOrder) {
-          deductStockForAcceptedOrder(targetOrder);
-        }
+      if (nextStatus === 'accepted' && targetOrder) {
+        deductStockForAcceptedOrder(targetOrder);
       }
 
       // Send branded order status update email to customer based on admin notification toggles
-      const targetOrder = orders.find((o) => o.id === orderId || o.orderId === orderId);
       if (targetOrder?.customerEmail) {
         const toggles = settings?.emailEventToggles || {};
         let shouldSend = false;
@@ -610,13 +704,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           o.id === orderId || o.orderId === orderId ? { ...o, status: nextStatus, ...extraUpdates } : o
         )
       );
-      try {
-        const recent = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
-        const updatedRecent = recent.map((o: any) =>
-          o.orderId === orderId ? { ...o, status: nextStatus, ...extraUpdates } : o
-        );
-        localStorage.setItem('swadeep_recent_orders', JSON.stringify(updatedRecent));
-      } catch {}
     }
   };
 
@@ -674,47 +761,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDeleteOrder = async (order: Order) => {
+    const docId = order.id || order.orderId;
+    const ordId = order.orderId || order.id;
+
+    // 1. Immediately mark permanently deleted and remove from local/archive/customer state
+    markOrderPermanentlyDeleted(docId, [ordId]);
+    deleteArchivedOrder(docId, ordId);
+    removeCustomerOwnOrder(docId, [ordId]);
+    setOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
+    setArchivedOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent('swadeep_order_removed', { detail: { orderId: ordId, id: docId } })
+      );
+    } catch {}
+
     try {
       setIsDeletingLoading(true);
-      const docId = order.id || order.orderId;
-      await deleteDoc(doc(db, 'orders', docId));
-      if (order.orderId && order.orderId !== order.id) {
-        await deleteDoc(doc(db, 'orders', order.orderId)).catch(() => {});
-      }
-      setOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
-      setArchivedOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
+      // 2. Delete from server backend (which also broadcasts orders_deleted via SSE)
       try {
         fetch(`/api/orders/${docId}`, { method: 'DELETE' }).catch(() => {});
-        if (order.orderId && order.orderId !== order.id) {
-          fetch(`/api/orders/${order.orderId}`, { method: 'DELETE' }).catch(() => {});
+        if (ordId && ordId !== docId) {
+          fetch(`/api/orders/${ordId}`, { method: 'DELETE' }).catch(() => {});
         }
-        deleteArchivedOrder(order.id);
-        deleteArchivedOrder(order.orderId);
-        const recent = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
-        const updatedRecent = recent.filter((o: any) => o.orderId !== order.orderId && o.id !== order.id);
-        localStorage.setItem('swadeep_recent_orders', JSON.stringify(updatedRecent));
-        localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updatedRecent));
-        window.dispatchEvent(new CustomEvent('swadeep_order_removed', { detail: { orderId: order.orderId, id: order.id } }));
       } catch {}
+
+      // 3. Delete from Firestore so customer's single-doc onSnapshot immediately fires !snap.exists()
+      await deleteDoc(doc(db, 'orders', docId));
+      if (ordId && ordId !== docId) {
+        await deleteDoc(doc(db, 'orders', ordId)).catch(() => {});
+      }
       setDeletingOrder(null);
     } catch (err: any) {
       console.warn('Failed to delete order in Firestore (removed locally):', err?.message || err);
-      setOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
-      setArchivedOrders((prev) => prev.filter((o) => o.id !== order.id && o.orderId !== order.orderId));
-      try {
-        const docId = order.id || order.orderId;
-        fetch(`/api/orders/${docId}`, { method: 'DELETE' }).catch(() => {});
-        if (order.orderId && order.orderId !== order.id) {
-          fetch(`/api/orders/${order.orderId}`, { method: 'DELETE' }).catch(() => {});
-        }
-        deleteArchivedOrder(order.id);
-        deleteArchivedOrder(order.orderId);
-        const recent = JSON.parse(localStorage.getItem('swadeep_recent_orders') || '[]');
-        const updatedRecent = recent.filter((o: any) => o.orderId !== order.orderId && o.id !== order.id);
-        localStorage.setItem('swadeep_recent_orders', JSON.stringify(updatedRecent));
-        localStorage.setItem('gidhaur_recent_orders', JSON.stringify(updatedRecent));
-        window.dispatchEvent(new CustomEvent('swadeep_order_removed', { detail: { orderId: order.orderId, id: order.id } }));
-      } catch {}
       setDeletingOrder(null);
     } finally {
       setIsDeletingLoading(false);
@@ -722,124 +802,161 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleClearAllOrders = async () => {
+    const allToClear = [...orders, ...archivedOrders];
+    allToClear.forEach((o) => {
+      markOrderPermanentlyDeleted(o.id || o.orderId, [o.orderId, o.id]);
+    });
+    clearAllArchivedOrders();
+    clearAllTrackingHistory();
+    setOrders([]);
+    setArchivedOrders([]);
+
     try {
       setIsDeletingLoading(true);
-      const batch = writeBatch(db);
-      orders.forEach((o) => {
-        batch.delete(doc(db, 'orders', o.id));
-      });
-      await batch.commit();
-      setOrders([]);
-      setArchivedOrders([]);
-      clearAllArchivedOrders();
       try {
         fetch('/api/orders/clear-all', { method: 'POST' }).catch(() => {});
-        localStorage.removeItem('swadeep_recent_orders');
-        localStorage.removeItem('gidhaur_recent_orders');
       } catch {}
+
+      const batch = writeBatch(db);
+      orders.forEach((o) => {
+        const docId = o.id || o.orderId;
+        if (docId) batch.delete(doc(db, 'orders', docId));
+      });
+      await batch.commit();
       setIsClearingAllModalOpen(false);
     } catch (err: any) {
       console.warn('Failed to clear orders in Firestore (clearing locally):', err?.message || err);
-      setOrders([]);
-      setArchivedOrders([]);
-      clearAllArchivedOrders();
-      try {
-        fetch('/api/orders/clear-all', { method: 'POST' }).catch(() => {});
-        localStorage.removeItem('swadeep_recent_orders');
-        localStorage.removeItem('gidhaur_recent_orders');
-      } catch {}
       setIsClearingAllModalOpen(false);
     } finally {
       setIsDeletingLoading(false);
     }
   };
 
-  // Stats Calculations for Today's Active Live Queue
-  const pendingOrders = todayOrders.filter((o) => o.status === 'pending');
-  const inKitchenOrders = todayOrders.filter((o) => o.status === 'preparing' || o.status === 'accepted');
-  const outOrders = todayOrders.filter((o) => o.status === 'out_for_delivery');
-  const inProgressOrders = todayOrders.filter((o) =>
-    ['accepted', 'preparing', 'out_for_delivery'].includes(o.status)
-  );
-  const deliveredOrders = todayOrders.filter((o) => o.status === 'delivered');
-  const rejectedOrders = todayOrders.filter((o) => o.status === 'rejected');
-  const cancellationRequestedOrders = todayOrders.filter(
-    (o) => o.cancellationStatus === 'requested' && o.status !== 'rejected'
-  );
+  // Memoized Stats Calculations for Today's Active Live Queue (smooth 60fps UI, 0 extra reads/writes)
+  const {
+    pendingOrders,
+    inKitchenOrders,
+    outOrders,
+    inProgressOrders,
+    deliveredOrders,
+    rejectedOrders,
+    cancellationRequestedOrders,
+    totalRevenue,
+  } = useMemo(() => {
+    const pending: Order[] = [];
+    const inKitchen: Order[] = [];
+    const out: Order[] = [];
+    const inProgress: Order[] = [];
+    const delivered: Order[] = [];
+    const rejected: Order[] = [];
+    const cancelReqs: Order[] = [];
+    let revenue = 0;
 
-  const totalRevenue = todayOrders
-    .filter((o) => o.status === 'delivered')
-    .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+    for (let i = 0; i < todayOrders.length; i++) {
+      const o = todayOrders[i];
+      if (o.status === 'pending') pending.push(o);
+      else if (o.status === 'accepted' || o.status === 'preparing') {
+        inKitchen.push(o);
+        inProgress.push(o);
+      } else if (o.status === 'out_for_delivery') {
+        out.push(o);
+        inProgress.push(o);
+      } else if (o.status === 'delivered') {
+        delivered.push(o);
+        revenue += o.totalAmount || 0;
+      } else if (o.status === 'rejected') {
+        rejected.push(o);
+      }
+      if (o.cancellationStatus === 'requested' && o.status !== 'rejected') {
+        cancelReqs.push(o);
+      }
+    }
 
-  const filteredOrders = todayOrders.filter((o) => {
-    const matchesSearch =
-      o.orderId?.toLowerCase().includes(orderSearchQuery.toLowerCase()) ||
-      o.customerName?.toLowerCase().includes(orderSearchQuery.toLowerCase()) ||
-      o.phone?.includes(orderSearchQuery);
+    return {
+      pendingOrders: pending,
+      inKitchenOrders: inKitchen,
+      outOrders: out,
+      inProgressOrders: inProgress,
+      deliveredOrders: delivered,
+      rejectedOrders: rejected,
+      cancellationRequestedOrders: cancelReqs,
+      totalRevenue: revenue,
+    };
+  }, [todayOrders]);
 
-    if (selectedStatusFilter === 'all') return matchesSearch;
-    if (selectedStatusFilter === 'cancellation_requests')
-      return matchesSearch && o.cancellationStatus === 'requested' && o.status !== 'rejected';
-    if (selectedStatusFilter === 'pending') return matchesSearch && o.status === 'pending';
-    if (selectedStatusFilter === 'kitchen')
-      return matchesSearch && (o.status === 'accepted' || o.status === 'preparing');
-    if (selectedStatusFilter === 'out_for_delivery')
-      return matchesSearch && o.status === 'out_for_delivery';
-    if (selectedStatusFilter === 'delivered') return matchesSearch && o.status === 'delivered';
-    if (selectedStatusFilter === 'rejected') return matchesSearch && o.status === 'rejected';
+  const filteredOrders = useMemo(() => {
+    const q = orderSearchQuery.trim().toLowerCase();
+    return todayOrders.filter((o) => {
+      const matchesSearch =
+        !q ||
+        o.orderId?.toLowerCase().includes(q) ||
+        o.customerName?.toLowerCase().includes(q) ||
+        o.phone?.includes(q);
 
-    return matchesSearch;
-  });
+      if (!matchesSearch) return false;
+      if (selectedStatusFilter === 'all') return true;
+      if (selectedStatusFilter === 'cancellation_requests')
+        return o.cancellationStatus === 'requested' && o.status !== 'rejected';
+      if (selectedStatusFilter === 'pending') return o.status === 'pending';
+      if (selectedStatusFilter === 'kitchen')
+        return o.status === 'accepted' || o.status === 'preparing';
+      if (selectedStatusFilter === 'out_for_delivery')
+        return o.status === 'out_for_delivery';
+      if (selectedStatusFilter === 'delivered') return o.status === 'delivered';
+      if (selectedStatusFilter === 'rejected') return o.status === 'rejected';
+
+      return true;
+    });
+  }, [todayOrders, orderSearchQuery, selectedStatusFilter]);
 
   const getStatusBadge = (status: OrderStatus) => {
     switch (status) {
       case 'pending':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-900 border border-amber-200/80">
-            <Clock className="w-3.5 h-3.5 text-amber-700" />
-            <span>Pending Approval</span>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] bg-[#18181B] text-[#F59E0B] border border-[#F59E0B]/40">
+            <span className="w-1.5 h-1.5 bg-[#F59E0B]" />
+            <span>PENDING</span>
           </span>
         );
       case 'accepted':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200/80">
-            <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
-            <span>Accepted</span>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] bg-[#18181B] text-[#FFFFFF] border border-[#3F3F46]">
+            <span className="w-1.5 h-1.5 bg-[#FFFFFF]" />
+            <span>ACCEPTED</span>
           </span>
         );
       case 'preparing':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-800 border border-slate-200">
-            <ChefHat className="w-3.5 h-3.5 text-slate-700" />
-            <span>In Kitchen</span>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] bg-[#18181B] text-[#FF5500] border border-[#FF5500]/40">
+            <span className="w-1.5 h-1.5 bg-[#FF5500]" />
+            <span>IN KITCHEN</span>
           </span>
         );
       case 'out_for_delivery':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-200/80">
-            <Bike className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Out for Delivery</span>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] bg-[#18181B] text-[#FFFFFF] border border-[#FFFFFF]">
+            <span className="w-1.5 h-1.5 bg-[#FF5500]" />
+            <span>DISPATCHED</span>
           </span>
         );
       case 'delivered':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200/80">
-            <PackageCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Delivered</span>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/40">
+            <CheckCircle2 className="w-3 h-3 text-[#10B981]" />
+            <span>DELIVERED</span>
           </span>
         );
       case 'rejected':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200/80">
-            <XCircle className="w-3.5 h-3.5 text-rose-600" />
-            <span>Cancelled</span>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] bg-[#EF4444]/10 text-[#EF4444] border border-[#EF4444]/40">
+            <XCircle className="w-3 h-3 text-[#EF4444]" />
+            <span>CANCELLED</span>
           </span>
         );
     }
   };
 
   const adminDisplayName = user?.email ? user.email.split('@')[0] : 'Admin Staff';
-  const adminInitials = adminDisplayName.substring(0, 2).toUpperCase();
 
   const handleLogoutAction = () => {
     if (onLogout) {
@@ -852,46 +969,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 1. Direct Agent Screen View Mode for Admin
   if (previewAgent) {
     return (
-      <div className="min-h-screen bg-[#f8fafc] text-slate-900">
-        {/* Fixed Top Admin Live Simulator Banner */}
-        <div className="sticky top-0 z-50 bg-slate-950 text-white px-3 sm:px-6 py-2 shadow-md border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center justify-between sm:justify-start gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 animate-pulse" />
-              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
-                <span className="text-slate-400 hidden xs:inline">LIVE RIDER:</span>
-                <span className="text-white bg-slate-800/90 px-2 py-0.5 rounded-full font-extrabold text-[11px] truncate">
-                  {previewAgent.name}
-                </span>
-                <span className="text-slate-400 font-mono text-[10px] hidden sm:inline">
-                  ({previewAgent.vehicleType || 'Bike'})
-                </span>
-              </div>
+      <div className="admin-curator-console min-h-screen bg-[#0A0A0A] text-[#FFFFFF]">
+        <div className="sticky top-0 z-50 bg-[#0A0A0A] text-[#FFFFFF] px-3 sm:px-6 h-14 border-b border-[#27272A] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 bg-[#FF5500] shrink-0" />
+            <div className="flex items-center gap-2 text-xs font-mono truncate">
+              <span className="text-[#71717A] hidden xs:inline uppercase tracking-[0.06em] text-[11px]">LIVE RIDER:</span>
+              <span className="text-[#FFFFFF] bg-[#18181B] px-2 py-0.5 font-mono font-semibold text-[11px] truncate border border-[#27272A]">
+                {previewAgent.name}
+              </span>
+              <span className="text-[#A1A1AA] font-mono text-[11px] hidden sm:inline">
+                ({previewAgent.vehicleType || 'Bike'})
+              </span>
             </div>
-
-            <button
-              onClick={() => setPreviewAgent(null)}
-              className="sm:hidden px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-950 rounded-full text-[11px] font-extrabold transition-all shadow-xs active:scale-95 flex items-center gap-1 shrink-0"
-            >
-              <ArrowLeft className="w-3 h-3" />
-              <span>Back</span>
-            </button>
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-2">
-            {/* Quick Switcher dropdown */}
-            <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-full border border-slate-700/80 text-[11px]">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Switch:</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 bg-[#18181B] px-2.5 py-1 border border-[#27272A] text-[11px] font-mono">
+              <span className="text-[11px] text-[#71717A] uppercase">RIDER:</span>
               <select
                 value={previewAgent.id}
                 onChange={(e) => {
                   const ag = deliveryAgents.find((a) => a.id === e.target.value);
                   if (ag) setPreviewAgent(ag);
                 }}
-                className="bg-transparent text-white text-[11px] font-bold focus:outline-none cursor-pointer pr-1"
+                className="bg-transparent text-[#FFFFFF] text-[11px] font-mono focus:outline-none cursor-pointer pr-1"
               >
                 {deliveryAgents.map((ag) => (
-                  <option key={ag.id} value={ag.id} className="bg-slate-900 text-white">
+                  <option key={ag.id} value={ag.id} className="bg-[#18181B] text-[#FFFFFF]">
                     {ag.name} ({ag.vehicleType || 'Bike'})
                   </option>
                 ))}
@@ -900,10 +1005,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button
               onClick={() => setPreviewAgent(null)}
-              className="hidden sm:flex px-3 py-1 bg-white hover:bg-slate-100 text-slate-950 rounded-full text-xs font-extrabold transition-all shadow-xs active:scale-95 items-center gap-1.5"
+              className="px-3 py-1.5 bg-[#FFFFFF] text-[#0A0A0A] text-[11px] font-mono font-semibold uppercase tracking-[0.06em] flex items-center gap-1.5 cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Admin Console</span>
+              <span>Exit</span>
             </button>
           </div>
         </div>
@@ -923,46 +1028,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 2. Direct Kitchen Screen View Mode for Admin
   if (previewChef) {
     return (
-      <div className="min-h-screen bg-[#f8fafc] text-slate-900">
-        {/* Fixed Top Admin Live Kitchen Simulator Banner */}
-        <div className="sticky top-0 z-50 bg-slate-950 text-white px-3 sm:px-6 py-2 shadow-md border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center justify-between sm:justify-start gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 animate-pulse" />
-              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
-                <span className="text-slate-400 hidden xs:inline">LIVE KITCHEN:</span>
-                <span className="text-white bg-slate-800/90 px-2 py-0.5 rounded-full font-extrabold text-[11px] truncate">
-                  {previewChef.name}
-                </span>
-                <span className="text-slate-400 text-[10px] hidden sm:inline">
-                  ({previewChef.role})
-                </span>
-              </div>
+      <div className="admin-curator-console min-h-screen bg-[#0A0A0A] text-[#FFFFFF]">
+        <div className="sticky top-0 z-50 bg-[#0A0A0A] text-[#FFFFFF] px-3 sm:px-6 h-14 border-b border-[#27272A] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 bg-[#FF5500] shrink-0" />
+            <div className="flex items-center gap-2 text-xs font-mono truncate">
+              <span className="text-[#71717A] hidden xs:inline uppercase tracking-[0.06em] text-[11px]">LIVE KITCHEN:</span>
+              <span className="text-[#FFFFFF] bg-[#18181B] px-2 py-0.5 font-mono font-semibold text-[11px] truncate border border-[#27272A]">
+                {previewChef.name}
+              </span>
+              <span className="text-[#A1A1AA] text-[11px] hidden sm:inline">
+                ({previewChef.role})
+              </span>
             </div>
-
-            <button
-              onClick={() => setPreviewChef(null)}
-              className="sm:hidden px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-950 rounded-full text-[11px] font-extrabold transition-all shadow-xs active:scale-95 flex items-center gap-1 shrink-0"
-            >
-              <ArrowLeft className="w-3 h-3" />
-              <span>Back</span>
-            </button>
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-2">
-            {/* Quick Switcher dropdown */}
-            <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-full border border-slate-700/80 text-[11px]">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Switch:</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 bg-[#18181B] px-2.5 py-1 border border-[#27272A] text-[11px] font-mono">
+              <span className="text-[11px] text-[#71717A] uppercase">CHEF:</span>
               <select
                 value={previewChef.id}
                 onChange={(e) => {
                   const st = kitchenStaff.find((s) => s.id === e.target.value);
                   if (st) setPreviewChef(st);
                 }}
-                className="bg-transparent text-white text-[11px] font-bold focus:outline-none cursor-pointer pr-1"
+                className="bg-transparent text-[#FFFFFF] text-[11px] font-mono focus:outline-none cursor-pointer pr-1"
               >
                 {kitchenStaff.map((st) => (
-                  <option key={st.id} value={st.id} className="bg-slate-900 text-white">
+                  <option key={st.id} value={st.id} className="bg-[#18181B] text-[#FFFFFF]">
                     {st.name} ({st.role})
                   </option>
                 ))}
@@ -971,10 +1064,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button
               onClick={() => setPreviewChef(null)}
-              className="hidden sm:flex px-3 py-1 bg-white hover:bg-slate-100 text-slate-950 rounded-full text-xs font-extrabold transition-all shadow-xs active:scale-95 items-center gap-1.5"
+              className="px-3 py-1.5 bg-[#FFFFFF] text-[#0A0A0A] text-[11px] font-mono font-semibold uppercase tracking-[0.06em] flex items-center gap-1.5 cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Admin Console</span>
+              <span>Exit</span>
             </button>
           </div>
         </div>
@@ -994,44 +1087,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 3. Direct Preparing & Packing Screen View Mode for Admin
   if (previewPreparingStaff) {
     return (
-      <div className="min-h-screen bg-[#f8fafc] text-slate-900">
-        {/* Fixed Top Admin Live Preparing Simulator Banner */}
-        <div className="sticky top-0 z-50 bg-slate-950 text-white px-3 sm:px-6 py-2 shadow-md border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center justify-between sm:justify-start gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2 h-2 rounded-full bg-indigo-400 shrink-0 animate-pulse" />
-              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
-                <span className="text-slate-400 hidden xs:inline">LIVE PREPARING:</span>
-                <span className="text-white bg-slate-800/90 px-2 py-0.5 rounded-full font-extrabold text-[11px] truncate">
-                  {previewPreparingStaff.name}
-                </span>
-                <span className="text-slate-400 text-[10px] hidden sm:inline">
-                  ({previewPreparingStaff.role})
-                </span>
-              </div>
+      <div className="admin-curator-console min-h-screen bg-[#0A0A0A] text-[#FFFFFF]">
+        <div className="sticky top-0 z-50 bg-[#0A0A0A] text-[#FFFFFF] px-3 sm:px-6 h-14 border-b border-[#27272A] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2 h-2 bg-[#FF5500] shrink-0" />
+            <div className="flex items-center gap-2 text-xs font-mono truncate">
+              <span className="text-[#71717A] hidden xs:inline uppercase tracking-[0.06em] text-[11px]">LIVE PREPARING:</span>
+              <span className="text-[#FFFFFF] bg-[#18181B] px-2 py-0.5 font-mono font-semibold text-[11px] truncate border border-[#27272A]">
+                {previewPreparingStaff.name}
+              </span>
+              <span className="text-[#A1A1AA] text-[11px] hidden sm:inline">
+                ({previewPreparingStaff.role})
+              </span>
             </div>
-
-            <button
-              onClick={() => setPreviewPreparingStaff(null)}
-              className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg hover:bg-slate-800/80 transition-colors"
-            >
-              Exit Live Mode
-            </button>
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-2">
-            <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-full border border-slate-700/80 text-[11px]">
-              <span className="text-[10px] text-slate-400 font-bold uppercase">Switch:</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 bg-[#18181B] px-2.5 py-1 border border-[#27272A] text-[11px] font-mono">
+              <span className="text-[11px] text-[#71717A] uppercase">STAFF:</span>
               <select
                 value={previewPreparingStaff.id}
                 onChange={(e) => {
                   const st = preparingStaff.find((s) => s.id === e.target.value);
                   if (st) setPreviewPreparingStaff(st);
                 }}
-                className="bg-transparent text-white text-[11px] font-bold focus:outline-none cursor-pointer pr-1"
+                className="bg-transparent text-[#FFFFFF] text-[11px] font-mono focus:outline-none cursor-pointer pr-1"
               >
                 {preparingStaff.map((st) => (
-                  <option key={st.id} value={st.id} className="bg-slate-900 text-white">
+                  <option key={st.id} value={st.id} className="bg-[#18181B] text-[#FFFFFF]">
                     {st.name} ({st.role})
                   </option>
                 ))}
@@ -1040,10 +1123,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button
               onClick={() => setPreviewPreparingStaff(null)}
-              className="hidden sm:flex px-3 py-1 bg-white hover:bg-slate-100 text-slate-950 rounded-full text-xs font-extrabold transition-all shadow-xs active:scale-95 items-center gap-1.5"
+              className="px-3 py-1.5 bg-[#FFFFFF] text-[#0A0A0A] text-[11px] font-mono font-semibold uppercase tracking-[0.06em] flex items-center gap-1.5 cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Admin Console</span>
+              <span>Exit</span>
             </button>
           </div>
         </div>
@@ -1060,264 +1143,275 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 pt-[max(env(safe-area-inset-top,0px),0px)]">
-
-      {/* Top Refined Floating Header / Dock */}
-      <header className="sticky top-[max(calc(env(safe-area-inset-top,0px)+0.5rem),0.75rem)] z-40 px-2 sm:px-6 max-w-7xl mx-auto mb-4 sm:mb-5">
-        <div className="bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-full border border-slate-200/80 shadow-[0_4px_24px_rgba(15,23,42,0.06)] px-2 sm:px-4 py-1.5 sm:py-2 flex items-center justify-between gap-1.5 sm:gap-3 transition-all max-w-full">
-          {/* Floating Pill Navigation Tabs - Cleanly utilizing full space without bulky brand/admin badge */}
-          <nav className="flex-1 min-w-0 overflow-x-auto no-scrollbar flex items-center gap-0.5 sm:gap-1 py-0.5">
-            <div className="flex items-center bg-slate-100/90 p-1 rounded-full border border-slate-200/70 shadow-2xs gap-0.5 shrink-0">
-              <button
-                onClick={() => setActiveTab('orders')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'orders'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-orders"
-              >
-                <ShoppingBag className="w-3.5 h-3.5" />
-                <span>Orders</span>
-                {pendingOrders.length > 0 && (
-                  <span className="bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-4 text-center leading-tight">
-                    {pendingOrders.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveTab('products')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'products'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-products"
-              >
-                <Utensils className="w-3.5 h-3.5" />
-                <span>Menu</span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab('staff')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'staff'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-staff"
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>Staff</span>
-                {(kitchenStaff.length + preparingStaff.length + deliveryAgents.length) > 0 && (
-                  <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                      activeTab === 'staff'
-                        ? 'bg-slate-800 text-slate-200'
-                        : 'bg-slate-200/90 text-slate-700'
-                    }`}
-                  >
-                    {kitchenStaff.length + preparingStaff.length + deliveryAgents.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setActiveTab('settings')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'settings'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-settings"
-              >
-                <SettingsGearIcon className="w-3.5 h-3.5" />
-                <span>Settings</span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab('stats')}
-                className={`px-3 sm:px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                  activeTab === 'stats'
-                    ? 'bg-slate-900 text-white shadow-xs font-bold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
-                }`}
-                id="admin-tab-stats"
-              >
-                <Boxes className="w-3.5 h-3.5" />
-                <span>Analytics & Stock</span>
-                {lowStockCount > 0 && (
-                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                )}
-              </button>
-            </div>
-          </nav>
-
-          {/* Right Action Controls - Fixed width elements strictly with shrink-0 so they never clip or go outside screen */}
-          <div className="flex items-center gap-1 sm:gap-2 shrink-0 ml-auto">
-            {/* Quick Live Screens Dropdown Launcher */}
-            <div className="relative">
-              <button
-                onClick={() => setIsScreenSwitcherOpen(!isScreenSwitcherOpen)}
-                className="px-2 sm:px-3 py-1.5 bg-slate-100/90 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-full flex items-center gap-1 sm:gap-1.5 transition-all active:scale-95 border border-slate-200/70 cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
-                title="Directly view any Rider or Kitchen screen"
-              >
-                <MonitorPlay className="w-3.5 h-3.5 text-slate-700" />
-                <span className="hidden sm:inline">Screens</span>
-                <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isScreenSwitcherOpen ? 'rotate-180' : ''}`} />
-              </button>
-
-              {isScreenSwitcherOpen && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 p-2.5 z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150">
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block px-2 py-0.5">
-                      Delivery Riders ({deliveryAgents.length})
-                    </span>
-                    <div className="space-y-0.5 mt-1">
-                      {deliveryAgents.map((ag) => (
-                        <button
-                          key={ag.id}
-                          onClick={() => {
-                            setPreviewAgent(ag);
-                            setIsScreenSwitcherOpen(false);
-                          }}
-                          className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-slate-100 text-xs font-bold text-slate-800 flex items-center justify-between transition-colors cursor-pointer"
-                        >
-                          <div className="flex items-center gap-2">
-                            <Bike className="w-3.5 h-3.5 text-slate-500" />
-                            <span>{ag.name}</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {ag.vehicleType || 'Bike'}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="pt-1.5 border-t border-slate-100">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block px-2 py-0.5">
-                      Kitchen Chefs ({kitchenStaff.length})
-                    </span>
-                    <div className="space-y-0.5 mt-1">
-                      {kitchenStaff.map((st) => (
-                        <button
-                          key={st.id}
-                          onClick={() => {
-                            setPreviewChef(st);
-                            setIsScreenSwitcherOpen(false);
-                          }}
-                          className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-slate-100 text-xs font-bold text-slate-800 flex items-center justify-between transition-colors cursor-pointer"
-                        >
-                          <div className="flex items-center gap-2">
-                            <ChefHat className="w-3.5 h-3.5 text-slate-500" />
-                            <span>{st.name}</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-mono truncate max-w-[80px]">
-                            {st.role}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="pt-1.5 border-t border-slate-100">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block px-2 py-0.5">
-                      Preparing & Packing ({preparingStaff.length})
-                    </span>
-                    <div className="space-y-0.5 mt-1">
-                      {preparingStaff.map((st) => (
-                        <button
-                          key={st.id}
-                          onClick={() => {
-                            setPreviewPreparingStaff(st);
-                            setIsScreenSwitcherOpen(false);
-                          }}
-                          className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-slate-100 text-xs font-bold text-slate-800 flex items-center justify-between transition-colors cursor-pointer"
-                        >
-                          <div className="flex items-center gap-2">
-                            <PackageCheck className="w-3.5 h-3.5 text-slate-500" />
-                            <span>{st.name}</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-mono truncate max-w-[80px]">
-                            {st.role}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Zero-Loop Live Database Connection & Quota All-in-One Status Indicator */}
-            <DatabaseStatusIndicator />
-
-            {/* Direct One-Tap Test App Notification Button */}
+    <div className="admin-curator-console min-h-screen bg-[#0A0A0A] text-[#FFFFFF] pb-20 pt-[max(env(safe-area-inset-top,0px),0px)]">
+      {/* Top Curator Header Bar — Height 56px, Pure Matte Black #0A0A0A, 1px solid #27272A */}
+      <header className="sticky top-0 z-40 h-14 bg-[#0A0A0A] border-b border-[#27272A] mb-5">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-full flex items-center justify-between gap-4">
+          {/* Left & Center: Horizontal Navigation Tabs (Architectural Uppercase + Extended 0.18em Tracking) */}
+          <nav className="flex-1 min-w-0 overflow-x-auto no-scrollbar flex items-center justify-start gap-6 sm:gap-8 lg:gap-10 h-full">
             <button
               type="button"
-              onClick={handleTestNotificationClick}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-bold transition-all border flex items-center gap-1.5 cursor-pointer shadow-2xs shrink-0 active:scale-95 ${
-                soundAlert.permissionStatus === 'granted'
-                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300/80'
-                  : 'bg-amber-500 hover:bg-amber-600 text-slate-950 border-amber-600 animate-pulse'
+              onClick={() => setActiveTab('products')}
+              className={`h-full flex items-center text-[11px] uppercase tracking-[0.18em] whitespace-nowrap cursor-pointer shrink-0 border-b-2 font-['Plus_Jakarta_Sans',sans-serif] transition-none ${
+                activeTab === 'products'
+                  ? 'text-[#FFFFFF] font-bold border-[#FFFFFF] pb-1'
+                  : 'text-[#A1A1AA] hover:text-[#FFFFFF] font-bold border-transparent'
               }`}
-              title="Test Phone Notification & Ring Sound"
-              id="admin-test-notification-header-btn"
+              id="admin-tab-products"
             >
-              <Bell className="w-3.5 h-3.5 fill-current" />
-              <span className="text-[11px] font-extrabold hidden xs:inline sm:inline">
-                {soundAlert.permissionStatus === 'granted' ? 'Test Alert' : 'Allow & Test 🔔'}
+              <span className="tracking-[0.18em]">CATALOG</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('orders')}
+              className={`h-full flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] whitespace-nowrap cursor-pointer shrink-0 border-b-2 font-['Plus_Jakarta_Sans',sans-serif] transition-none ${
+                activeTab === 'orders'
+                  ? 'text-[#FFFFFF] font-bold border-[#FFFFFF] pb-1'
+                  : 'text-[#A1A1AA] hover:text-[#FFFFFF] font-bold border-transparent'
+              }`}
+              id="admin-tab-orders"
+            >
+              <span className="tracking-[0.18em]">ORDERS</span>
+              {pendingOrders.length > 0 && (
+                <span className="bg-[#FF5500] text-[#FFFFFF] text-[10px] font-mono font-bold px-1.5 py-0.2 leading-tight tabular-nums tracking-[0.12em]">
+                  {pendingOrders.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('staff')}
+              className={`h-full flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] whitespace-nowrap cursor-pointer shrink-0 border-b-2 font-['Plus_Jakarta_Sans',sans-serif] transition-none ${
+                activeTab === 'staff'
+                  ? 'text-[#FFFFFF] font-bold border-[#FFFFFF] pb-1'
+                  : 'text-[#A1A1AA] hover:text-[#FFFFFF] font-bold border-transparent'
+              }`}
+              id="admin-tab-staff"
+            >
+              <span className="tracking-[0.18em]">STAFF</span>
+              <span className={`font-mono tabular-nums tracking-[0.12em] text-[11px] ${activeTab === 'staff' ? 'text-[#FFFFFF]' : 'text-[#71717A]'}`}>
+                {kitchenStaff.length + preparingStaff.length + deliveryAgents.length}
               </span>
             </button>
 
-            {/* Sound & Custom Audio Settings Modal Trigger */}
             <button
-              onClick={() => soundAlert.setIsAlertModalOpen(true)}
-              className="p-1.5 sm:p-2 rounded-full text-xs font-bold transition-colors bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/60 cursor-pointer shadow-2xs shrink-0"
-              title="Configure Sound Alert & Custom Audio"
-              id="admin-sound-settings-btn"
-            >
-              <Sliders className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-700" />
-            </button>
-
-            {/* Sound Mute/Unmute Toggle */}
-            <button
-              onClick={soundAlert.toggleSoundEnabled}
-              className={`p-1.5 sm:p-2 rounded-full text-xs font-bold transition-colors border border-slate-200/60 cursor-pointer shadow-2xs shrink-0 ${
-                soundAlert.settings.soundEnabled
-                  ? 'bg-slate-100 text-slate-900 hover:bg-slate-200'
-                  : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+              type="button"
+              onClick={() => setActiveTab('stats')}
+              className={`h-full flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] whitespace-nowrap cursor-pointer shrink-0 border-b-2 font-['Plus_Jakarta_Sans',sans-serif] transition-none ${
+                activeTab === 'stats'
+                  ? 'text-[#FFFFFF] font-bold border-[#FFFFFF] pb-1'
+                  : 'text-[#A1A1AA] hover:text-[#FFFFFF] font-bold border-transparent'
               }`}
-              title={soundAlert.settings.soundEnabled ? 'Order sound alerts: ON' : 'Order sound alerts: MUTED'}
+              id="admin-tab-stats"
             >
-              {soundAlert.settings.soundEnabled ? (
-                <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-900" />
-              ) : (
-                <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
+              <span className="tracking-[0.18em]">STOCK</span>
+              {lowStockCount > 0 && (
+                <span className="bg-[#F59E0B] text-[#0A0A0A] text-[10px] font-mono font-bold px-1.5 py-0.2 leading-tight tabular-nums tracking-[0.12em]">
+                  {lowStockCount}
+                </span>
               )}
             </button>
 
-            {/* Back to Customer Store */}
             <button
-              onClick={onBackToStore}
-              className="px-2.5 sm:px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-full flex items-center gap-1.5 transition-colors border border-slate-200/60 cursor-pointer shadow-2xs shrink-0"
-              id="admin-to-store-btn"
-              title="Return to Customer Store"
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              className={`h-full flex items-center text-[11px] uppercase tracking-[0.18em] whitespace-nowrap cursor-pointer shrink-0 border-b-2 font-['Plus_Jakarta_Sans',sans-serif] transition-none ${
+                activeTab === 'settings'
+                  ? 'text-[#FFFFFF] font-bold border-[#FFFFFF] pb-1'
+                  : 'text-[#A1A1AA] hover:text-[#FFFFFF] font-bold border-transparent'
+              }`}
+              id="admin-tab-settings"
             >
-              <Store className="w-3.5 h-3.5 text-slate-700" />
-              <span className="hidden sm:inline">Store</span>
+              <span className="tracking-[0.18em]">SETTINGS</span>
+            </button>
+          </nav>
+
+          {/* Right: Tools Popover + Storefront Link + Sign Out */}
+          <div className="flex items-center gap-3 sm:gap-5 shrink-0">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsScreenSwitcherOpen(!isScreenSwitcherOpen)}
+                className={`px-3.5 py-1.5 text-[11px] font-mono font-bold uppercase tracking-[0.18em] flex items-center gap-2 cursor-pointer whitespace-nowrap ${
+                  isScreenSwitcherOpen
+                    ? 'text-[#FFFFFF]'
+                    : 'text-[#A1A1AA] hover:text-[#FFFFFF]'
+                }`}
+                title="Console Tools, Alerts, Screens & Sync Status"
+              >
+                <Sliders className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline tracking-[0.18em]">TOOLS</span>
+                <ChevronDown className="w-3 h-3 shrink-0" />
+              </button>
+
+              {isScreenSwitcherOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40 bg-transparent"
+                    onClick={() => setIsScreenSwitcherOpen(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-1.5 w-72 bg-[#18181B] border border-[#27272A] p-3.5 z-50 space-y-3.5 shadow-2xl">
+                    {/* Section 1: Sound & Phone Notification Controls */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-mono font-bold uppercase tracking-[0.1em] text-[#71717A]">
+                          ALERTS &amp; AUDIO
+                        </span>
+                        <DatabaseStatusIndicator />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleTestNotificationClick}
+                          className="col-span-2 px-3 py-2 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] border border-[#FF5500] text-[11px] font-mono font-bold uppercase tracking-[0.1em] flex items-center justify-center gap-1.5 cursor-pointer"
+                          id="admin-test-notification-header-btn"
+                        >
+                          <Bell className="w-3.5 h-3.5" />
+                          <span>
+                            {soundAlert.permissionStatus === 'granted' ? 'TEST PHONE ALERT' : 'ALLOW & TEST ALERT'}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={soundAlert.toggleSoundEnabled}
+                          className="px-2.5 py-1.5 border border-[#27272A] bg-[#121212] hover:bg-[#242427] text-[11px] font-mono font-bold uppercase tracking-[0.1em] text-[#FFFFFF] flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          {soundAlert.settings.soundEnabled ? (
+                            <>
+                              <Volume2 className="w-3.5 h-3.5 text-[#10B981]" />
+                              <span className="text-[#10B981]">SOUND: ON</span>
+                            </>
+                          ) : (
+                            <>
+                              <VolumeX className="w-3.5 h-3.5 text-[#71717A]" />
+                              <span className="text-[#71717A]">MUTED</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsScreenSwitcherOpen(false);
+                            soundAlert.setIsAlertModalOpen(true);
+                          }}
+                          className="px-2.5 py-1.5 border border-[#27272A] bg-[#121212] hover:bg-[#242427] text-[11px] font-mono font-bold uppercase tracking-[0.1em] text-[#A1A1AA] hover:text-[#FFFFFF] flex items-center justify-center gap-1.5 cursor-pointer"
+                          id="admin-sound-settings-btn"
+                        >
+                          <Sliders className="w-3.5 h-3.5 text-[#FF5500]" />
+                          <span>RINGTONE</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Section 2: Live Staff Screens Switcher */}
+                    <div className="pt-2.5 border-t border-[#27272A] space-y-1.5">
+                      <span className="text-[11px] font-mono font-bold uppercase tracking-[0.1em] text-[#71717A] block">
+                        DELIVERY RIDERS ({deliveryAgents.length})
+                      </span>
+                      <div className="space-y-1 max-h-28 overflow-y-auto">
+                        {deliveryAgents.map((ag) => (
+                          <button
+                            key={ag.id}
+                            onClick={() => {
+                              setPreviewAgent(ag);
+                              setIsScreenSwitcherOpen(false);
+                            }}
+                            className="w-full text-left px-2.5 py-1.5 bg-[#121212] hover:bg-[#242427] border border-[#27272A] text-xs font-bold text-[#FFFFFF] flex items-center justify-between cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Bike className="w-3.5 h-3.5 text-[#A1A1AA]" />
+                              <span>{ag.name}</span>
+                            </div>
+                            <span className="text-[10px] text-[#A1A1AA] font-mono font-bold uppercase tracking-[0.06em]">
+                              {ag.vehicleType || 'Bike'}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-[#27272A] space-y-1.5">
+                      <span className="text-[11px] font-mono font-bold uppercase tracking-[0.1em] text-[#71717A] block">
+                        KITCHEN CHEFS ({kitchenStaff.length})
+                      </span>
+                      <div className="space-y-1 max-h-28 overflow-y-auto">
+                        {kitchenStaff.map((st) => (
+                          <button
+                            key={st.id}
+                            onClick={() => {
+                              setPreviewChef(st);
+                              setIsScreenSwitcherOpen(false);
+                            }}
+                            className="w-full text-left px-2.5 py-1.5 bg-[#121212] hover:bg-[#242427] border border-[#27272A] text-xs font-bold text-[#FFFFFF] flex items-center justify-between cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2">
+                              <ChefHat className="w-3.5 h-3.5 text-[#A1A1AA]" />
+                              <span>{st.name}</span>
+                            </div>
+                            <span className="text-[10px] text-[#A1A1AA] font-mono font-bold truncate max-w-[90px] uppercase tracking-[0.06em]">
+                              {st.role}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-[#27272A] space-y-1.5">
+                      <span className="text-[11px] font-mono font-bold uppercase tracking-[0.1em] text-[#71717A] block">
+                        PREPARING &amp; PACKING ({preparingStaff.length})
+                      </span>
+                      <div className="space-y-1 max-h-28 overflow-y-auto">
+                        {preparingStaff.map((st) => (
+                          <button
+                            key={st.id}
+                            onClick={() => {
+                              setPreviewPreparingStaff(st);
+                              setIsScreenSwitcherOpen(false);
+                            }}
+                            className="w-full text-left px-2.5 py-1.5 bg-[#121212] hover:bg-[#242427] border border-[#27272A] text-xs font-bold text-[#FFFFFF] flex items-center justify-between cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2">
+                              <PackageCheck className="w-3.5 h-3.5 text-[#A1A1AA]" />
+                              <span>{st.name}</span>
+                            </div>
+                            <span className="text-[10px] text-[#A1A1AA] font-mono font-bold truncate max-w-[90px] uppercase tracking-[0.06em]">
+                              {st.role}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Storefront Link (Without right arrow icon, wide architectural letter-spacing) */}
+            <button
+              type="button"
+              onClick={onBackToStore}
+              className="px-3 py-1.5 text-[#A1A1AA] hover:text-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.18em] flex items-center gap-2 cursor-pointer whitespace-nowrap"
+              id="admin-to-store-btn"
+              title="Return to Customer Storefront"
+            >
+              <Store className="w-3.5 h-3.5 text-[#A1A1AA] shrink-0" />
+              <span className="hidden sm:inline tracking-[0.18em]">STOREFRONT</span>
             </button>
 
-            {/* Sign Out Button with Confirmation Prompt */}
+            {/* Sign Out Button */}
             <button
+              type="button"
               onClick={() => setIsLogoutConfirmOpen(true)}
-              className="p-1.5 sm:p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors cursor-pointer shrink-0"
+              className="p-1.5 text-[#71717A] hover:text-[#EF4444] cursor-pointer shrink-0"
               title="Sign Out"
               id="admin-logout-btn"
             >
-              <LogOut className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -1328,38 +1422,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Test Notification Feedback Toast */}
         {notificationTestToast && (
           <div
-            className={`p-3 rounded-2xl border text-xs font-bold flex items-center justify-between shadow-md transition-all animate-in fade-in duration-200 ${
+            className={`p-3 border text-xs font-mono flex items-center justify-between ${
               notificationTestToast.type === 'success'
-                ? 'bg-emerald-50 text-emerald-900 border-emerald-300'
-                : 'bg-amber-50 text-amber-900 border-amber-300'
+                ? 'bg-[#18181B] text-[#10B981] border-[#10B981]/50'
+                : 'bg-[#18181B] text-[#F59E0B] border-[#F59E0B]/50'
             }`}
           >
             <span>{notificationTestToast.message}</span>
             <button
               onClick={() => setNotificationTestToast(null)}
-              className="p-1 hover:bg-black/5 rounded-full cursor-pointer"
+              className="p-1 text-[#A1A1AA] hover:text-[#FFFFFF] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
+
         {/* Active Repeating Alarm Notification Banner */}
         {soundAlert.isAlarmRinging && (
-          <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 rounded-2xl p-3.5 shadow-xl border border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-4 animate-fade-in ring-2 ring-amber-500/20">
-            <div className="flex items-center gap-3 w-full sm:w-auto pl-1">
-              <div className="w-9 h-9 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 animate-bounce shadow-[0_0_15px_rgba(245,158,11,0.6)]">
+          <div className="bg-[#18181B] p-4 border border-[#FF5500] flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <div className="w-9 h-9 bg-[#FF5500] text-[#FFFFFF] flex items-center justify-center shrink-0">
                 <Bell className="w-4 h-4 fill-current" />
               </div>
               <div>
-                <h4 className="font-bold text-sm text-white tracking-wide flex items-center gap-2">
-                  <span>🔔 Naya Order Ringing!</span>
-                  <span className="font-mono text-xs px-2.5 py-0.5 rounded-full bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold animate-pulse">
-                    {Math.floor(soundAlert.alarmSecondsLeft / 60)}:{(soundAlert.alarmSecondsLeft % 60).toString().padStart(2, '0')} remaining
+                <h4 className="font-bold text-sm text-[#FFFFFF] tracking-[-0.02em] flex items-center gap-2 uppercase">
+                  <span>Incoming Order Alert</span>
+                  <span className="font-mono text-xs px-2 py-0.5 bg-[#0A0A0A] text-[#FF5500] border border-[#27272A] font-semibold">
+                    {Math.floor(soundAlert.alarmSecondsLeft / 60)}:{(soundAlert.alarmSecondsLeft % 60).toString().padStart(2, '0')}
                   </span>
                 </h4>
-                <p className="text-[11px] text-slate-300">
-                  2 minute tak continuous reminder bajta rahega, jab tak accept ya reject na ho jaye.
-                </p>
               </div>
             </div>
 
@@ -1369,15 +1461,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setSelectedStatusFilter('pending');
                   setActiveTab('orders');
                 }}
-                className="flex-1 sm:flex-initial px-4 py-2 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-extrabold text-xs rounded-full transition-all shadow-md shadow-amber-500/20"
+                className="flex-1 sm:flex-initial px-4 py-2 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-semibold text-xs uppercase tracking-[0.06em] cursor-pointer"
               >
-                Review & Accept ({pendingOrders.length})
+                Review &amp; Accept ({pendingOrders.length})
               </button>
               <button
                 onClick={soundAlert.silenceAlarm}
-                className="flex-1 sm:flex-initial px-4 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-bold text-xs rounded-full transition-all border border-slate-700"
+                className="flex-1 sm:flex-initial px-4 py-2 bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] font-mono text-xs uppercase tracking-[0.06em] border border-[#27272A] cursor-pointer"
               >
-                🔕 Mute / Stop Ringing
+                Mute Alarm
               </button>
             </div>
           </div>
@@ -1385,248 +1477,245 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {/* Tab 1: Live Orders Management & Order History Archive (Persisted in DOM for instant 0ms tab switching) */}
         <div className={activeTab === 'orders' ? 'space-y-4' : 'hidden'}>
-            {/* Orders Sub-tab switcher: Full-width expanded modern segmented bar (NO empty gap on right) */}
-            <div className="w-full bg-white p-1.5 rounded-2xl sm:rounded-3xl border border-slate-200/90 shadow-2xs flex items-center gap-2">
+          {/* Sub-Navigation Bar: Today's Orders vs Archive (LEKHIX Style with breathable spacing) */}
+          <div className="pb-4 border-b border-[#27272A] flex flex-col md:flex-row md:items-center justify-between gap-4 text-[#FFFFFF]">
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="text-[18px] font-bold uppercase tracking-[0.04em] text-[#FFFFFF] font-['Plus_Jakarta_Sans',sans-serif]">
+                ORDERS
+              </h2>
+              <span className="px-2 py-0.5 border border-[#FFFFFF] bg-[#0A0A0A] text-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.12em]">
+                LIVE
+              </span>
+              <span className="text-[11px] font-mono font-medium text-[#A1A1AA] uppercase tracking-[0.14em]">
+                {todayOrders.length} TODAY · {archivedOrders.length} ARCHIVED
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => setOrdersSubTab('today')}
-                className={`flex-1 py-2.5 sm:py-3 px-3 rounded-xl sm:rounded-2xl text-xs sm:text-sm font-heading font-extrabold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.08em] border flex items-center gap-2 cursor-pointer whitespace-nowrap font-bold rounded-none ${
                   ordersSubTab === 'today'
-                    ? 'bg-slate-950 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/80'
+                    ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF]'
+                    : 'bg-[#18181B] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
                 }`}
               >
-                <Clock className={`w-4 h-4 ${ordersSubTab === 'today' ? 'text-amber-400' : 'text-slate-400'}`} />
-                <span>TODAY'S</span>
-                <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                  ordersSubTab === 'today' ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30' : 'bg-slate-100 text-slate-700'
-                }`}>
-                  {todayOrders.length}
+                <span>TODAY&apos;S ORDERS</span>
+                <span className={`font-mono tabular-nums tracking-[0.06em] text-[11px] ${ordersSubTab === 'today' ? 'text-[#0A0A0A]' : 'text-[#71717A]'}`}>
+                  ({todayOrders.length})
                 </span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setOrdersSubTab('history')}
-                className={`flex-1 py-2.5 sm:py-3 px-3 rounded-xl sm:rounded-2xl text-xs sm:text-sm font-heading font-extrabold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.08em] border flex items-center gap-2 cursor-pointer whitespace-nowrap font-bold rounded-none ${
                   ordersSubTab === 'history'
-                    ? 'bg-slate-950 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/80'
+                    ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF]'
+                    : 'bg-[#18181B] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
                 }`}
               >
-                <FileText className={`w-4 h-4 ${ordersSubTab === 'history' ? 'text-emerald-400' : 'text-slate-400'}`} />
-                <span>Archive</span>
-                <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                  ordersSubTab === 'history' ? 'bg-emerald-400/20 text-emerald-300 border border-emerald-400/30' : 'bg-slate-100 text-slate-700'
-                }`}>
-                  {archivedOrders.length}
+                <span>ARCHIVE</span>
+                <span className={`font-mono tabular-nums tracking-[0.06em] text-[11px] ${ordersSubTab === 'history' ? 'text-[#0A0A0A]' : 'text-[#71717A]'}`}>
+                  ({archivedOrders.length})
                 </span>
               </button>
-            </div>
 
-            {ordersSubTab === 'history' ? (
-              <OrderHistoryView
-                archivedOrders={archivedOrders}
-                onDeleteArchivedOrder={handleDeleteArchivedOrder}
-                onClearAllHistory={handleClearAllHistory}
-              />
-            ) : (
-              <>
-                {/* Filter Pill Strip & Search */}
-                <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-3 sm:p-4 flex flex-col md:flex-row items-center justify-between gap-3">
-                  <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto no-scrollbar py-0.5">
-                    <button
-                      onClick={() => setSelectedStatusFilter('all')}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 ${
-                        selectedStatusFilter === 'all'
-                          ? 'bg-slate-900 text-white shadow-xs'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      All ({todayOrders.length})
-                    </button>
+              <button
+                type="button"
+                onClick={handleTestNotificationClick}
+                className="px-3 py-1.5 bg-[#18181B] hover:bg-[#242427] text-[#E4E4E7] hover:text-[#FFFFFF] border border-[#27272A] text-[10.5px] font-mono uppercase tracking-[0.1em] font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer rounded-none"
+                title="Test App Notification on Phone"
+                id="admin-test-notification-toolbar-btn"
+              >
+                <Bell className="w-3.5 h-3.5 text-[#FF5500]" />
+                <span>TEST ALERT</span>
+              </button>
+
+              {orders.length > 0 && (
+                <button
+                  onClick={() => setIsClearingAllModalOpen(true)}
+                  className="px-3 py-1.5 bg-[#18181B] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#EF4444] border border-[#27272A] text-[10.5px] font-mono uppercase tracking-[0.1em] font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer rounded-none"
+                  title="Delete all test orders"
+                  id="admin-clear-orders-btn"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">CLEAR ORDERS</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 0ms Archive History View (Persisted in DOM) */}
+          <div className={ordersSubTab === 'history' ? 'block' : 'hidden'}>
+            <OrderHistoryView
+              archivedOrders={archivedOrders}
+              onDeleteArchivedOrder={handleDeleteArchivedOrder}
+              onClearAllHistory={handleClearAllHistory}
+            />
+          </div>
+
+          {/* 0ms Today Orders View (Persisted in DOM) */}
+          <div className={ordersSubTab === 'today' ? 'space-y-3' : 'hidden'}>
+            {/* Filter Pills & Search (LEKHIX Style with breathable spacing) */}
+            <div className="pb-3 border-b border-[#27272A] flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 text-[#FFFFFF]">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar font-mono text-xs">
+                <button
+                  onClick={() => setSelectedStatusFilter('all')}
+                  className={`px-3 py-1.5 uppercase tracking-[0.1em] whitespace-nowrap cursor-pointer border font-bold ${
+                    selectedStatusFilter === 'all'
+                      ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                      : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
+                  }`}
+                >
+                  ALL ({todayOrders.length})
+                </button>
 
                 <button
                   onClick={() => setSelectedStatusFilter('pending')}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 uppercase tracking-[0.1em] whitespace-nowrap cursor-pointer border flex items-center gap-1.5 font-bold ${
                     selectedStatusFilter === 'pending'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                      : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
                   }`}
                 >
-                  <span>Pending</span>
-                  <span className="bg-blue-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold">
+                  <span>PENDING</span>
+                  <span className="px-1.5 py-0.2 font-mono font-bold bg-[#F59E0B] text-[#0A0A0A] tracking-[0.06em]">
                     {pendingOrders.length}
                   </span>
                 </button>
 
                 <button
                   onClick={() => setSelectedStatusFilter('kitchen')}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 uppercase tracking-[0.1em] whitespace-nowrap cursor-pointer border font-bold ${
                     selectedStatusFilter === 'kitchen'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                      : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
                   }`}
                 >
-                  <ChefHat className="w-3.5 h-3.5 text-slate-500" />
-                  <span>In Kitchen ({inKitchenOrders.length})</span>
+                  IN KITCHEN ({inKitchenOrders.length})
                 </button>
 
                 <button
                   onClick={() => setSelectedStatusFilter('out_for_delivery')}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 uppercase tracking-[0.1em] whitespace-nowrap cursor-pointer border font-bold ${
                     selectedStatusFilter === 'out_for_delivery'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                      : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
                   }`}
                 >
-                  <Bike className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Out for Delivery ({outOrders.length})</span>
+                  DISPATCHED ({outOrders.length})
                 </button>
 
                 <button
                   onClick={() => setSelectedStatusFilter('delivered')}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 ${
+                  className={`px-3 py-1.5 uppercase tracking-[0.1em] whitespace-nowrap cursor-pointer border font-bold ${
                     selectedStatusFilter === 'delivered'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                      : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
                   }`}
                 >
-                  Delivered ({deliveredOrders.length})
+                  DELIVERED ({deliveredOrders.length})
                 </button>
 
                 <button
                   onClick={() => setSelectedStatusFilter('rejected')}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 ${
+                  className={`px-3 py-1.5 uppercase tracking-[0.1em] whitespace-nowrap cursor-pointer border font-bold ${
                     selectedStatusFilter === 'rejected'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      ? 'border-[#EF4444] bg-[#EF4444] text-[#FFFFFF]'
+                      : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#EF4444]'
                   }`}
                 >
-                  Cancelled ({rejectedOrders.length})
+                  CANCELLED ({rejectedOrders.length})
                 </button>
 
                 {cancellationRequestedOrders.length > 0 && (
                   <button
                     onClick={() => setSelectedStatusFilter('cancellation_requests')}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 animate-pulse ${
+                    className={`px-3 py-1.5 uppercase tracking-[0.1em] whitespace-nowrap cursor-pointer border flex items-center gap-1.5 font-bold ${
                       selectedStatusFilter === 'cancellation_requests'
-                        ? 'bg-rose-600 text-white shadow-xs'
-                        : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
+                        ? 'border-[#EF4444] bg-[#EF4444] text-[#FFFFFF]'
+                        : 'border-[#EF4444]/50 bg-[#18181B] text-[#EF4444]'
                     }`}
                   >
-                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                    <span>Cancel Requests ({cancellationRequestedOrders.length})</span>
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>CANCEL REQUESTS ({cancellationRequestedOrders.length})</span>
                   </button>
                 )}
               </div>
 
-              {/* Search & Bulk Test Reset Controls */}
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <div className="relative flex-1 md:w-64">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search ID, customer, phone..."
-                    value={orderSearchQuery}
-                    onChange={(e) => setOrderSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-full text-xs placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-slate-400 text-slate-900 transition-colors"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleTestNotificationClick}
-                  className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer shadow-2xs"
-                  title="Test App Notification on Phone"
-                  id="admin-test-notification-toolbar-btn"
-                >
-                  <Bell className="w-3.5 h-3.5 text-amber-700 fill-current" />
-                  <span className="hidden sm:inline">Test App Notification</span>
-                  <span className="sm:hidden">Test Alert</span>
-                </button>
-
-                {orders.length > 0 && (
-                  <button
-                    onClick={() => setIsClearingAllModalOpen(true)}
-                    className="px-3 py-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200/80 hover:border-rose-200 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 active:scale-95 cursor-pointer"
-                    title="Delete all test orders"
-                    id="admin-clear-orders-btn"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                    <span className="hidden sm:inline">Clear Test Orders</span>
-                  </button>
-                )}
+              {/* Search Input */}
+              <div className="relative w-full md:w-72 shrink-0 font-mono">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#71717A]" />
+                <input
+                  type="text"
+                  placeholder="FILTER ID, CUSTOMER, PHONE..."
+                  value={orderSearchQuery}
+                  onChange={(e) => setOrderSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-[#121212] border border-[#27272A] focus:border-[#FFFFFF] text-xs font-mono font-bold text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-none uppercase tracking-[0.1em]"
+                />
               </div>
             </div>
 
             {/* Orders Feed / Ledger */}
             {isLoadingOrders ? (
-              <div className="bg-white rounded-3xl p-12 text-center text-slate-400 space-y-3">
-                <p className="text-xs font-medium">Loading live orders stream...</p>
+              <div className="bg-[#18181B] border border-[#27272A] p-12 text-center text-[#71717A]">
+                <p className="text-xs font-mono font-bold uppercase tracking-[0.1em]">Loading live orders stream...</p>
               </div>
             ) : filteredOrders.length === 0 ? (
-              <div className="bg-white rounded-3xl p-12 text-center border border-slate-200/80 space-y-3">
-                <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-                  <ShoppingBag className="w-6 h-6" />
+              <div className="bg-[#18181B] border border-[#27272A] p-12 text-center space-y-2">
+                <div className="w-9 h-9 bg-[#121212] text-[#71717A] border border-[#27272A] flex items-center justify-center mx-auto">
+                  <ShoppingBag className="w-4 h-4" />
                 </div>
-                <h3 className="font-heading font-bold text-base text-slate-800">
-                  No orders found in this view
+                <h3 className="font-mono text-xs font-bold uppercase tracking-[0.14em] text-[#A1A1AA]">
+                  No Active Orders Found
                 </h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  {orders.length === 0
-                    ? 'No orders placed yet. Place a test order from the store!'
-                    : 'No orders match your current filter or search.'}
-                </p>
               </div>
             ) : (
               <div className="space-y-3">
                 {filteredOrders.map((order) => (
                   <div
                     key={order.id}
-                    className={`bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border shadow-xs transition-all ${
-                      order.status === 'pending'
-                        ? 'border-slate-900 ring-2 ring-slate-100'
-                        : 'border-slate-200/80 hover:border-slate-300'
-                    }`}
+                    className="bg-[#18181B] hover:bg-[#1E1E1E] p-4 border border-[#27272A] hover:border-[#3F3F46] [content-visibility:auto] [contain-intrinsic-size:160px]"
                     id={`admin-order-card-${order.orderId}`}
                   >
-                    {/* Header Row: Customer Name First, Order ID Tag, Phone & Timestamp, Status & Amount */}
-                    <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3.5">
+                    {/* Header Row */}
+                    <div className="flex items-start justify-between gap-3 border-b border-[#27272A] pb-3">
                       <div className="space-y-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-heading font-extrabold text-base sm:text-lg text-slate-900 truncate">
+                          <h3 className="font-bold text-base text-[#FFFFFF] tracking-normal leading-normal truncate">
                             {order.customerName}
                           </h3>
-                          <span className="font-mono font-extrabold text-[11px] text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-md border border-slate-200/80 shrink-0">
+                          <span className="font-mono text-[11px] font-bold tabular-nums tracking-[0.06em] text-[#A1A1AA] bg-[#121212] px-2 py-0.5 border border-[#27272A] shrink-0">
                             #{order.orderId}
                           </span>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-[#A1A1AA]">
                           <a
                             href={`tel:${order.phone}`}
-                            className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-950 font-semibold bg-slate-50 hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-200/70 transition-colors"
+                            className="inline-flex items-center gap-1 text-[#FFFFFF] hover:text-[#FF5500] font-mono font-bold tabular-nums tracking-[0.06em] text-[11px] bg-[#121212] px-2 py-0.5 border border-[#27272A]"
                           >
-                            <Phone className="w-3 h-3 text-slate-400" />
+                            <Phone className="w-3 h-3 text-[#71717A]" />
                             <span>{order.phone}</span>
                           </a>
                           {order.createdAt && (
-                            <span className="text-[11px] text-slate-400">
-                              • {new Date(order.createdAt?.seconds ? order.createdAt.seconds * 1000 : Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            <span className="text-[11px] text-[#71717A] font-mono font-bold tabular-nums tracking-[0.06em]">
+                              · {new Date(order.createdAt?.seconds ? order.createdAt.seconds * 1000 : order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           )}
                         </div>
                       </div>
 
-                      <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className="font-amount font-extrabold text-lg sm:text-xl text-slate-950">
+                      <div className="flex flex-col items-end gap-1.5 shrink-0">
+                        <span className="font-mono font-bold text-lg text-[#FFFFFF] tabular-nums tracking-[0.06em]">
                           ₹{order.totalAmount}
                         </span>
                         {order.cancellationStatus === 'requested' && order.status !== 'rejected' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200 animate-pulse">
-                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                            <span>Cancel Requested</span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono uppercase tracking-[0.06em] bg-[#EF4444]/10 text-[#EF4444] border border-[#EF4444]">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span>CANCEL REQUESTED</span>
                           </span>
                         ) : (
                           getStatusBadge(order.status)
@@ -1635,33 +1724,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     {/* Middle Details Grid */}
-                    <div className="py-3.5 grid grid-cols-1 md:grid-cols-12 gap-3 sm:gap-4 text-xs">
+                    <div className="py-3 grid grid-cols-1 md:grid-cols-12 gap-3 text-xs">
                       {/* Items & Bill Summary Section */}
                       <div className="md:col-span-6 space-y-1.5 flex flex-col h-full">
-                        <span className="font-bold text-slate-400 uppercase tracking-wider text-[10px] block">
+                        <span className="font-mono text-[#71717A] uppercase tracking-[0.06em] text-[11px] block">
                           ITEMS ORDERED ({order.items?.reduce((s, i) => s + i.quantity, 0) || 0})
                         </span>
-                        <div className="bg-slate-50/90 p-3.5 rounded-2xl border border-slate-100/90 flex flex-col h-full">
+                        <div className="bg-[#121212] p-3 border border-[#27272A] flex flex-col h-full">
                           <div className="space-y-2 mb-3">
                             {order.items?.map((item, idx) => (
-                              <div key={idx} className="flex justify-between items-start text-slate-700 pb-2 border-b border-slate-200/40 last:border-b-0 last:pb-0">
-                                <div className="flex items-start gap-2.5">
-                                  <span className="font-bold text-slate-900 bg-white px-1.5 py-0.5 rounded border border-slate-200/60 text-[11px] shadow-xs">
+                              <div key={idx} className="flex justify-between items-start text-[#A1A1AA] pb-2 border-b border-[#27272A] last:border-b-0 last:pb-0">
+                                <div className="flex items-start gap-2">
+                                  <span className="font-mono font-semibold text-[#FFFFFF] bg-[#18181B] px-1.5 py-0.5 border border-[#27272A] text-[11px]">
                                     {item.quantity}x
                                   </span>
                                   <div className="mt-0.5">
-                                    <span className="font-semibold text-slate-800 text-xs">{item.name}</span>
+                                    <span className="font-semibold text-[#FFFFFF] text-xs">{item.name}</span>
                                     {item.selectedSize && (
-                                      <span className="text-[9px] font-bold px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded-sm ml-1.5 tracking-wide uppercase">
+                                      <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#18181B] text-[#A1A1AA] border border-[#27272A] ml-1.5 uppercase">
                                         {item.selectedSize}
                                       </span>
                                     )}
                                     {item.selectedExtras && item.selectedExtras.length > 0 && (
-                                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                      <div className="flex flex-wrap items-center gap-1 mt-1">
                                         {item.selectedExtras.map((extra) => (
                                           <span
                                             key={extra.id}
-                                            className="text-[9px] font-bold text-amber-900 bg-amber-50 px-1 py-0.5 rounded border border-amber-200/80 leading-none"
+                                            className="text-[10px] font-mono text-[#A1A1AA] bg-[#18181B] px-1.5 py-0.5 border border-[#27272A] leading-none"
                                           >
                                             +{extra.name} (+₹{extra.price})
                                           </span>
@@ -1670,28 +1759,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     )}
                                   </div>
                                 </div>
-                                <span className="font-amount font-bold text-slate-900 shrink-0 ml-2 mt-0.5">
+                                <span className="font-mono font-semibold text-[#FFFFFF] shrink-0 ml-2 mt-0.5">
                                   ₹{item.price * item.quantity}
                                 </span>
                               </div>
                             ))}
                           </div>
-                          
-                          {/* Bill Summary - Pushed to bottom of the cell */}
-                          <div className="mt-auto pt-3 border-t border-slate-200/70 space-y-1.5">
+
+                          {/* Bill Summary */}
+                          <div className="mt-auto pt-2.5 border-t border-[#27272A] space-y-1 font-mono text-[11px]">
                             {(() => {
                               const subtotal = order.items?.reduce((sum, item) => sum + (item.price * item.quantity), 0) || 0;
                               const deliveryFee = order.totalAmount - subtotal;
                               return (
                                 <>
-                                  <div className="flex justify-between text-[11px] text-slate-500 font-medium">
-                                    <span>Item Total</span>
-                                    <span className="font-amount font-semibold text-slate-700">₹{subtotal}</span>
+                                  <div className="flex justify-between text-[#71717A]">
+                                    <span>ITEM TOTAL</span>
+                                    <span className="text-[#A1A1AA]">₹{subtotal}</span>
                                   </div>
-                                  <div className="flex justify-between text-[11px] text-slate-500 font-medium">
-                                    <span>Delivery Fee</span>
-                                    <span className="font-amount font-semibold text-slate-700">
-                                      {deliveryFee === 0 ? <span className="text-emerald-600">Free</span> : `₹${deliveryFee}`}
+                                  <div className="flex justify-between text-[#71717A]">
+                                    <span>DELIVERY FEE</span>
+                                    <span className="text-[#A1A1AA]">
+                                      {deliveryFee === 0 ? <span className="text-[#10B981]">FREE</span> : `₹${deliveryFee}`}
                                     </span>
                                   </div>
                                 </>
@@ -1703,52 +1792,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                       {/* Delivery Address & Rider Info Section */}
                       <div className="md:col-span-6 space-y-1.5 flex flex-col h-full">
-                        <span className="font-bold text-slate-400 uppercase tracking-wider text-[10px] block">
-                          DELIVERY ADDRESS & LOGISTICS
+                        <span className="font-mono text-[#71717A] uppercase tracking-[0.06em] text-[11px] block">
+                          DELIVERY ADDRESS &amp; LOGISTICS
                         </span>
-                        <div className="bg-slate-50/90 p-3.5 rounded-2xl border border-slate-100/90 flex flex-col h-full">
-                          <p className="text-slate-800 flex items-start gap-2 text-xs font-semibold leading-relaxed">
-                            <MapPin className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                        <div className="bg-[#121212] p-3 border border-[#27272A] flex flex-col h-full">
+                          <p className="text-[#FFFFFF] flex items-start gap-2 text-xs leading-relaxed">
+                            <MapPin className="w-3.5 h-3.5 text-[#71717A] shrink-0 mt-0.5" />
                             <span>{order.address}</span>
                           </p>
 
                           {order.notes && (
-                            <div className="mt-3">
-                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Customer Notes</span>
-                              <p className="text-slate-700 bg-white p-2.5 rounded-xl border border-amber-200/60 text-[11px] bg-amber-50/30">
-                                "{order.notes}"
+                            <div className="mt-2.5">
+                              <span className="text-[10px] font-mono text-[#F59E0B] uppercase tracking-[0.06em] block mb-1">CUSTOMER NOTES</span>
+                              <p className="text-[#FFFFFF] bg-[#18181B] p-2 border border-[#F59E0B]/40 text-xs">
+                                &ldquo;{order.notes}&rdquo;
                               </p>
                             </div>
                           )}
 
                           <div className="mt-auto pt-3">
                             {order.assignedAgentName ? (
-                              <div className="pt-3 border-t border-slate-200/60 flex flex-col gap-2">
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Assigned Rider</span>
-                                <div className="flex items-center justify-between bg-white border border-slate-200/60 p-2 rounded-xl shadow-xs">
+                              <div className="pt-2.5 border-t border-[#27272A] flex flex-col gap-1.5">
+                                <span className="text-[10px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">ASSIGNED RIDER</span>
+                                <div className="flex items-center justify-between bg-[#18181B] border border-[#27272A] p-2">
                                   <div className="flex items-center gap-2">
-                                    <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center">
-                                      <Bike className="w-3.5 h-3.5 text-slate-700" />
-                                    </div>
+                                    <Bike className="w-3.5 h-3.5 text-[#FF5500]" />
                                     <div className="flex flex-col">
-                                      <span className="font-bold text-slate-900 text-xs leading-none">{order.assignedAgentName}</span>
+                                      <span className="font-semibold text-[#FFFFFF] text-xs leading-none">{order.assignedAgentName}</span>
                                       {order.assignedAgentVehicleNumber && (
-                                        <span className="font-mono text-[9px] text-slate-500 mt-0.5">{order.assignedAgentVehicleNumber}</span>
+                                        <span className="font-mono text-[10px] text-[#71717A] mt-0.5">{order.assignedAgentVehicleNumber}</span>
                                       )}
                                     </div>
                                   </div>
                                   {order.assignedAgentPhone && (
-                                    <a href={`tel:${order.assignedAgentPhone}`} className="text-slate-600 hover:text-slate-900 font-mono text-[10px] font-bold bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
+                                    <a href={`tel:${order.assignedAgentPhone}`} className="text-[#FFFFFF] hover:bg-[#242427] font-mono text-[10px] bg-[#121212] px-2.5 py-1 border border-[#27272A] uppercase">
                                       Call
                                     </a>
                                   )}
                                 </div>
                               </div>
                             ) : (
-                              <div className="pt-3 border-t border-slate-200/60">
-                                <div className="bg-slate-100/50 border border-slate-200 border-dashed p-3 rounded-xl flex items-center justify-center gap-1.5 text-slate-400 text-xs">
+                              <div className="pt-2.5 border-t border-[#27272A]">
+                                <div className="bg-[#18181B] border border-[#27272A] p-2 flex items-center justify-center gap-1.5 text-[#71717A] font-mono text-[11px] uppercase tracking-[0.06em]">
                                   <Bike className="w-3.5 h-3.5" />
-                                  <span>No rider assigned yet</span>
+                                  <span>UNASSIGNED</span>
                                 </div>
                               </div>
                             )}
@@ -1757,12 +1844,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </div>
 
-                    {/* Customer Cancellation Request Alert Box with Red Accept / Neutral Decline Buttons */}
+                    {/* Customer Cancellation Request Alert Box */}
                     {order.cancellationStatus === 'requested' && order.status !== 'rejected' && (
-                      <div className="mb-3 w-full bg-rose-50/90 border border-rose-200/90 rounded-2xl p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in duration-200 shadow-2xs">
+                      <div className="mb-3 w-full bg-[#121212] border border-[#EF4444] p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="w-2.5 h-2.5 rounded-full bg-rose-600 shrink-0 animate-pulse" />
-                          <span className="text-xs sm:text-sm font-extrabold text-rose-950 truncate">
+                          <span className="w-2 h-2 bg-[#EF4444] shrink-0" />
+                          <span className="text-xs font-mono font-semibold uppercase tracking-[0.06em] text-[#EF4444] truncate">
                             Customer Requested Order Cancellation
                           </span>
                         </div>
@@ -1771,14 +1858,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <button
                             type="button"
                             onClick={() => handleDeclineCancellation(order.id)}
-                            className="px-3.5 py-1.5 rounded-full text-xs font-bold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 shadow-2xs transition-all active:scale-95 whitespace-nowrap cursor-pointer"
+                            className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.06em] text-[#A1A1AA] hover:text-[#FFFFFF] bg-[#18181B] border border-[#27272A] cursor-pointer"
                           >
                             Decline
                           </button>
                           <button
                             type="button"
                             onClick={() => handleAcceptCancellation(order.id)}
-                            className="px-4 py-1.5 rounded-full text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 shadow-xs transition-all flex items-center gap-1.5 active:scale-95 whitespace-nowrap cursor-pointer"
+                            className="px-3.5 py-1.5 text-[11px] font-mono font-semibold uppercase tracking-[0.06em] text-[#FFFFFF] bg-[#EF4444] hover:bg-red-600 flex items-center gap-1.5 cursor-pointer"
                             id={`accept-cancellation-btn-${order.orderId}`}
                           >
                             <XCircle className="w-3.5 h-3.5" />
@@ -1789,16 +1876,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     )}
 
                     {/* Action Buttons Row */}
-                    <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
-                      <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
-                        <span>Payment: <strong>{order.paymentMethod?.toUpperCase() || 'COD / UPI'}</strong></span>
+                    <div className="pt-3 border-t border-[#27272A] flex flex-wrap items-center justify-between gap-2.5">
+                      <div className="flex items-center gap-2 font-mono text-[11px]">
+                        <span className="uppercase tracking-[0.06em] text-[#71717A]">
+                          PAYMENT: <strong className="text-[#FFFFFF]">{order.paymentMethod?.toUpperCase() || 'COD / UPI'}</strong>
+                        </span>
                         {order.paymentStatus === 'paid' ? (
-                          <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 font-bold border border-emerald-200/60 text-[11px]">
+                          <span className="px-2 py-0.5 bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/40 text-[10px] uppercase tracking-[0.06em]">
                             ✓ PAID
                           </span>
                         ) : (
-                          <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 font-bold border border-amber-200/60 text-[11px]">
-                            Pending Collection
+                          <span className="px-2 py-0.5 bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/40 text-[10px] uppercase tracking-[0.06em]">
+                            PENDING COLLECTION
                           </span>
                         )}
                       </div>
@@ -1808,18 +1897,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <>
                             <button
                               onClick={() => handleUpdateStatus(order.id, 'rejected')}
-                              className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-full border border-rose-200 transition-colors"
+                              className="px-3 py-1.5 bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#EF4444] font-mono font-bold text-[11px] uppercase tracking-[0.1em] border border-[#27272A] cursor-pointer"
                               id={`reject-btn-${order.orderId}`}
                             >
-                              Reject
+                              REJECT
                             </button>
                             <button
                               onClick={() => handleUpdateStatus(order.id, 'accepted')}
-                              className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95"
+                              className="px-4 py-1.5 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-bold text-[11px] uppercase tracking-[0.1em] flex items-center gap-1.5 cursor-pointer border border-[#FF5500]"
                               id={`accept-btn-${order.orderId}`}
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Accept Order</span>
+                              <span>ACCEPT ORDER</span>
                             </button>
                           </>
                         )}
@@ -1838,11 +1927,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     preparingSentAt: serverTimestamp()
                                   })
                                 }
-                                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                className="px-4 py-1.5 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-bold text-[11px] uppercase tracking-[0.1em] flex items-center gap-1.5 cursor-pointer border border-[#FF5500]"
                                 id={`start-preparing-btn-${order.orderId}`}
                               >
-                                <PackageCheck className="w-3.5 h-3.5 text-indigo-400" />
-                                <span>Send to Preparing</span>
+                                <PackageCheck className="w-3.5 h-3.5" />
+                                <span>SEND TO PREPARING</span>
                               </button>
                             );
                           }
@@ -1856,11 +1945,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     kitchenSentAt: serverTimestamp()
                                   })
                                 }
-                                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                                className="px-4 py-1.5 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-bold text-[11px] uppercase tracking-[0.1em] flex items-center gap-1.5 cursor-pointer border border-[#FF5500]"
                                 id={`start-preparing-btn-${order.orderId}`}
                               >
-                                <ChefHat className="w-3.5 h-3.5 text-amber-400" />
-                                <span>Send to Kitchen</span>
+                                <ChefHat className="w-3.5 h-3.5" />
+                                <span>SEND TO KITCHEN</span>
                               </button>
                             );
                           }
@@ -1875,11 +1964,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   preparingSentAt: serverTimestamp()
                                 })
                               }
-                              className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                              className="px-4 py-1.5 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-bold text-[11px] uppercase tracking-[0.1em] flex items-center gap-1.5 cursor-pointer border border-[#FF5500]"
                               id={`start-preparing-btn-${order.orderId}`}
                             >
-                              <PackageCheck className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Send to Kitchen & Prep</span>
+                              <PackageCheck className="w-3.5 h-3.5" />
+                              <span>SEND TO KITCHEN &amp; PREP</span>
                             </button>
                           );
                         })()}
@@ -1887,10 +1976,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {order.status === 'preparing' && (
                           <button
                             onClick={() => handleOpenAdminDispatch(order)}
-                            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                            className="px-4 py-1.5 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-bold text-[11px] uppercase tracking-[0.1em] flex items-center gap-1.5 cursor-pointer border border-[#FF5500]"
                           >
                             <Bike className="w-3.5 h-3.5" />
-                            <span>Send to Delivery Agent</span>
+                            <span>DISPATCH RIDER</span>
                           </button>
                         )}
 
@@ -1902,42 +1991,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 deliveredAt: serverTimestamp()
                               })
                             }
-                            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center gap-1.5 active:scale-95"
+                            className="px-4 py-1.5 bg-[#10B981] hover:bg-emerald-600 text-[#0A0A0A] font-mono font-bold text-[11px] uppercase tracking-[0.1em] flex items-center gap-1.5 cursor-pointer border border-[#10B981]"
                           >
                             <PackageCheck className="w-3.5 h-3.5" />
-                            <span>Mark Delivered</span>
+                            <span>MARK DELIVERED</span>
                           </button>
                         )}
 
                         {order.status === 'delivered' && (
-                          <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200/60 flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Completed
+                          <span className="text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-[#10B981] bg-[#10B981]/10 px-2.5 py-1 border border-[#10B981]/40 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> COMPLETED
                           </span>
                         )}
 
                         {order.status === 'rejected' && (
-                          <span className="text-xs font-bold text-rose-800 bg-rose-50 px-3 py-1 rounded-full border border-rose-200/60 flex items-center gap-1">
-                            <XCircle className="w-3.5 h-3.5 text-rose-600" /> Cancelled
+                          <span className="text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-[0.14em] text-[#71717A] bg-[#121212] px-2.5 py-1 border border-[#27272A] flex items-center gap-1 line-through">
+                            <XCircle className="w-3.5 h-3.5" /> CANCELLED
                           </span>
                         )}
 
                         {/* Move to History Archive Button */}
                         <button
                           onClick={() => handleArchiveSingleOrder(order)}
-                          className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-full transition-colors active:scale-95 cursor-pointer"
+                          className="p-1.5 bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] border border-[#27272A] cursor-pointer"
                           title={`Move Order #${order.orderId} to History Archive`}
                         >
-                          <Archive className="w-4 h-4" />
+                          <Archive className="w-3.5 h-3.5" />
                         </button>
 
                         {/* Individual Delete Order Button */}
                         <button
                           onClick={() => setDeletingOrder(order)}
-                          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-full transition-colors active:scale-95 cursor-pointer"
+                          className="p-1.5 bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#EF4444] border border-[#27272A] cursor-pointer"
                           title={`Delete Order #${order.orderId}`}
                           id={`delete-order-btn-${order.orderId}`}
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -1945,48 +2034,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 ))}
               </div>
             )}
-              </>
-            )}
+          </div>
         </div>
 
         {/* Tab 2: Menu & Product Management (Persisted in DOM for instant 0ms tab switching) */}
         <div className={activeTab === 'products' ? 'block' : 'hidden'}>
           <ProductManagement
             products={liveProducts}
-            onUpdateProducts={(updated) => {
-              setLiveProducts(updated);
-              if (onUpdateProducts) onUpdateProducts(updated);
-            }}
+            onUpdateProducts={handleUpdateProductsStable}
           />
         </div>
 
         {/* Tab 3: Unified Staff Operations Hub (Kitchen, Preparing, Delivery) - Persisted in DOM for instant 0ms switching */}
         <div className={activeTab === 'staff' ? 'space-y-4' : 'hidden'}>
-          {/* Minimal Segmented Pill Bar Sub-Navigation */}
-          <div className="bg-white/90 backdrop-blur-xs p-1.5 sm:p-2 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
-            <div className="flex items-center gap-1 p-1 bg-slate-100/90 rounded-xl border border-slate-200/60 overflow-x-auto no-scrollbar">
+          <div className="pb-4 border-b border-[#27272A] flex flex-col md:flex-row md:items-center justify-between gap-4 text-[#FFFFFF]">
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="text-[18px] font-bold uppercase tracking-[0.04em] text-[#FFFFFF] font-['Plus_Jakarta_Sans',sans-serif]">
+                STAFF
+              </h2>
+              <span className="px-2 py-0.5 border border-[#FFFFFF] bg-[#0A0A0A] text-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.12em]">
+                ROSTER
+              </span>
+              <span className="text-[11px] font-mono font-medium text-[#A1A1AA] uppercase tracking-[0.14em]">
+                {kitchenStaff.length + preparingStaff.length + deliveryAgents.length} ACTIVE MEMBERS
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar font-mono text-[11px]">
               <button
                 type="button"
                 onClick={() => {
                   setStaffSubTab('kitchen');
                   try { triggerHaptic('selection'); } catch {}
                 }}
-                className={`px-3.5 sm:px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                className={`px-3 py-1.5 uppercase tracking-[0.08em] flex items-center gap-1.5 cursor-pointer whitespace-nowrap border font-bold rounded-none ${
                   staffSubTab === 'kitchen'
-                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                    : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
                 }`}
                 id="staff-subtab-kitchen"
               >
-                <ChefHat className={`w-3.5 h-3.5 ${staffSubTab === 'kitchen' ? 'text-amber-600' : 'text-slate-500'}`} />
-                <span>Kitchen</span>
-                {kitchenStaff.length > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                    staffSubTab === 'kitchen' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {kitchenStaff.length}
-                  </span>
-                )}
+                <ChefHat className="w-3.5 h-3.5" />
+                <span>KITCHEN ({kitchenStaff.length})</span>
               </button>
 
               <button
@@ -1995,22 +2084,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setStaffSubTab('preparing');
                   try { triggerHaptic('selection'); } catch {}
                 }}
-                className={`px-3.5 sm:px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                className={`px-3 py-1.5 uppercase tracking-[0.08em] flex items-center gap-1.5 cursor-pointer whitespace-nowrap border font-bold rounded-none ${
                   staffSubTab === 'preparing'
-                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                    : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
                 }`}
                 id="staff-subtab-preparing"
               >
-                <PackageCheck className={`w-3.5 h-3.5 ${staffSubTab === 'preparing' ? 'text-blue-600' : 'text-slate-500'}`} />
-                <span>Preparing</span>
-                {preparingStaff.length > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                    staffSubTab === 'preparing' ? 'bg-blue-100 text-blue-800' : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {preparingStaff.length}
-                  </span>
-                )}
+                <PackageCheck className="w-3.5 h-3.5" />
+                <span>PREPARING ({preparingStaff.length})</span>
               </button>
 
               <button
@@ -2019,101 +2101,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setStaffSubTab('delivery');
                   try { triggerHaptic('selection'); } catch {}
                 }}
-                className={`px-3.5 sm:px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                className={`px-3 py-1.5 uppercase tracking-[0.08em] flex items-center gap-1.5 cursor-pointer whitespace-nowrap border font-bold rounded-none ${
                   staffSubTab === 'delivery'
-                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    ? 'border-[#FFFFFF] bg-[#FFFFFF] text-[#0A0A0A]'
+                    : 'border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427]'
                 }`}
                 id="staff-subtab-delivery"
               >
-                <Bike className={`w-3.5 h-3.5 ${staffSubTab === 'delivery' ? 'text-emerald-600' : 'text-slate-500'}`} />
-                <span>Delivery</span>
-                {deliveryAgents.length > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                    staffSubTab === 'delivery' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {deliveryAgents.length}
-                  </span>
-                )}
+                <Bike className="w-3.5 h-3.5" />
+                <span>DELIVERY RIDERS ({deliveryAgents.length})</span>
               </button>
-            </div>
-
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-50 border border-slate-200/60 text-xs text-slate-500 font-medium">
-              <Users className="w-3.5 h-3.5 text-slate-400" />
-              <span className="font-semibold text-slate-700">Staff Operations Hub</span>
             </div>
           </div>
 
-          {/* Sub-view Content: Kitchen / Preparing / Delivery - Instant 0ms toggle with zero DOM unmounting */}
           <div className={staffSubTab === 'kitchen' ? 'block' : 'hidden'}>
             <KitchenStaffManagement
               staffList={kitchenStaff}
-              onDirectViewChef={(chef) => setPreviewChef(chef)}
+              onDirectViewChef={handlePreviewChefStable}
             />
           </div>
 
           <div className={staffSubTab === 'preparing' ? 'block' : 'hidden'}>
             <PreparingStaffManagement
               staffList={preparingStaff}
-              onDirectViewPrep={(st) => setPreviewPreparingStaff(st)}
+              onDirectViewPrep={handlePreviewPrepStable}
             />
           </div>
 
           <div className={staffSubTab === 'delivery' ? 'block' : 'hidden'}>
             <DeliveryAgentsManagement
               agents={deliveryAgents}
-              onDirectViewAgent={(agent) => setPreviewAgent(agent)}
+              onDirectViewAgent={handlePreviewAgentStable}
             />
           </div>
         </div>
 
         {/* Tab 4: Payment & Restaurant Settings - Persisted in DOM for instant 0ms switching */}
-        <div className={activeTab === 'settings' ? 'space-y-6' : 'hidden'}>
+        <div className={activeTab === 'settings' ? 'space-y-4' : 'hidden'}>
           <CloudStorageMeter products={products} />
-          <PaymentSettings settings={settings} onUpdate={(newSettings) => setSettings(newSettings)} />
+          <PaymentSettings settings={settings} onUpdate={handleSettingsUpdateStable} />
         </div>
 
-        {/* Tab 5: Analytics & Summary - Persisted in DOM for instant 0ms switching */}
+        {/* Tab 5: Stock & Analytics - Persisted in DOM for instant 0ms switching */}
         <div className={activeTab === 'stats' ? 'space-y-4' : 'hidden'}>
-            {/* Top Hero / Admin Banner Card */}
-            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1.5">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-extrabold uppercase tracking-wider">
-                  <Shield className="w-3 h-3 text-emerald-600" />
-                  <span>Gidhaur Bakery Management Console</span>
-                </div>
-                <h1 className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900 capitalize">
-                  {adminDisplayName}
-                </h1>
-                <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-                  <span className="bg-slate-100 px-2 py-0.5 rounded-full font-bold text-slate-700">ADMIN</span>
-                  <span>•</span>
-                  <span>Live Kitchen & Delivery Coordination</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <div className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-full flex items-center gap-2 text-xs font-bold text-slate-700">
-                  <span className="text-slate-400">UPI ID:</span>
-                  <span className="font-mono text-slate-900">{settings.upiId || 'gidhaurbakery@upi'}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Sub-view Switcher: [📦 Smart Stock & Inventory] | [📊 Revenue & Order Metrics] */}
-            <div className="flex items-center p-1.5 bg-slate-100/90 rounded-2xl w-full sm:w-fit border border-slate-200/80 shadow-2xs gap-1">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-[#18181B] border border-[#27272A] p-3">
+            <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setAnalyticsSubView('stock')}
-                className={`flex-1 sm:flex-initial px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.06em] border flex items-center gap-1.5 cursor-pointer font-bold ${
                   analyticsSubView === 'stock'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
+                    ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF]'
+                    : 'bg-[#121212] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
                 }`}
               >
-                <Boxes className={`w-4 h-4 ${analyticsSubView === 'stock' ? 'text-rose-600' : 'text-slate-400'}`} />
-                <span>Smart Stock & Inventory</span>
+                <Boxes className="w-3.5 h-3.5" />
+                <span>Smart Stock &amp; Inventory</span>
                 {lowStockCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold border border-amber-200">
+                  <span className="px-1.5 py-0.2 text-[10px] font-mono font-bold bg-[#F59E0B] text-[#0A0A0A]">
                     {lowStockCount} Low
                   </span>
                 )}
@@ -2121,164 +2165,164 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <button
                 onClick={() => setAnalyticsSubView('revenue')}
-                className={`flex-1 sm:flex-initial px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.06em] border flex items-center gap-1.5 cursor-pointer font-bold ${
                   analyticsSubView === 'revenue'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
+                    ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF]'
+                    : 'bg-[#121212] text-[#A1A1AA] border-[#27272A] hover:text-[#FFFFFF] hover:bg-[#242427]'
                 }`}
               >
-                <TrendingUp className={`w-4 h-4 ${analyticsSubView === 'revenue' ? 'text-emerald-600' : 'text-slate-400'}`} />
-                <span>Revenue & Order Metrics</span>
+                <TrendingUp className="w-3.5 h-3.5" />
+                <span>Revenue &amp; Order Metrics</span>
               </button>
             </div>
 
-            {/* Sub-view 1: Smart Stock & Inventory */}
-            {analyticsSubView === 'stock' && (
-              <InventoryManagementView
-                products={liveProducts}
-                onRefreshCatalog={() => {
-                  try {
-                    window.dispatchEvent(new CustomEvent('swadeep_products_updated', { detail: liveProducts }));
-                  } catch {}
-                }}
-              />
-            )}
+            <div className="text-[11px] font-mono font-bold text-[#A1A1AA] bg-[#121212] px-2.5 py-1 border border-[#27272A]">
+              <span>{adminDisplayName}</span>
+              <span className="mx-1.5 text-[#71717A]">·</span>
+              <span>UPI: {settings.upiId || 'gidhaurbakery@upi'}</span>
+            </div>
+          </div>
 
-            {/* Sub-view 2: Business & Order Performance Analytics */}
-            {analyticsSubView === 'revenue' && (
-              <div className="space-y-4 animate-fade-in">
-                {/* 5 Clean Stat Metric Cards */}
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                      TOTAL ORDERS
-                    </span>
-                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900">
-                      {orders.length}
-                    </div>
-                    <span className="text-[10px] text-slate-400 block font-medium">
-                      Live collection
-                    </span>
-                  </div>
+          {/* Sub-view 1: Smart Stock & Inventory (Persisted in DOM for 0ms toggle) */}
+          <div className={analyticsSubView === 'stock' ? 'block' : 'hidden'}>
+            <InventoryManagementView
+              products={liveProducts}
+              onRefreshCatalog={handleRefreshCatalogStable}
+            />
+          </div>
 
-                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                      PENDING ACTION
-                    </span>
-                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-slate-900">
-                      {pendingOrders.length}
-                    </div>
-                    <span className="text-[10px] text-slate-400 block font-medium">
-                      Needs approval
-                    </span>
-                  </div>
+          {/* Sub-view 2: Business & Order Performance Analytics (Persisted in DOM for 0ms toggle) */}
+          <div className={analyticsSubView === 'revenue' ? 'space-y-4' : 'hidden'}>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="bg-[#18181B] border border-[#27272A] p-4 space-y-1">
+                <span className="text-[11px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">
+                  TOTAL ORDERS
+                </span>
+                <div className="font-mono font-bold text-2xl sm:text-3xl text-[#FFFFFF]">
+                  {orders.length}
+                </div>
+                <span className="text-[11px] text-[#71717A] block font-mono">
+                  Live collection
+                </span>
+              </div>
 
-                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                      IN KITCHEN / OUT
-                    </span>
-                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-blue-600">
-                      {inProgressOrders.length}
-                    </div>
-                    <span className="text-[10px] text-slate-400 block font-medium">
-                      Active prep & dispatch
-                    </span>
-                  </div>
+              <div className="bg-[#18181B] border border-[#27272A] p-4 space-y-1">
+                <span className="text-[11px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">
+                  PENDING ACTION
+                </span>
+                <div className="font-mono font-bold text-2xl sm:text-3xl text-[#F59E0B]">
+                  {pendingOrders.length}
+                </div>
+                <span className="text-[11px] text-[#71717A] block font-mono">
+                  Needs approval
+                </span>
+              </div>
 
-                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1">
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                      DELIVERED
-                    </span>
-                    <div className="font-heading font-extrabold text-2xl sm:text-3xl text-emerald-600">
-                      {deliveredOrders.length}
-                    </div>
-                    <span className="text-[10px] text-slate-400 block font-medium">
-                      Completed orders
-                    </span>
-                  </div>
+              <div className="bg-[#18181B] border border-[#27272A] p-4 space-y-1">
+                <span className="text-[11px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">
+                  IN KITCHEN / OUT
+                </span>
+                <div className="font-mono font-bold text-2xl sm:text-3xl text-[#FFFFFF]">
+                  {inProgressOrders.length}
+                </div>
+                <span className="text-[11px] text-[#71717A] block font-mono">
+                  Active prep &amp; dispatch
+                </span>
+              </div>
 
-                  <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-xs p-4 space-y-1 col-span-2 md:col-span-1">
-                    <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">
-                      TOTAL REVENUE
-                    </span>
-                    <div className="font-amount font-extrabold text-2xl sm:text-3xl text-emerald-700">
-                      ₹{totalRevenue}
-                    </div>
-                    <span className="text-[10px] text-emerald-600 block font-medium">
-                      Collected on delivery
-                    </span>
-                  </div>
+              <div className="bg-[#18181B] border border-[#27272A] p-4 space-y-1">
+                <span className="text-[11px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">
+                  DELIVERED
+                </span>
+                <div className="font-mono font-bold text-2xl sm:text-3xl text-[#10B981]">
+                  {deliveredOrders.length}
+                </div>
+                <span className="text-[11px] text-[#71717A] block font-mono">
+                  Completed today
+                </span>
+              </div>
+
+              <div className="bg-[#18181B] border border-[#27272A] p-4 space-y-1 col-span-2 md:col-span-1">
+                <span className="text-[11px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">
+                  TODAY REVENUE
+                </span>
+                <div className="font-mono font-bold text-2xl sm:text-3xl text-[#FF5500]">
+                  ₹{totalRevenue}
+                </div>
+                <span className="text-[11px] text-[#71717A] block font-mono">
+                  Collected on delivery
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-[#18181B] p-5 border border-[#27272A] space-y-4">
+              <h3 className="font-bold text-sm uppercase tracking-[-0.02em] text-[#FFFFFF]">
+                Performance Metrics &amp; Operations
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-4 bg-[#121212] border border-[#27272A] space-y-1">
+                  <span className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#71717A]">Completion Rate</span>
+                  <p className="font-mono font-bold text-2xl text-[#FFFFFF]">
+                    {orders.length > 0
+                      ? `${Math.round((deliveredOrders.length / orders.length) * 100)}%`
+                      : '100%'}
+                  </p>
+                  <span className="text-[11px] text-[#71717A] font-mono">{deliveredOrders.length} delivered</span>
                 </div>
 
-                <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
-                  <h3 className="font-heading font-extrabold text-xl text-slate-900">
-                    Performance Metrics & Revenue
-                  </h3>
+                <div className="p-4 bg-[#121212] border border-[#27272A] space-y-1">
+                  <span className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#71717A]">Average Order Value</span>
+                  <p className="font-mono font-bold text-2xl text-[#FFFFFF]">
+                    ₹{orders.length > 0 ? Math.round(totalRevenue / (deliveredOrders.length || 1)) : 0}
+                  </p>
+                  <span className="text-[11px] text-[#71717A] font-mono">Per delivered order</span>
+                </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
-                      <span className="text-xs text-slate-500 font-medium">Completion Rate</span>
-                      <p className="font-heading font-bold text-2xl text-slate-900">
-                        {orders.length > 0
-                          ? `${Math.round((deliveredOrders.length / orders.length) * 100)}%`
-                          : '100%'}
-                      </p>
-                      <span className="text-[11px] text-slate-400">{deliveredOrders.length} delivered</span>
-                    </div>
-
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
-                      <span className="text-xs text-slate-500 font-medium">Average Order Value</span>
-                      <p className="font-heading font-bold text-2xl text-slate-900 font-mono">
-                        ₹{orders.length > 0 ? Math.round(totalRevenue / (deliveredOrders.length || 1)) : 0}
-                      </p>
-                      <span className="text-[11px] text-slate-400">Per delivered order</span>
-                    </div>
-
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-1">
-                      <span className="text-xs text-slate-500 font-medium">Active Menu Items</span>
-                      <p className="font-heading font-bold text-2xl text-slate-900">
-                        {liveProducts.filter((p) => p.available).length} / {liveProducts.length}
-                      </p>
-                      <span className="text-[11px] text-slate-400">Available in store</span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between">
-                      <div>
-                        <span className="text-xs text-slate-500 font-medium">Registered Delivery Riders</span>
-                        <p className="font-heading font-bold text-xl text-slate-900">{deliveryAgents.length}</p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setActiveTab('staff');
-                          setStaffSubTab('delivery');
-                        }}
-                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-full cursor-pointer transition-colors"
-                      >
-                        Manage
-                      </button>
-                    </div>
-
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between">
-                      <div>
-                        <span className="text-xs text-slate-500 font-medium">Registered Kitchen Chefs</span>
-                        <p className="font-heading font-bold text-xl text-slate-900">{kitchenStaff.length}</p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setActiveTab('staff');
-                          setStaffSubTab('kitchen');
-                        }}
-                        className="px-3 py-1 text-xs font-bold text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-full cursor-pointer transition-colors"
-                      >
-                        Manage
-                      </button>
-                    </div>
-                  </div>
+                <div className="p-4 bg-[#121212] border border-[#27272A] space-y-1">
+                  <span className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#71717A]">Active Menu Items</span>
+                  <p className="font-mono font-bold text-2xl text-[#FFFFFF]">
+                    {liveProducts.filter((p) => p.available).length} / {liveProducts.length}
+                  </p>
+                  <span className="text-[11px] text-[#71717A] font-mono">Available in store</span>
                 </div>
               </div>
-            )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t border-[#27272A]">
+                <div className="p-4 bg-[#121212] border border-[#27272A] flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#71717A]">Registered Delivery Riders</span>
+                    <p className="font-mono font-bold text-xl text-[#FFFFFF]">{deliveryAgents.length}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setActiveTab('staff');
+                      setStaffSubTab('delivery');
+                    }}
+                    className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.06em] text-[#FFFFFF] bg-[#18181B] hover:bg-[#242427] border border-[#27272A] cursor-pointer"
+                  >
+                    Manage
+                  </button>
+                </div>
+
+                <div className="p-4 bg-[#121212] border border-[#27272A] flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] font-mono uppercase tracking-[0.06em] text-[#71717A]">Registered Kitchen Chefs</span>
+                    <p className="font-mono font-bold text-xl text-[#FFFFFF]">{kitchenStaff.length}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setActiveTab('staff');
+                      setStaffSubTab('kitchen');
+                    }}
+                    className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.06em] text-[#FFFFFF] bg-[#18181B] hover:bg-[#242427] border border-[#27272A] cursor-pointer"
+                  >
+                    Manage
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
 
@@ -2288,7 +2332,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const totalItems = orderItems.length;
         const checkedCount = orderItems.filter((_, idx) => adminCheckedItems[`${dispatchingOrder.id}-${idx}`]).length;
         const allDone = totalItems > 0 && checkedCount === totalItems;
-        const untickedCount = totalItems - checkedCount;
 
         let liveAdminSubtotal = 0;
         orderItems.forEach((item, idx) => {
@@ -2314,7 +2357,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             .map((_, idx) => idx)
             .filter((idx) => (tickedItems.length > 0 ? !!adminCheckedItems[`${dispatchingOrder.id}-${idx}`] : true));
 
-          // Calculate subtotal of ONLY dispatched items (unticked items excluded from bill!)
           let dispatchedSubtotal = 0;
           dispatchedList.forEach((item: any) => {
             const price = item.selectedVariant?.price ?? (item as any).product?.price ?? item.price ?? 0;
@@ -2356,84 +2398,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         };
 
         return (
-          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-5 sm:p-6 space-y-4 animate-scaleUp max-h-[92vh] flex flex-col justify-between">
+          <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+            <div className="bg-[#18181B] border border-[#27272A] max-w-lg w-full p-5 space-y-4 max-h-[92vh] flex flex-col justify-between">
               {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+              <div className="flex items-center justify-between pb-3 border-b border-[#27272A] shrink-0">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-700">
-                    <Bike className="w-5 h-5 stroke-[2.2]" />
+                  <div className="w-8 h-8 bg-[#FF5500] text-[#FFFFFF] flex items-center justify-center">
+                    <Bike className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="font-heading font-extrabold text-base text-slate-900">
-                      Send to Delivery Agent
+                    <h3 className="font-bold text-xs uppercase tracking-[-0.01em] text-[#FFFFFF]">
+                      DISPATCH TO DELIVERY AGENT
                     </h3>
-                    <span className="text-xs text-slate-500 font-mono">
-                      Order #{dispatchingOrder.orderId} • {dispatchingOrder.customerName}
+                    <span className="text-[11px] text-[#A1A1AA] font-mono">
+                      Order #{dispatchingOrder.orderId} · {dispatchingOrder.customerName}
                     </span>
                   </div>
                 </div>
 
                 <button
                   onClick={() => setDispatchingOrder(null)}
-                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer"
+                  className="w-7 h-7 border border-[#27272A] bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] flex items-center justify-center cursor-pointer"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
 
               {/* Scrollable Content */}
               <div className="space-y-3.5 overflow-y-auto pr-1 flex-1">
-                {/* Confirmation Status Alert Banner */}
                 {allDone ? (
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                    <div>
-                      <h4 className="text-xs font-black text-emerald-950">
-                        All Items Verified & Packed ({checkedCount}/{totalItems})
-                      </h4>
-                      <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
-                        Every item is ticked. The full order is ready to hand over to the delivery partner.
-                      </p>
-                    </div>
+                  <div className="p-3 bg-[#10B981]/10 border border-[#10B981]/40 flex items-center gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+                    <h4 className="text-xs font-mono uppercase tracking-[0.06em] text-[#10B981]">
+                      All Items Verified &amp; Packed ({checkedCount}/{totalItems})
+                    </h4>
                   </div>
                 ) : (
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-2.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                    <div className="space-y-1.5 w-full">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-black text-amber-950">
-                          {checkedCount === 0 ? 'No Items Ticked Yet' : `Partial Order Packing (${checkedCount}/${totalItems} Packed)`}
-                        </h4>
-                        <button
-                          type="button"
-                          onClick={() => handleAdminTickAllItems(dispatchingOrder.id, totalItems)}
-                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] rounded-lg transition-all shadow-2xs cursor-pointer"
-                        >
-                          ✓ Tick All Items
-                        </button>
-                      </div>
-                      <p className="text-[11px] text-amber-900 leading-relaxed">
-                        {checkedCount === 0
-                          ? 'Zero items are ticked. If you proceed now, all items will be assumed packed. Otherwise, tick individual items or click "Tick All Items".'
-                          : `${untickedCount} item(s) are NOT ticked. Unticked items will NOT be dispatched with this rider. The customer will be informed that only ticked items are in this delivery parcel.`}
-                      </p>
+                  <div className="p-3 bg-[#121212] border border-[#27272A] flex items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-[#F59E0B] shrink-0" />
+                      <h4 className="text-xs font-mono uppercase tracking-[0.06em] text-[#F59E0B]">
+                        {checkedCount === 0 ? 'No Items Ticked Yet' : `Partial Packing (${checkedCount}/${totalItems})`}
+                      </h4>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => handleAdminTickAllItems(dispatchingOrder.id, totalItems)}
+                      className="px-2.5 py-1 bg-[#FFFFFF] text-[#0A0A0A] font-mono font-semibold text-[10px] uppercase tracking-[0.06em] cursor-pointer shrink-0"
+                    >
+                      ✓ Tick All
+                    </button>
                   </div>
                 )}
 
                 {/* Live Bill Amount Box */}
-                <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl flex items-center justify-between text-xs">
+                <div className="p-3 bg-[#121212] border border-[#27272A] flex items-center justify-between text-xs">
                   <div>
-                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Bill Amount to Collect</span>
-                    <span className="font-extrabold text-slate-900 text-base font-mono">₹{liveAdminTotal}</span>
-                    {untickedCount > 0 && checkedCount > 0 && (
-                      <span className="text-[10px] text-amber-700 block font-semibold mt-0.5">
-                        (Unticked items excluded from bill & not charged)
-                      </span>
-                    )}
+                    <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-[#71717A] block">Bill Amount to Collect</span>
+                    <span className="font-bold text-[#FFFFFF] text-base font-mono">₹{liveAdminTotal}</span>
                   </div>
-                  <span className="text-[11px] font-bold text-slate-500 font-mono">
+                  <span className="text-[11px] text-[#A1A1AA] font-mono">
                     {checkedCount}/{totalItems} items in parcel
                   </span>
                 </div>
@@ -2441,7 +2465,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {/* Items Checklist Breakdown */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    <span className="text-[10px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">
                       Parcel Item Verification ({checkedCount}/{totalItems})
                     </span>
                     <div className="flex items-center gap-1.5">
@@ -2449,7 +2473,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => handleAdminTickAllItems(dispatchingOrder.id, totalItems)}
-                          className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200 transition-colors cursor-pointer"
+                          className="text-[10px] font-mono text-[#FFFFFF] bg-[#121212] hover:bg-[#242427] px-2 py-0.5 border border-[#27272A] cursor-pointer uppercase"
                         >
                           ✓ Tick All
                         </button>
@@ -2458,7 +2482,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => handleAdminUntickAllItems(dispatchingOrder.id, totalItems)}
-                          className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2.5 py-0.5 rounded-full border border-slate-200 transition-colors cursor-pointer"
+                          className="text-[10px] font-mono text-[#A1A1AA] bg-[#121212] hover:bg-[#242427] px-2 py-0.5 border border-[#27272A] cursor-pointer uppercase"
                         >
                           Untick All
                         </button>
@@ -2476,16 +2500,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div
                           key={idx}
                           onClick={() => toggleAdminItemCheck(dispatchingOrder.id, idx)}
-                          className={`p-2.5 rounded-2xl border flex items-center justify-between text-xs cursor-pointer transition-all ${
+                          className={`p-2.5 border flex items-center justify-between text-xs cursor-pointer ${
                             isTicked
-                              ? 'bg-emerald-50/70 border-emerald-200 text-slate-900 font-semibold'
-                              : 'bg-slate-50 border-slate-200/80 text-slate-500'
+                              ? 'bg-[#121212] border-[#FFFFFF] text-[#FFFFFF] font-semibold'
+                              : 'bg-[#0A0A0A] border-[#27272A] text-[#71717A]'
                           }`}
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <div
-                              className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${
-                                isTicked ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-300'
+                              className={`w-4 h-4 border flex items-center justify-center shrink-0 ${
+                                isTicked ? 'bg-[#FFFFFF] border-[#FFFFFF] text-[#0A0A0A]' : 'bg-[#121212] border-[#3F3F46]'
                               }`}
                             >
                               {isTicked && <Check className="w-3 h-3 stroke-[3]" />}
@@ -2496,12 +2520,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </span>
                               <div className="flex items-center gap-1.5 mt-0.5">
                                 {isKitchen ? (
-                                  <span className="text-[9px] font-bold text-amber-700 bg-amber-100/80 px-1.5 py-0.2 rounded border border-amber-200/60">
-                                    🍳 Kitchen {prepTime > 0 ? `(${prepTime}m)` : ''}
+                                  <span className="text-[9px] font-mono text-[#A1A1AA] uppercase">
+                                    Kitchen {prepTime > 0 ? `(${prepTime}m)` : ''}
                                   </span>
                                 ) : (
-                                  <span className="text-[9px] font-bold text-indigo-700 bg-indigo-100/80 px-1.5 py-0.2 rounded border border-indigo-200/60">
-                                    📦 Prep Section
+                                  <span className="text-[9px] font-mono text-[#A1A1AA] uppercase">
+                                    Prep Section
                                   </span>
                                 )}
                               </div>
@@ -2509,11 +2533,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </div>
 
                           <span
-                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full shrink-0 ${
-                              isTicked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                            className={`text-[10px] font-mono px-1.5 py-0.5 border uppercase tracking-[0.06em] shrink-0 ${
+                              isTicked ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF] font-semibold' : 'bg-[#121212] text-[#71717A] border-[#27272A]'
                             }`}
                           >
-                            {isTicked ? '✓ In Parcel' : 'Excluded'}
+                            {isTicked ? '✓ IN PARCEL' : 'EXCLUDED'}
                           </span>
                         </div>
                       );
@@ -2522,8 +2546,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 {/* Rider Assignment List */}
-                <div className="space-y-2 pt-2 border-t border-slate-100">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                <div className="space-y-2 pt-2 border-t border-[#27272A]">
+                  <span className="text-[10px] font-mono text-[#71717A] uppercase tracking-[0.06em] block">
                     Choose Delivery Rider ({deliveryAgents.length} available)
                   </span>
 
@@ -2534,10 +2558,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div
                           key={agent.id}
                           onClick={() => setAdminSelectedRiderId(agent.id)}
-                          className={`p-2.5 rounded-2xl border transition-all flex items-center justify-between text-left cursor-pointer ${
+                          className={`p-2.5 border flex items-center justify-between text-left cursor-pointer ${
                             isSelected
-                              ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-600/10'
-                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                              ? 'border-[#FFFFFF] bg-[#121212] text-[#FFFFFF]'
+                              : 'border-[#27272A] hover:border-[#3F3F46] bg-[#0A0A0A] text-[#A1A1AA]'
                           }`}
                         >
                           <div className="flex items-center gap-3">
@@ -2546,18 +2570,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               name="adminDeliveryAgent"
                               checked={isSelected}
                               onChange={() => setAdminSelectedRiderId(agent.id)}
-                              className="w-3.5 h-3.5 text-indigo-600 focus:ring-indigo-500"
+                              className="w-3.5 h-3.5 accent-[#FF5500]"
                             />
                             <div>
-                              <h4 className="font-bold text-xs sm:text-sm text-slate-900">
+                              <h4 className="font-bold text-xs sm:text-sm text-[#FFFFFF]">
                                 {agent.name}
                               </h4>
-                              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                              <div className="flex items-center gap-1.5 text-[11px] text-[#71717A] font-mono">
                                 <span>{agent.vehicleType || 'Bike'}</span>
                                 {agent.vehicleNumber && (
                                   <>
-                                    <span>•</span>
-                                    <span className="font-mono font-bold text-slate-700 bg-slate-100 px-1 rounded">
+                                    <span>·</span>
+                                    <span className="font-mono text-[#A1A1AA]">
                                       {agent.vehicleNumber}
                                     </span>
                                   </>
@@ -2572,9 +2596,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               e.stopPropagation();
                               executeAdminDispatch(agent);
                             }}
-                            className="text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-full transition-colors cursor-pointer shadow-xs active:scale-95"
+                            className="text-[10px] font-mono font-semibold uppercase tracking-[0.06em] text-[#FFFFFF] bg-[#FF5500] hover:bg-[#e04b00] px-3 py-1.5 cursor-pointer"
                           >
-                            Assign & Send
+                            Assign &amp; Send
                           </button>
                         </div>
                       );
@@ -2584,20 +2608,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               {/* Actions Footer */}
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
+              <div className="pt-3 border-t border-[#27272A] flex items-center justify-between shrink-0">
                 <button
                   type="button"
                   onClick={() => executeAdminDispatch(undefined)}
-                  className="text-xs text-slate-500 hover:text-slate-900 font-semibold underline cursor-pointer"
+                  className="text-xs font-mono text-[#A1A1AA] hover:text-[#FFFFFF] underline cursor-pointer"
                 >
-                  Dispatch without specific rider
+                  Dispatch unassigned
                 </button>
 
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setDispatchingOrder(null)}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
+                    className="px-4 py-2 bg-[#121212] border border-[#27272A] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] font-mono text-[11px] uppercase tracking-[0.06em] cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -2607,10 +2631,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       const matchedAgent = deliveryAgents.find((a) => a.id === adminSelectedRiderId);
                       executeAdminDispatch(matchedAgent);
                     }}
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    className="px-4 py-2 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-semibold text-[11px] uppercase tracking-[0.06em] flex items-center gap-1.5 cursor-pointer"
                   >
                     <Bike className="w-3.5 h-3.5" />
-                    <span>Confirm & Send to Delivery Agent</span>
+                    <span>Confirm &amp; Send</span>
                   </button>
                 </div>
               </div>
@@ -2621,30 +2645,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Delete Single Order Confirmation Modal */}
       {deletingOrder && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4 animate-scaleUp">
-            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto">
-              <Trash2 className="w-6 h-6" />
-            </div>
-
-            <div className="text-center space-y-1">
-              <h3 className="font-heading font-extrabold text-lg text-slate-900">
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#18181B] border border-[#27272A] max-w-sm w-full p-6 space-y-4">
+            <div className="space-y-1">
+              <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-[#EF4444] block">
+                PERMANENT DELETION
+              </span>
+              <h3 className="font-bold text-base text-[#FFFFFF]">
                 Delete Order #{deletingOrder.orderId}?
               </h3>
-              <p className="text-xs text-slate-500">
-                Customer: <span className="font-semibold text-slate-800">{deletingOrder.customerName}</span> (₹{deletingOrder.totalAmount})
-              </p>
-              <p className="text-[11px] text-rose-600 font-medium pt-1">
-                This test order will be permanently deleted from the database.
+              <p className="text-xs text-[#A1A1AA] font-mono">
+                {deletingOrder.customerName} (₹{deletingOrder.totalAmount})
               </p>
             </div>
 
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex items-center gap-2 pt-2">
               <button
                 type="button"
                 disabled={isDeletingLoading}
                 onClick={() => setDeletingOrder(null)}
-                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-full transition-colors"
+                className="flex-1 py-2 border border-[#27272A] bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] font-mono text-[11px] uppercase tracking-[0.06em] cursor-pointer"
               >
                 Cancel
               </button>
@@ -2652,7 +2672,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 disabled={isDeletingLoading}
                 onClick={() => handleDeleteOrder(deletingOrder)}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-full transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+                className="flex-1 py-2 bg-[#EF4444] hover:bg-red-600 text-[#FFFFFF] font-mono font-semibold text-[11px] uppercase tracking-[0.06em] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                 id="confirm-delete-order-btn"
               >
                 {isDeletingLoading ? (
@@ -2669,30 +2689,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Clear All Test Orders Modal */}
       {isClearingAllModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4 animate-scaleUp">
-            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto">
-              <Trash2 className="w-6 h-6" />
-            </div>
-
-            <div className="text-center space-y-1">
-              <h3 className="font-heading font-extrabold text-lg text-slate-900">
-                Clear All Test Orders?
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#18181B] border border-[#27272A] max-w-sm w-full p-6 space-y-4">
+            <div className="space-y-1">
+              <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-[#EF4444] block">
+                BULK DELETION
+              </span>
+              <h3 className="font-bold text-base text-[#FFFFFF]">
+                Clear All ({orders.length}) Orders?
               </h3>
-              <p className="text-xs text-slate-500">
-                Are you sure you want to delete all <span className="font-bold text-slate-900">{orders.length}</span> orders from the system?
-              </p>
-              <p className="text-[11px] text-rose-600 font-medium pt-1">
-                This will wipe out all past test records so you can start testing from a clean slate.
-              </p>
             </div>
 
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex items-center gap-2 pt-2">
               <button
                 type="button"
                 disabled={isDeletingLoading}
                 onClick={() => setIsClearingAllModalOpen(false)}
-                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-full transition-colors"
+                className="flex-1 py-2 border border-[#27272A] bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] font-mono text-[11px] uppercase tracking-[0.06em] cursor-pointer"
               >
                 Cancel
               </button>
@@ -2700,7 +2713,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 disabled={isDeletingLoading}
                 onClick={handleClearAllOrders}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-full transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+                className="flex-1 py-2 bg-[#EF4444] hover:bg-red-600 text-[#FFFFFF] font-mono font-semibold text-[11px] uppercase tracking-[0.06em] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                 id="confirm-clear-all-orders-btn"
               >
                 {isDeletingLoading ? (
@@ -2739,31 +2752,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="logout-dialog-title"
-          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
           onClick={() => setIsLogoutConfirmOpen(false)}
         >
           <div
-            className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 text-center space-y-4 animate-in zoom-in-95 duration-150"
+            className="bg-[#18181B] border border-[#27272A] max-w-sm w-full p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center mx-auto shadow-2xs">
-              <LogOut className="w-5 h-5" />
-            </div>
-
-            <div className="space-y-1.5">
-              <h3 id="logout-dialog-title" className="text-base font-bold text-slate-900">
-                Confirm Sign Out
+            <div className="space-y-1">
+              <span className="text-[10px] font-mono uppercase tracking-[0.06em] text-[#71717A] block">
+                SESSION SECURITY
+              </span>
+              <h3 id="logout-dialog-title" className="text-base font-bold text-[#FFFFFF]">
+                Confirm Sign Out?
               </h3>
-              <p className="text-xs text-slate-500 leading-relaxed max-w-[280px] mx-auto">
-                Are you sure you want to log out of the admin panel? You will need your PIN to sign back in.
-              </p>
             </div>
 
-            <div className="flex items-center gap-2.5 pt-1">
+            <div className="flex items-center gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setIsLogoutConfirmOpen(false)}
-                className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-full transition-colors cursor-pointer"
+                className="flex-1 py-2 px-4 border border-[#27272A] bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] font-mono text-[11px] uppercase tracking-[0.06em] cursor-pointer"
                 id="cancel-logout-btn"
               >
                 Cancel
@@ -2774,7 +2783,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setIsLogoutConfirmOpen(false);
                   handleLogoutAction();
                 }}
-                className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-full transition-all shadow-xs flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
+                className="flex-1 py-2 px-4 bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-mono font-semibold text-[11px] uppercase tracking-[0.06em] flex items-center justify-center gap-1.5 cursor-pointer"
                 id="confirm-logout-btn"
               >
                 <LogOut className="w-3.5 h-3.5" />

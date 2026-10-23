@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, RefreshCw, Store, Phone, MapPin, Sparkles, AlertCircle, ChefHat } from 'lucide-react';
+import { Clock, RefreshCw, Store, Phone, MapPin, ChefHat } from 'lucide-react';
 import { getTimeUntilQuotaReset } from '../services/quotaTrackerService';
 
 interface BakeryClosedQuotaScreenProps {

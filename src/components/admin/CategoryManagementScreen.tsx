@@ -3,14 +3,9 @@ import {
   ArrowLeft,
   Plus,
   Trash2,
-  Edit2,
   Check,
   RotateCcw,
-  Smile,
   Loader2,
-  Layers,
-  LayoutTemplate,
-  Pin,
   X,
   GripVertical
 } from 'lucide-react';
@@ -41,7 +36,6 @@ interface CategoryManagementScreenProps {
   ) => void;
 }
 
-// Memoized individual Category Row for butter-smooth 60fps reordering
 interface CategoryRowProps {
   cat: string;
   index: number;
@@ -72,7 +66,6 @@ interface CategoryRowProps {
 const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
   cat,
   index,
-  totalCount,
   itemCount,
   isFirst,
   isEditing,
@@ -84,9 +77,6 @@ const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
   onSaveRename,
   onCancelRename,
   onStartEditing,
-  onMoveToFront,
-  onMoveUp,
-  onMoveDown,
   onOpenIconPicker,
   onInitDelete,
   onDragStart,
@@ -103,25 +93,27 @@ const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
       onDragOver={(e) => onDragOver(e, index)}
       onDrop={(e) => onDrop(e, index)}
       onDragEnd={onDragEnd}
-      className={`overflow-x-auto no-scrollbar rounded-2xl transition-all duration-150 ${
-        isDragging ? 'opacity-35 scale-[0.98] border-2 border-dashed border-amber-400 bg-amber-50/40' : ''
+      className={`overflow-x-auto no-scrollbar rounded-sm ${
+        isDragging ? 'opacity-40 border border-dashed border-[#FFFFFF] bg-[#18181B]' : ''
       } ${
-        isDragOver ? 'border-t-4 border-amber-500 shadow-md ring-2 ring-amber-400/30' : ''
+        isDragOver ? 'border-t-2 border-[#FF5500]' : ''
       }`}
     >
       <div
-        className={`bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-200/90 shadow-2xs hover:border-slate-300 hover:shadow-xs transition-all flex items-center justify-between gap-3 min-w-[410px] sm:min-w-0 ${
-          isDragging ? 'bg-amber-50/60' : ''
-        }`}
+        className={`px-3 py-2.5 sm:px-4 sm:py-3 rounded-sm border flex items-center justify-between gap-3 min-w-[360px] sm:min-w-0 ${
+          isFirst
+            ? 'bg-[#18181B] border-[#3F3F46] hover:bg-[#242427]'
+            : 'bg-[#121212] border-[#27272A] hover:bg-[#242427]'
+        } ${isDragging ? 'bg-[#242427]' : ''}`}
         style={{ contain: 'content' }}
       >
         {isEditing ? (
-          <div className="flex items-center gap-2 flex-1">
+          <div className="flex items-center gap-2 flex-1 font-mono">
             <input
               type="text"
               value={editNameInput}
               onChange={(e) => onEditInputChange(e.target.value)}
-              className="flex-1 px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900"
+              className="flex-1 px-3 py-1.5 bg-[#0A0A0A] rounded-sm border border-[#FFFFFF] text-xs font-mono font-bold text-[#FFFFFF] focus:outline-hidden"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') onSaveRename(index, cat);
@@ -131,91 +123,86 @@ const CategoryItemRow: React.FC<CategoryRowProps> = memo(({
             <button
               type="button"
               onClick={() => onSaveRename(index, cat)}
-              className="p-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-colors cursor-pointer"
+              className="p-1.5 rounded-sm bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] cursor-pointer"
               title="Save Rename"
             >
-              <Check className="w-4 h-4" />
+              <Check className="w-3.5 h-3.5" />
             </button>
             <button
               type="button"
               onClick={onCancelRename}
-              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition-colors cursor-pointer"
+              className="p-1.5 rounded-sm bg-[#18181B] border border-[#27272A] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] cursor-pointer"
               title="Cancel"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 sm:gap-2.5 flex-1 min-w-0">
-              {/* Drag Handle: Mouse Hold on Desktop / Touch Hold on Mobile */}
+            <div className="flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0">
+              {/* Drag Handle */}
               <div
                 onTouchStart={(e) => onTouchStartDrag(e, index)}
-                className="p-1 sm:p-1.5 rounded-xl text-slate-400 hover:text-amber-700 hover:bg-amber-50 active:bg-amber-100 cursor-grab active:cursor-grabbing shrink-0 transition-colors touch-none select-none"
-                title="Left click hold on Desktop or Long press on Mobile to reorder"
+                className="p-1 text-[#71717A] hover:text-[#FFFFFF] cursor-grab active:cursor-grabbing shrink-0 touch-none select-none"
+                title="Drag to reorder"
                 aria-label={`Drag ${cat} to reorder`}
               >
-                <GripVertical className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+                <GripVertical className="w-4 h-4" />
               </div>
 
               {/* Position Badge */}
               <span
-                className={`w-6 h-6 sm:w-7 sm:h-7 rounded-xl text-[10px] sm:text-[11px] font-heading font-extrabold flex items-center justify-center shrink-0 ${
-                  isFirst ? 'bg-amber-500 text-white shadow-2xs' : 'bg-slate-100 text-slate-700 font-bold'
+                className={`w-6 h-6 rounded-sm border text-[11px] font-mono font-bold flex items-center justify-center shrink-0 ${
+                  isFirst
+                    ? 'bg-[#FFFFFF] text-[#0A0A0A] border-[#FFFFFF]'
+                    : 'bg-[#0A0A0A] text-[#A1A1AA] border-[#27272A]'
                 }`}
-                title={`Position #${index + 1} in Customer Category Dock`}
               >
-                #{index + 1}
+                {index + 1}
               </span>
 
-              {/* Category SVG / Emoji Icon */}
+              {/* Category Icon Button */}
               <button
                 type="button"
                 onClick={() => onOpenIconPicker(cat, index)}
-                className="w-8 h-8 sm:w-8.5 sm:h-8.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/90 flex items-center justify-center text-slate-700 transition-all shrink-0 cursor-pointer shadow-2xs hover:scale-105"
-                title={`Change SVG Icon or Emoji for "${cat}"`}
+                className="w-7 h-7 rounded-sm bg-[#0A0A0A] hover:bg-[#242427] border border-[#27272A] flex items-center justify-center text-[#FFFFFF] shrink-0 cursor-pointer"
+                title={`Change icon for "${cat}"`}
               >
-                {renderCategoryIcon(visual, cat, 'w-4 h-4 text-slate-800')}
+                {renderCategoryIcon(visual, cat, 'w-3.5 h-3.5 text-[#FFFFFF]')}
               </button>
 
-              {/* Category Name: NEVER hidden or reduced to single letter! Full text visible with whitespace-nowrap */}
-              <div className="flex items-center gap-1.5 shrink-0 min-w-[90px]">
-                <span className="font-heading font-extrabold text-xs sm:text-sm text-slate-900 whitespace-nowrap">
+              {/* Category Name */}
+              <div className="flex items-center gap-2 shrink-0 min-w-[90px]">
+                <span className="font-bold text-xs sm:text-sm text-[#FFFFFF] tracking-[-0.02em] whitespace-nowrap">
                   {cat}
                 </span>
                 {isFirst && (
-                  <span className="text-[9px] font-extrabold bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded-md shrink-0">
-                    1st
+                  <span className="text-[9px] font-mono font-bold uppercase tracking-[0.06em] rounded-xs bg-[#FF5500] text-[#FFFFFF] px-1.5 py-0.5 shrink-0">
+                    1ST
                   </span>
                 )}
               </div>
             </div>
 
-            {/* Right Actions: Product count badge, Rename & Delete */}
-            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-              <span
-                className={`text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${
-                  itemCount > 0
-                    ? 'bg-slate-100 border-slate-200 text-slate-700'
-                    : 'bg-slate-50 border-slate-200/70 text-slate-400'
-                }`}
-              >
-                {itemCount} {itemCount === 1 ? 'item' : 'items'}
+            {/* Right Actions */}
+            <div className="flex items-center gap-2 shrink-0 font-mono">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-[0.06em] px-2 py-0.5 rounded-sm bg-[#0A0A0A] border border-[#27272A] text-[#A1A1AA] shrink-0">
+                {itemCount} {itemCount === 1 ? 'ITEM' : 'ITEMS'}
               </span>
 
               <button
                 type="button"
                 onClick={() => onStartEditing(index, cat)}
-                className="w-7 h-7 sm:w-8 sm:h-8 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-xl flex items-center justify-center transition-colors cursor-pointer"
+                className="px-2 py-1 rounded-sm text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#18181B] cursor-pointer"
                 title="Rename category"
               >
-                <Edit2 className="w-3.5 h-3.5" />
+                EDIT
               </button>
 
               <button
                 type="button"
                 onClick={() => onInitDelete(cat)}
-                className="w-7 h-7 sm:w-8 sm:h-8 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl flex items-center justify-center transition-colors cursor-pointer"
+                className="p-1 rounded-sm text-[#71717A] hover:text-[#EF4444] cursor-pointer"
                 title="Delete category"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -236,7 +223,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
   onBack,
   onCategoriesChange
 }) => {
-  // Memoized product count map
   const categoryCounts = useMemo(() => {
     return products.reduce((acc, p) => {
       acc[p.category] = (acc[p.category] || 0) + 1;
@@ -244,7 +230,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     }, {} as Record<string, number>);
   }, [products]);
 
-  // Local state for categories with instant optimistic updates
   const [localCategories, setLocalCategories] = useState<string[]>(initialCategories);
   const [newCatInput, setNewCatInput] = useState('');
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
@@ -252,29 +237,24 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  // Icon picker state
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
   const [activeCategoryForIcon, setActiveCategoryForIcon] = useState<string | null>(null);
   const [categoryIcons, setCategoryIcons] = useState<Record<string, CategoryDetail>>(() => {
     return initialIconsMap || getCachedCategoryIcons();
   });
 
-  // Default Landing Screen Category state
   const [defaultLandingCat, setDefaultLandingCat] = useState<string>(() => {
     return initialDefaultLandingCat || getCachedDefaultLandingCategory();
   });
   const [isSavingLandingCat, setIsSavingLandingCat] = useState(false);
 
-  // Delete modal state
   const [categoryToDelete, setCategoryToDelete] = useState<string | null>(null);
   const [showResetModal, setShowResetModal] = useState(false);
 
-  // Keep localCategories in sync if external initialCategories changes
   useEffect(() => {
     setLocalCategories(initialCategories);
   }, [initialCategories]);
 
-  // Debounced persistence helper for category reordering
   const saveDebounceRef = useRef<number | null>(null);
 
   const persistCategoryOrder = useCallback((catsToSave: string[], iconsToSave?: Record<string, CategoryDetail>) => {
@@ -290,7 +270,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     }, 450);
   }, [categoryIcons]);
 
-  // Clean up debounce on unmount
   useEffect(() => {
     return () => {
       if (saveDebounceRef.current) {
@@ -299,12 +278,10 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     };
   }, []);
 
-  // Drag and drop state for desktop & mobile
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const touchActiveIndexRef = useRef<number | null>(null);
 
-  // Smooth Reorder handler (moves item from fromIndex to toIndex)
   const handleReorder = useCallback((fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
     setLocalCategories((prev) => {
@@ -318,11 +295,10 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       });
       return copy;
     });
-    setFeedback('✓ Category order updated!');
+    setFeedback('✓ Category order updated');
     setTimeout(() => setFeedback(null), 2000);
   }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
 
-  // Desktop Drag Handlers
   const handleDragStart = useCallback((e: React.DragEvent, index: number) => {
     setDraggedIdx(index);
     triggerHaptic('medium');
@@ -351,7 +327,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     setDragOverIdx(null);
   }, []);
 
-  // Mobile Touch Hold & Drag Handlers
   const handleTouchStartDrag = useCallback((e: React.TouchEvent, index: number) => {
     touchActiveIndexRef.current = index;
     setDraggedIdx(index);
@@ -383,7 +358,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     setDragOverIdx(null);
   }, [dragOverIdx, handleReorder]);
 
-  // Instant reorder: Move to front (1st position)
   const handleMoveToFront = useCallback((idx: number) => {
     if (idx === 0) return;
     setLocalCategories((prev) => {
@@ -398,7 +372,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     });
   }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
 
-  // Instant reorder: Move up 1 position
   const handleMoveUp = useCallback((idx: number) => {
     if (idx === 0) return;
     setLocalCategories((prev) => {
@@ -414,7 +387,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     });
   }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
 
-  // Instant reorder: Move down 1 position
   const handleMoveDown = useCallback((idx: number) => {
     setLocalCategories((prev) => {
       if (idx >= prev.length - 1) return prev;
@@ -430,7 +402,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     });
   }, [categoryIcons, defaultLandingCat, onCategoriesChange, persistCategoryOrder]);
 
-  // Add Category
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = newCatInput.trim();
@@ -446,7 +417,7 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     setLocalCategories(updated);
     setNewCatInput('');
     setIsSaving(true);
-    setFeedback(`✓ "${trimmed}" added!`);
+    setFeedback(`✓ "${trimmed}" added`);
 
     try {
       await saveCategories(updated, categoryIcons);
@@ -461,7 +432,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     }
   };
 
-  // Start Editing
   const handleStartEditing = useCallback((idx: number, cat: string) => {
     setEditingIdx(idx);
     setEditingName(cat);
@@ -472,7 +442,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     setEditingName('');
   }, []);
 
-  // Save Rename
   const handleSaveRename = useCallback(async (idx: number, oldName: string) => {
     const trimmed = editingName.trim();
     if (!trimmed || trimmed === oldName) {
@@ -517,7 +486,7 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       queueMicrotask(() => {
         onCategoriesChange?.(updated, updatedIcons, nextLanding);
       });
-      setFeedback(`✓ Renamed "${oldName}" to "${trimmed}" across menu!`);
+      setFeedback(`✓ Renamed "${oldName}" to "${trimmed}"`);
     } catch (err: any) {
       setFeedback(`Error: ${err?.message || 'failed'}`);
     } finally {
@@ -526,7 +495,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     }
   }, [categoryIcons, defaultLandingCat, editingName, localCategories, onCategoriesChange]);
 
-  // Delete Category
   const handleConfirmDelete = async () => {
     if (!categoryToDelete) return;
 
@@ -560,7 +528,6 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     }
   };
 
-  // Reset to Defaults
   const handleConfirmResetToDefaults = async () => {
     setShowResetModal(false);
     setIsSaving(true);
@@ -571,7 +538,7 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       queueMicrotask(() => {
         onCategoriesChange?.(DEFAULT_CATEGORIES, categoryIcons, defaultLandingCat);
       });
-      setFeedback('✓ Restored default category catalog!');
+      setFeedback('✓ Restored default categories');
     } catch (err: any) {
       setFeedback(`Error resetting: ${err?.message || 'failed'}`);
     } finally {
@@ -580,13 +547,11 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
     }
   };
 
-  // Open Icon Picker
   const handleOpenIconPicker = useCallback((cat: string) => {
     setActiveCategoryForIcon(cat);
     setIsIconPickerOpen(true);
   }, []);
 
-  // Save selected icon
   const handleSaveIcon = (visual: CategoryVisual) => {
     if (!activeCategoryForIcon) return;
 
@@ -606,11 +571,10 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       onCategoriesChange?.(localCategories, updatedIcons, defaultLandingCat);
     });
 
-    setFeedback(`✓ Updated icon for "${activeCategoryForIcon}"!`);
+    setFeedback(`✓ Updated icon for "${activeCategoryForIcon}"`);
     setTimeout(() => setFeedback(null), 3000);
   };
 
-  // Save Default Landing Category
   const handleSelectDefaultLanding = async (newLandingCat: string) => {
     setDefaultLandingCat(newLandingCat);
     setIsSavingLandingCat(true);
@@ -620,7 +584,7 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
       queueMicrotask(() => {
         onCategoriesChange?.(localCategories, categoryIcons, newLandingCat);
       });
-      setFeedback(`✓ Default customer landing set to "${newLandingCat}"!`);
+      setFeedback(`✓ Default landing set to "${newLandingCat}"`);
     } catch (err: any) {
       setFeedback(`Error saving default category: ${err?.message || 'failed'}`);
     } finally {
@@ -630,129 +594,117 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
   };
 
   return (
-    <div className="space-y-5 pb-12 animate-fadeIn">
-      {/* Top Header Bar with Menu-Style Back Button */}
-      <div className="bg-white/90 backdrop-blur-md sticky top-0 z-30 -mx-3 sm:mx-0 px-3 sm:px-0 py-2.5 sm:py-3 border-b border-slate-200/80 mb-2">
-        <div className="flex items-center justify-between gap-2.5 sm:gap-4 max-w-4xl mx-auto">
-          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 bg-white hover:bg-slate-50 border border-slate-200/90 rounded-full text-xs sm:text-[13px] font-bold text-slate-700 transition-all shadow-2xs active:scale-95 cursor-pointer shrink-0"
-              id="category-screen-back-btn"
-              title="Back to Catalog"
-            >
-              <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
-              <span>Back</span>
-            </button>
+    <div className="space-y-4 pb-12 max-w-4xl mx-auto">
+      {/* Top Header Bar */}
+      <div className="flex items-center justify-between gap-3 bg-[#18181B] border border-[#27272A] rounded-md p-4">
+        <div className="flex items-center gap-4 min-w-0">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-[#121212] hover:bg-[#242427] border border-[#27272A] hover:border-[#FFFFFF] text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#FFFFFF] cursor-pointer shrink-0"
+            id="category-screen-back-btn"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#A1A1AA]" />
+            <span>BACK</span>
+          </button>
 
-            <div className="min-w-0">
-              <h2 className="font-heading font-extrabold text-sm sm:text-lg text-slate-900 tracking-tight leading-tight truncate">
-                <span className="sm:hidden">Categories ({localCategories.length})</span>
-                <span className="hidden sm:inline">Manage Categories & Order ({localCategories.length})</span>
-              </h2>
-            </div>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <h2 className="font-bold text-sm sm:text-base uppercase tracking-[-0.02em] text-[#FFFFFF] truncate">
+              Categories &amp; Order
+            </h2>
+            <span className="text-[11px] font-mono font-bold text-[#A1A1AA] bg-[#0A0A0A] border border-[#27272A] px-2 py-0.5 rounded-sm tabular-nums shrink-0 uppercase tracking-[0.06em]">
+              {localCategories.length} TOTAL
+            </span>
           </div>
-
-          {isSaving && (
-            <div className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-slate-100 text-slate-700 text-[11px] sm:text-xs font-bold shrink-0">
-              <Loader2 className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-spin" />
-              <span className="hidden xs:inline">Syncing...</span>
-            </div>
-          )}
         </div>
+
+        {isSaving && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-[#27272A] bg-[#0A0A0A] text-[#FFFFFF] text-[11px] font-mono font-bold uppercase shrink-0">
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FF5500]" />
+            <span>SYNCING</span>
+          </div>
+        )}
       </div>
 
       {feedback && (
-        <div className="p-3 sm:p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs flex items-center gap-2 max-w-4xl mx-auto shadow-2xs">
-          <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span className="font-semibold">{feedback}</span>
+        <div className="p-3 rounded-sm bg-[#18181B] border border-[#10B981]/50 text-[#FFFFFF] text-xs font-mono font-bold flex items-center gap-2">
+          <Check className="w-4 h-4 text-[#10B981] shrink-0" />
+          <span>{feedback}</span>
         </div>
       )}
 
-      <div className="max-w-4xl mx-auto space-y-3.5 sm:space-y-4">
-        {/* CARD 1: Create New Category Box (Sleek unified input with inside button & no extra subtitles) */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl p-2.5 sm:p-3.5 border border-slate-200/90 shadow-2xs">
-          <form onSubmit={handleAddCategory} className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200/80 focus-within:border-slate-900 focus-within:bg-white transition-all">
-            <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-700 flex items-center justify-center shrink-0 shadow-2xs">
-              <Plus className="w-4 h-4" />
-            </div>
-            <input
-              type="text"
-              placeholder="Create new category (e.g. Burgers, Beverages, Rolls...)"
-              value={newCatInput}
-              onChange={(e) => setNewCatInput(e.target.value)}
-              className="flex-1 bg-transparent px-2 text-xs font-bold text-slate-900 placeholder:text-slate-400 focus:outline-none truncate min-w-0"
-            />
-            <button
-              type="submit"
-              disabled={!newCatInput.trim() || isSaving}
-              className="px-4 py-2 bg-slate-950 hover:bg-slate-800 disabled:bg-slate-300 text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center gap-1 cursor-pointer active:scale-95 shrink-0"
-            >
-              <span>Add</span>
-            </button>
-          </form>
-        </div>
+      <div className="space-y-4">
+        {/* Create New Category & Default Landing Tab Row */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 font-mono">
+          <div className="md:col-span-7 bg-[#18181B] p-4 rounded-md border border-[#27272A] space-y-2">
+            <label className="block text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#A1A1AA]">
+              CREATE CATEGORY
+            </label>
+            <form onSubmit={handleAddCategory} className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="New category name (e.g. Burgers, Beverages)..."
+                value={newCatInput}
+                onChange={(e) => setNewCatInput(e.target.value)}
+                className="flex-1 bg-[#0A0A0A] px-3 py-2 rounded-sm border border-[#27272A] focus:border-[#FFFFFF] text-xs font-mono text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-hidden min-w-0"
+              />
+              <button
+                type="submit"
+                disabled={!newCatInput.trim() || isSaving}
+                className="px-4 py-2 rounded-sm bg-[#FF5500] hover:bg-[#e04b00] disabled:bg-[#27272A] disabled:text-[#71717A] text-[#FFFFFF] font-mono font-bold text-[11px] uppercase tracking-[0.06em] flex items-center gap-1 cursor-pointer shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add</span>
+              </button>
+            </form>
+          </div>
 
-        {/* CARD 2: Default Landing Category Selector (Clean, compact, no overflowing subtitles) */}
-        <div className="bg-gradient-to-r from-amber-50/70 via-orange-50/50 to-amber-50/70 rounded-2xl sm:rounded-3xl p-3 sm:p-4 border border-amber-200/90 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-2xs">
-              <LayoutTemplate className="w-4 h-4" />
-            </div>
-            <div className="flex items-center gap-2 min-w-0">
-              <h4 className="font-heading font-extrabold text-xs sm:text-sm text-slate-900 truncate">
-                Default Customer Landing Tab
-              </h4>
-              <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-amber-200/80 text-amber-950 uppercase tracking-wide shrink-0">
-                Home
+          <div className="md:col-span-5 bg-[#18181B] p-4 rounded-md border border-[#27272A] flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#A1A1AA]">
+                DEFAULT LANDING TAB
+              </span>
+              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-sm bg-[#0A0A0A] text-[#A1A1AA] border border-[#27272A] uppercase tracking-[0.06em]">
+                HOME
               </span>
             </div>
-          </div>
 
-          <select
-            value={defaultLandingCat}
-            onChange={(e) => handleSelectDefaultLanding(e.target.value)}
-            disabled={isSavingLandingCat}
-            className="w-full sm:w-56 px-3.5 py-2 bg-white border border-amber-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 shadow-2xs cursor-pointer shrink-0"
-          >
-            <option value="All">
-              All ({categoryCounts['All'] || products.length} items)
-            </option>
-            {localCategories.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat} ({categoryCounts[cat] || 0} items)
+            <select
+              value={defaultLandingCat}
+              onChange={(e) => handleSelectDefaultLanding(e.target.value)}
+              disabled={isSavingLandingCat}
+              className="w-full px-3 py-2 rounded-sm bg-[#0A0A0A] border border-[#27272A] focus:border-[#FFFFFF] text-xs font-mono font-bold text-[#FFFFFF] focus:outline-hidden cursor-pointer"
+            >
+              <option value="All" className="bg-[#0A0A0A] text-[#FFFFFF]">
+                All ({categoryCounts['All'] || products.length} items)
               </option>
-            ))}
-          </select>
+              {localCategories.map((cat) => (
+                <option key={cat} value={cat} className="bg-[#0A0A0A] text-[#FFFFFF]">
+                  {cat} ({categoryCounts[cat] || 0} items)
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        {/* CARD 3: Menu Category List (Clean title without subtitles) */}
-        <div className="bg-white rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 border border-slate-200/90 shadow-2xs space-y-3">
-          <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-800 flex items-center justify-center shrink-0">
-                <Layers className="w-3.5 h-3.5" />
-              </div>
-              <h3 className="font-heading font-extrabold text-sm sm:text-base text-slate-900 leading-tight">
-                Menu Category
-              </h3>
-            </div>
-            <span className="text-xs font-extrabold text-slate-700 px-2.5 py-0.5 bg-slate-100 rounded-full shrink-0">
-              {localCategories.length} Categories
-            </span>
-          </div>
-
-          {/* Easy Rearrange Tip Banner */}
-          <div className="flex items-center gap-2 px-3 py-2 bg-amber-50/80 border border-amber-200/90 rounded-xl text-[11px] text-amber-900 font-medium select-none">
-            <GripVertical className="w-4 h-4 text-amber-700 shrink-0" />
-            <span>
-              <strong>Easy Rearrange:</strong> Desktop par mouse se hold & drag karein, ya Phone par grip icon (⋮⋮) ko touch-and-hold karke upar/neeche drop karein.
-            </span>
+        {/* Category List Section */}
+        <div className="bg-[#18181B] p-4 sm:p-5 rounded-md border border-[#27272A] space-y-3">
+          <div className="flex items-center justify-between pb-3 border-b border-[#27272A]">
+            <h3 className="font-mono font-bold text-xs uppercase tracking-[0.06em] text-[#FFFFFF]">
+              MENU CATEGORIES
+            </h3>
+            <button
+              type="button"
+              onClick={() => setShowResetModal(true)}
+              className="px-2.5 py-1 rounded-sm border border-[#27272A] bg-[#121212] hover:bg-[#242427] text-[#A1A1AA] hover:text-[#FFFFFF] text-[10px] font-mono font-bold uppercase tracking-[0.06em] flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset Defaults</span>
+            </button>
           </div>
 
           <div
-            className="space-y-2.5"
+            className="space-y-2"
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
             onTouchCancel={handleTouchEnd}
@@ -787,53 +739,35 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
               />
             ))}
           </div>
-
-          {/* Reset to Default Categories Button */}
-          <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-            <span className="text-xs text-slate-400">
-              Need to restore initial categories?
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowResetModal(true)}
-              className="px-3.5 py-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset to Defaults</span>
-            </button>
-          </div>
         </div>
       </div>
 
       {/* Reset Categories Confirmation Modal */}
       {showResetModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-4">
-            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
-              <RotateCcw className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="font-heading font-extrabold text-slate-900 text-lg">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="bg-[#18181B] max-w-sm w-full p-5 rounded-md border border-[#27272A] space-y-4">
+            <div className="space-y-1">
+              <span className="text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#A1A1AA] block">
+                RESTORE DEFAULTS
+              </span>
+              <h3 className="font-bold text-[#FFFFFF] text-base tracking-[-0.02em]">
                 Restore Default Categories?
               </h3>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                Reset categories to the original bakery defaults? Existing product assignments will remain intact.
-              </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 pt-2 font-mono">
               <button
                 type="button"
                 onClick={() => setShowResetModal(false)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+                className="flex-1 py-2 rounded-sm border border-[#27272A] bg-[#121212] text-[#A1A1AA] hover:text-[#FFFFFF] font-bold text-[11px] uppercase tracking-[0.06em] cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleConfirmResetToDefaults}
-                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs shadow-md cursor-pointer"
+                className="flex-1 py-2 rounded-sm bg-[#FF5500] hover:bg-[#e04b00] text-[#FFFFFF] font-bold text-[11px] uppercase tracking-[0.06em] cursor-pointer"
               >
-                Restore Defaults
+                Restore
               </button>
             </div>
           </div>
@@ -842,35 +776,30 @@ export const CategoryManagementScreen: React.FC<CategoryManagementScreenProps> =
 
       {/* Delete Confirmation Modal */}
       {categoryToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-4">
-            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
-              <Trash2 className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="font-heading font-extrabold text-slate-900 text-lg">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="bg-[#18181B] max-w-sm w-full p-5 rounded-md border border-[#27272A] space-y-4">
+            <div className="space-y-1">
+              <span className="text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#EF4444] block">
+                DELETE CATEGORY
+              </span>
+              <h3 className="font-bold text-[#FFFFFF] text-base tracking-[-0.02em]">
                 Delete "{categoryToDelete}"?
               </h3>
-              <p className="text-xs text-slate-500 mt-1">
-                {categoryCounts[categoryToDelete]
-                  ? `Warning: ${categoryCounts[categoryToDelete]} products currently belong to this category.`
-                  : 'This category will be permanently removed from your customer category bar.'}
-              </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 pt-2 font-mono">
               <button
                 type="button"
                 onClick={() => setCategoryToDelete(null)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50"
+                className="flex-1 py-2 rounded-sm border border-[#27272A] bg-[#121212] text-[#A1A1AA] hover:text-[#FFFFFF] font-bold text-[11px] uppercase tracking-[0.06em] cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleConfirmDelete}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md"
+                className="flex-1 py-2 rounded-sm bg-[#EF4444] hover:bg-[#dc2626] text-[#FFFFFF] font-bold text-[11px] uppercase tracking-[0.06em] cursor-pointer"
               >
-                Delete Category
+                Delete
               </button>
             </div>
           </div>

@@ -1,17 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  Lock,
-  Mail,
-  KeyRound,
   AlertCircle,
   ArrowLeft,
   Loader2,
-  Shield,
-  ChefHat,
-  Bike,
-  PackageCheck,
-  Sparkles,
-  CheckCircle2
+  Lock
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { StaffSession } from '../../types';
@@ -28,27 +20,114 @@ interface AdminLoginProps {
   onStaffLoginSuccess: (session: StaffSession) => void;
 }
 
-export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLoginSuccess }) => {
+const LOCKOUT_STORAGE_KEY = 'swadeep_login_lockout_until';
+const FAILED_ATTEMPTS_STORAGE_KEY = 'swadeep_login_failed_attempts';
+const LOCKOUT_DURATION_MS = 60 * 1000; // 1 minute
+const MAX_ATTEMPTS_BEFORE_LOCK = 3;
+
+export const AdminLogin = React.memo<AdminLoginProps>(({ onBackToStore, onStaffLoginSuccess }) => {
   const { signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [failedAttempts, setFailedAttempts] = useState<number>(() => {
+    try {
+      return parseInt(localStorage.getItem(FAILED_ATTEMPTS_STORAGE_KEY) || '0', 10) || 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  const [lockoutUntil, setLockoutUntil] = useState<number>(() => {
+    try {
+      const saved = parseInt(localStorage.getItem(LOCKOUT_STORAGE_KEY) || '0', 10) || 0;
+      return saved > Date.now() ? saved : 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(() => {
+    if (lockoutUntil > Date.now()) {
+      return Math.ceil((lockoutUntil - Date.now()) / 1000);
+    }
+    return 0;
+  });
+
+  useEffect(() => {
+    if (!lockoutUntil || lockoutUntil <= Date.now()) {
+      setRemainingSeconds(0);
+      return;
+    }
+
+    const updateTimer = () => {
+      const diff = Math.ceil((lockoutUntil - Date.now()) / 1000);
+      if (diff <= 0) {
+        setRemainingSeconds(0);
+        setLockoutUntil(0);
+        setError(null);
+        try {
+          localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+        } catch {}
+      } else {
+        setRemainingSeconds(diff);
+      }
+    };
+
+    updateTimer();
+    const interval = window.setInterval(updateTimer, 1000);
+    return () => window.clearInterval(interval);
+  }, [lockoutUntil]);
+
+  const clearLoginPenalty = () => {
+    setFailedAttempts(0);
+    setLockoutUntil(0);
+    setRemainingSeconds(0);
+    try {
+      localStorage.removeItem(FAILED_ATTEMPTS_STORAGE_KEY);
+      localStorage.removeItem(LOCKOUT_STORAGE_KEY);
+    } catch {}
+  };
+
+  const recordFailedAttempt = () => {
+    const nextAttempts = failedAttempts + 1;
+    setFailedAttempts(nextAttempts);
+    try {
+      localStorage.setItem(FAILED_ATTEMPTS_STORAGE_KEY, String(nextAttempts));
+    } catch {}
+
+    if (nextAttempts % MAX_ATTEMPTS_BEFORE_LOCK === 0) {
+      const until = Date.now() + LOCKOUT_DURATION_MS;
+      setLockoutUntil(until);
+      setRemainingSeconds(60);
+      setError(null);
+      try {
+        localStorage.setItem(LOCKOUT_STORAGE_KEY, String(until));
+      } catch {}
+    } else {
+      const attemptsLeft = MAX_ATTEMPTS_BEFORE_LOCK - (nextAttempts % MAX_ATTEMPTS_BEFORE_LOCK);
+      setError(`Invalid ID or password (${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} left)`);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (remainingSeconds > 0) return;
+
     const cleanEmail = email.trim().toLowerCase();
     const cleanPassword = password.trim();
 
     if (!cleanEmail || !cleanPassword) {
-      setError('Please enter both email and password.');
+      setError('Enter ID and password.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
 
-    // 1. Check if matches Delivery Agent registered accounts
+    // 1. Check Delivery Agent accounts
     const deliveryAgents = getLocalDeliveryAgents();
     const matchedAgent = deliveryAgents.find(
       (a) =>
@@ -59,6 +138,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
     );
 
     if (matchedAgent) {
+      clearLoginPenalty();
       setIsLoading(false);
       const session: StaffSession = {
         role: 'delivery',
@@ -74,7 +154,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
       return;
     }
 
-    // 2. Check if matches Kitchen Staff registered accounts
+    // 2. Check Kitchen Staff accounts
     const kitchenStaff = getLocalKitchenStaff();
     const matchedChef = kitchenStaff.find(
       (s) =>
@@ -85,6 +165,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
     );
 
     if (matchedChef) {
+      clearLoginPenalty();
       setIsLoading(false);
       const session: StaffSession = {
         role: 'kitchen',
@@ -100,7 +181,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
       return;
     }
 
-    // 3. Check if matches Preparing & Packing Staff registered accounts
+    // 3. Check Preparing & Packing Staff accounts
     const preparingStaff = getLocalPreparingStaff();
     const matchedPrep = preparingStaff.find(
       (s) =>
@@ -111,6 +192,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
     );
 
     if (matchedPrep) {
+      clearLoginPenalty();
       setIsLoading(false);
       const session: StaffSession = {
         role: 'preparing',
@@ -126,7 +208,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
       return;
     }
 
-    // 4. Check for Master Admin credentials or registered Admin accounts
+    // 4. Check Master Admin or registered Admin accounts
     const adminAccounts = getLocalAdminAccounts();
     const matchedAdmin = adminAccounts.find(
       (a) => a.email.toLowerCase() === cleanEmail && (a.password || 'admin123') === cleanPassword
@@ -137,6 +219,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
       ((cleanEmail === 'admin@gidhaurbakery.com' || cleanEmail === 'admin@swadeep.com') &&
         (cleanPassword === 'admin123' || cleanPassword === 'admin'))
     ) {
+      clearLoginPenalty();
       setIsLoading(false);
       const session: StaffSession = {
         role: 'admin',
@@ -151,9 +234,10 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
       return;
     }
 
-    // 4. Try Firebase Auth sign in
+    // 5. Try Firebase Auth sign in
     try {
       await signIn(cleanEmail, cleanPassword);
+      clearLoginPenalty();
       const session: StaffSession = {
         role: 'admin',
         data: {
@@ -164,166 +248,104 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onBackToStore, onStaffLo
       };
       saveStaffSession(session);
       onStaffLoginSuccess(session);
-    } catch (err: any) {
-      console.error('Unified login error:', err);
-      if (
-        err.code === 'auth/user-not-found' ||
-        err.code === 'auth/wrong-password' ||
-        err.code === 'auth/invalid-credential'
-      ) {
-        setError('Invalid staff credentials. Please check your email and password.');
-      } else if (err.code === 'auth/too-many-requests') {
-        setError('Too many attempts. Please try again in a few minutes.');
-      } else {
-        setError('Login failed. Please verify your credentials or select a quick demo staff account below.');
-      }
+    } catch {
+      recordFailedAttempt();
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleQuickFill = (demoEmail: string, demoPass: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    setError(null);
-  };
+  const isLocked = remainingSeconds > 0;
+  const formattedTimer = `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(
+    remainingSeconds % 60
+  ).padStart(2, '0')}`;
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 pt-[max(calc(env(safe-area-inset-top,0px)+1.5rem),2rem)] pb-[max(calc(env(safe-area-inset-bottom,0px)+1.5rem),2rem)]">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
+    <div className="admin-curator-console min-h-screen bg-[#0A0A0A] text-[#FFFFFF] flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="sm:mx-auto sm:w-full sm:max-w-sm">
         <button
           onClick={onBackToStore}
-          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 transition-colors mb-6 px-3.5 py-1.5 rounded-full bg-white border border-slate-200/80 shadow-2xs"
+          className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-[0.06em] text-[#A1A1AA] hover:text-[#FFFFFF] mb-4 px-3 py-1.5 rounded-sm bg-[#18181B] hover:bg-[#242427] border border-[#27272A] cursor-pointer"
           id="back-to-store-btn"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Back to Menu</span>
+          <span>Back</span>
         </button>
 
-        <div className="text-center space-y-2">
-          <div className="w-12 h-12 rounded-2xl bg-slate-950 text-white flex items-center justify-center mx-auto shadow-xs">
-            <Lock className="w-6 h-6 text-slate-200" />
-          </div>
-          <h2 className="font-heading font-extrabold text-2xl text-slate-900 tracking-tight">
-            Staff & Admin Login
-          </h2>
-          <p className="text-xs text-slate-500 max-w-xs mx-auto">
-            Unified login for Admin, Kitchen Chefs, and Delivery Riders. Enter your registered staff credentials.
-          </p>
-        </div>
-      </div>
+        <div className="bg-[#18181B] p-6 sm:p-7 rounded-sm border border-[#27272A] space-y-4">
+          {isLocked && (
+            <div className="p-3 bg-[#0A0A0A] border border-[#EF4444]/50 rounded-sm text-xs font-mono text-[#EF4444] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-[#EF4444] shrink-0" />
+                <span>Locked for 1 min</span>
+              </div>
+              <span className="font-bold tracking-wider">{formattedTimer}</span>
+            </div>
+          )}
 
-      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-6 sm:px-8 shadow-xs rounded-3xl border border-slate-200/80 space-y-5">
-          {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-700 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
+          {!isLocked && error && (
+            <div className="p-3 bg-[#0A0A0A] border border-[#EF4444]/40 rounded-sm text-xs font-mono text-[#EF4444] flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Staff Email
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="email"
-                  required
-                  placeholder="admin@gidhaurbakery.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-full text-xs placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-slate-900"
-                  id="staff-email-input"
-                />
-              </div>
+              <input
+                type="text"
+                name="login_id_field"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                required
+                disabled={isLocked || isLoading}
+                placeholder="ID"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-[#0A0A0A] border border-[#27272A] rounded-sm text-xs font-mono text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-none focus:border-[#FFFFFF] disabled:opacity-40"
+                id="staff-email-input"
+              />
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Password
-              </label>
-              <div className="relative">
-                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="password"
-                  required
-                  placeholder="••••••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-full text-xs placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-slate-900"
-                  id="staff-password-input"
-                />
-              </div>
+              <input
+                type="password"
+                name="login_password_field"
+                autoComplete="new-password"
+                required
+                disabled={isLocked || isLoading}
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-[#0A0A0A] border border-[#27272A] rounded-sm text-xs font-mono text-[#FFFFFF] placeholder:text-[#71717A] focus:outline-none focus:border-[#FFFFFF] disabled:opacity-40"
+                id="staff-password-input"
+              />
             </div>
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full py-3 px-6 bg-slate-950 hover:bg-slate-800 disabled:bg-slate-300 text-white font-bold text-xs rounded-full shadow-xs transition-all flex items-center justify-center gap-2 active:scale-95"
+              disabled={isLoading || isLocked}
+              className="w-full py-2.5 px-6 bg-[#FF5500] hover:bg-[#E04B00] disabled:opacity-40 text-[#FFFFFF] border border-[#FF5500] font-mono font-bold text-xs uppercase tracking-[0.06em] rounded-sm flex items-center justify-center gap-2 cursor-pointer"
               id="staff-login-submit-btn"
             >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Signing in...</span>
-                </>
+              {isLocked ? (
+                <span>Wait {formattedTimer}</span>
+              ) : isLoading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <span>Sign in to Dashboard</span>
+                <span>Login</span>
               )}
             </button>
           </form>
-
-          {/* Quick Demo Accounts Helper Strip */}
-          <div className="pt-4 border-t border-slate-100 space-y-2">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block text-center">
-              Quick Role Test Fill
-            </span>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleQuickFill('admin@gidhaurbakery.com', 'admin123')}
-                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-center transition-all flex flex-col items-center gap-1 group"
-              >
-                <Shield className="w-3.5 h-3.5 text-slate-700 group-hover:scale-110 transition-transform" />
-                <span className="text-[10px] font-bold text-slate-800">Admin</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill('vikram.chef@gidhaurbakery.com', 'password123')}
-                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-center transition-all flex flex-col items-center gap-1 group"
-              >
-                <ChefHat className="w-3.5 h-3.5 text-slate-700 group-hover:scale-110 transition-transform" />
-                <span className="text-[10px] font-bold text-slate-800">Chef</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill('suresh.prep@gidhaurbakery.com', 'password123')}
-                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-center transition-all flex flex-col items-center gap-1 group"
-              >
-                <PackageCheck className="w-3.5 h-3.5 text-slate-700 group-hover:scale-110 transition-transform" />
-                <span className="text-[10px] font-bold text-slate-800">Prep / Pack</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill('rahul.rider@gidhaurbakery.com', 'password123')}
-                className="p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-center transition-all flex flex-col items-center gap-1 group"
-              >
-                <Bike className="w-3.5 h-3.5 text-slate-700 group-hover:scale-110 transition-transform" />
-                <span className="text-[10px] font-bold text-slate-800">Rider</span>
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
   );
-};
+});
+
+AdminLogin.displayName = 'AdminLogin';
 
 export default AdminLogin;
+

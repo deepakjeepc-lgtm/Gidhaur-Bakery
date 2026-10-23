@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, X, ShieldAlert, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import { triggerHaptic } from '../../utils/haptics';
 import { isQuotaTestMode } from '../../services/quotaService';
 
@@ -8,7 +8,7 @@ interface AdminQuotaBlockedModalProps {
   onClose: () => void;
 }
 
-export const AdminQuotaBlockedModal: React.FC<AdminQuotaBlockedModalProps> = ({
+export const AdminQuotaBlockedModal = React.memo<AdminQuotaBlockedModalProps>(({
   isOpen,
   onClose,
 }) => {
@@ -17,70 +17,72 @@ export const AdminQuotaBlockedModal: React.FC<AdminQuotaBlockedModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-200 select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#0A0A0A]/85 select-none"
       role="dialog"
       aria-modal="true"
     >
-      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col">
+      <div className="relative w-full max-w-md bg-[#18181B] rounded-sm border border-[#27272A] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="bg-amber-500/10 border-b border-amber-200/80 px-6 py-5 flex items-start gap-3.5">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
-            <ShieldAlert className="w-5 h-5 stroke-[2.2]" />
-          </div>
-          <div className="flex-1 pr-6">
-            <h2 className="font-heading font-extrabold text-slate-900 text-base sm:text-lg leading-tight">
-              Firestore Daily Limit Active
-            </h2>
-            <p className="text-amber-800 text-xs mt-0.5 font-medium leading-relaxed">
-              दैनिक कोटा पूरा हो चुका है • बदलाव सुरक्षित रखे गए हैं
-            </p>
+        <div className="border-b border-[#27272A] px-5 py-4 flex items-start justify-between gap-3.5 bg-[#0A0A0A]">
+          <div className="flex items-start gap-3">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.14em] px-2 py-0.5 rounded-sm bg-[#18181B] text-[#F59E0B] border border-[#F59E0B]/40 mt-0.5 shrink-0">
+              LIMIT
+            </span>
+            <div>
+              <h2 className="font-bold text-[#FFFFFF] text-sm uppercase tracking-[-0.02em] leading-tight">
+                Firestore Daily Limit Active
+              </h2>
+              <p className="text-[#A1A1AA] text-xs mt-0.5 font-normal">
+                दैनिक कोटा पूरा हो चुका है · बदलाव सुरक्षित रखे गए हैं
+              </p>
+            </div>
           </div>
           <button
             onClick={() => {
               triggerHaptic('selection');
               onClose();
             }}
-            className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+            className="w-7 h-7 rounded-sm border border-[#27272A] bg-[#18181B] text-[#A1A1AA] hover:text-[#FFFFFF] hover:bg-[#242427] flex items-center justify-center font-bold cursor-pointer"
             aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            ✕
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="p-6 space-y-4 text-slate-700 text-xs sm:text-sm leading-relaxed">
-          <div className="bg-amber-50/60 border border-amber-200/60 rounded-2xl p-4 space-y-2 text-slate-700">
-            <p className="font-bold text-slate-900">
+        <div className="p-5 space-y-4 text-[#A1A1AA] text-xs leading-relaxed">
+          <div className="bg-[#0A0A0A] border border-[#27272A] rounded-sm p-4 space-y-2 text-[#A1A1AA]">
+            <p className="font-bold text-[#FFFFFF]">
               नए उत्पाद जोड़ना या एडिट करना आज के लिए लॉक है:
             </p>
-            <p className="text-slate-600 text-xs leading-relaxed">
+            <p className="text-[#A1A1AA] text-xs leading-relaxed">
               Firestore की दैनिक मुफ्त सीमा (50,000 reads / 20,000 writes) समाप्त होने के कारण, नए उत्पाद या संपादन सीधे डेटाबेस में सेव नहीं हो सकेंगे। डेटा करप्शन और असंगति (mismatch) से बचने के लिए इसे आज के लिए सुरक्षित रूप से लॉक कर दिया गया है।
             </p>
           </div>
 
           {isSimulated && (
-            <div className="bg-sky-50 border border-sky-200 rounded-2xl p-3.5 flex items-start gap-2.5 text-xs text-sky-900">
-              <Sparkles className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+            <div className="bg-[#0A0A0A] border border-[#FF5500]/40 rounded-sm p-3.5 flex items-start gap-2.5 text-xs text-[#FFFFFF] font-mono">
+              <Sparkles className="w-4 h-4 text-[#FF5500] shrink-0 mt-0.5" />
               <div>
-                <span className="font-bold">Test Mode Active:</span> यह सीमा एडमिन सेटिंग्स के 'Simulate Daily Limit Full' टॉगल के कारण सक्रिय है। आप इसे <strong>Settings &gt; Security</strong> में जाकर कभी भी बंद कर सकते हैं।
+                <span className="font-bold text-[#FF5500]">Test Mode Active:</span> यह सीमा एडमिन सेटिंग्स के 'Simulate Daily Limit Full' टॉगल के कारण सक्रिय है। आप इसे <strong>Settings &gt; Security</strong> में जाकर कभी भी बंद कर सकते हैं।
               </div>
             </div>
           )}
 
-          <div className="text-[11px] text-slate-500 space-y-1">
-            <p>• ग्राहक अभी भी WhatsApp के माध्यम से सीधे ऑर्डर भेज सकते हैं।</p>
-            <p>• डेटाबेस कोटा कल सुबह स्वतः रीसेट हो जाएगा।</p>
+          <div className="text-[11px] text-[#71717A] space-y-1 font-mono">
+            <p>· ग्राहक अभी भी WhatsApp के माध्यम से सीधे ऑर्डर भेज सकते हैं।</p>
+            <p>· डेटाबेस कोटा कल सुबह स्वतः रीसेट हो जाएगा।</p>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="p-4 sm:p-5 bg-slate-50/80 border-t border-slate-100 flex justify-end">
+        <div className="p-4 bg-[#0A0A0A] border-t border-[#27272A] flex justify-end">
           <button
             onClick={() => {
               triggerHaptic('selection');
               onClose();
             }}
-            className="w-full sm:w-auto px-6 py-2.5 rounded-full bg-slate-950 hover:bg-slate-900 text-white font-heading font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+            className="w-full sm:w-auto px-5 py-2 rounded-sm bg-[#FF5500] hover:bg-[#E04B00] border border-[#FF5500] text-[#FFFFFF] font-mono font-bold text-xs uppercase tracking-[0.06em] cursor-pointer"
           >
             I Understand (समझ गया)
           </button>
@@ -88,4 +90,6 @@ export const AdminQuotaBlockedModal: React.FC<AdminQuotaBlockedModalProps> = ({
       </div>
     </div>
   );
-};
+});
+
+AdminQuotaBlockedModal.displayName = 'AdminQuotaBlockedModal';

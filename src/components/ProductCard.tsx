@@ -2,15 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Minus, Heart, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { useCart } from '../context/CartContext';
+import { useLocation } from '../context/LocationContext';
 
 interface ProductCardProps {
   product: Product;
   onOpenDetail: (product: Product) => void;
   isFavorite?: boolean;
   onToggleFavorite?: (productId: string) => void;
-  isSelected?: boolean;
-  onSelect?: (productId: string) => void;
-  onHoverChange?: (productId: string | null) => void;
   priority?: boolean;
 }
 
@@ -19,16 +17,26 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
   onOpenDetail,
   isFavorite = false,
   onToggleFavorite,
-  isSelected = false,
-  onSelect,
-  onHoverChange,
   priority = false,
 }) => {
   const { addToCart, updateQuantity, getItemQuantity } = useCart();
+  const { settings } = useLocation();
+  const isSquare = settings?.homeCardShape === 'square';
   const [localFavorite, setLocalFavorite] = useState(false);
 
   // Multi-image list: Extract clean photos from product.images, imageUrl, variants, or colorVariants
   const isVegSalad = (url?: string) => !url || url.includes('photo-1546069901-ba9599a7e63c');
+
+  // Normalize image URLs so primary cover (.webp) and its generated copies (-img0.webp / -var0.webp) never duplicate
+  const getCanonicalImageKey = (url: string): string => {
+    const trimmed = url.trim();
+    if (trimmed.startsWith('/product-images/')) {
+      return trimmed
+        .replace(/-(?:img0|var0)(\.[a-zA-Z0-9]+)(\?.*)?$/i, '$1$2')
+        .split('?')[0];
+    }
+    return trimmed.split('#')[0];
+  };
 
   const isSeparatedVariant = Boolean(product.realProductId && (product.defaultVariantIndex !== undefined || product.selectedColorName !== undefined));
   const isSeparateViewOn = isSeparatedVariant || Boolean(product.showVariantsSeparately);
@@ -40,43 +48,59 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
       if (product.imageUrl && !isVegSalad(product.imageUrl)) {
         return [product.imageUrl];
       }
-      if (product.images && product.images.length > 0) {
+      if (product.images && product.images.length > 0 && !isVegSalad(product.images[0])) {
         return [product.images[0]];
       }
       return [];
     }
 
     const list: string[] = [];
+    const seenKeys = new Set<string>();
+
+    const pushUnique = (url?: string) => {
+      if (!url || isVegSalad(url)) return;
+      const trimmed = url.trim();
+      if (!trimmed) return;
+      const key = getCanonicalImageKey(trimmed);
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        list.push(trimmed);
+      }
+    };
+
     if (product.images && product.images.length > 0) {
       for (const img of product.images) {
-        if (!isVegSalad(img) && !list.includes(img)) list.push(img);
+        pushUnique(img);
       }
     }
-    if (product.imageUrl && !isVegSalad(product.imageUrl) && !list.includes(product.imageUrl)) {
-      list.push(product.imageUrl);
+    // Only fallback to product.imageUrl if product.images had no valid photos
+    if (list.length === 0 && product.imageUrl) {
+      pushUnique(product.imageUrl);
     }
     if (product.variants && product.variants.length > 0) {
       for (const v of product.variants) {
-        if (v.imageUrl && !isVegSalad(v.imageUrl) && !list.includes(v.imageUrl)) {
-          list.push(v.imageUrl);
-        }
+        pushUnique(v.imageUrl);
       }
     }
     if (product.colorVariants && product.colorVariants.length > 0) {
       for (const c of product.colorVariants) {
-        if (c.imageUrl && !isVegSalad(c.imageUrl) && !list.includes(c.imageUrl)) {
-          list.push(c.imageUrl);
-        }
+        pushUnique(c.imageUrl);
       }
     }
     return list;
   }, [product.imageUrl, product.images, product.variants, product.colorVariants, isSeparateViewOn]);
 
   const [currentImgIdx, setCurrentImgIdx] = useState(0);
+  const [imgError, setImgError] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const touchStartXRef = useRef<number | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
   const manualPauseTimerRef = useRef<number | null>(null);
   const [isManualPaused, setIsManualPaused] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [product.id, currentImgIdx]);
 
   // Handle manual pause after user click/swipe
   const pauseAutoAdvanceTemporarily = useCallback(() => {
@@ -90,7 +114,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
     }, 6000);
   }, []);
 
-  // Auto-scroll images smoothly on desktop hover
+  // Auto-scroll images smoothly on desktop hover (only when product has multiple unique images)
   useEffect(() => {
     if (rawImages.length <= 1 || isManualPaused || !isHovered) return;
 
@@ -129,27 +153,35 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
     setCurrentImgIdx(idx);
   };
 
-  // Touch Swipe Handlers for Mobile
+  // Touch Swipe Handlers for Mobile (only active when rawImages.length > 1 and strictly horizontal)
   const handleTouchStart = (e: React.TouchEvent) => {
+    if (rawImages.length <= 1) return;
     touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartXRef.current === null) return;
+    if (rawImages.length <= 1 || touchStartXRef.current === null || touchStartYRef.current === null) {
+      touchStartXRef.current = null;
+      touchStartYRef.current = null;
+      return;
+    }
     const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
     const diffX = touchStartXRef.current - touchEndX;
+    const diffY = touchStartYRef.current - touchEndY;
 
-    if (Math.abs(diffX) > 35) {
+    // Only trigger horizontal image swipe if horizontal movement clearly dominates vertical scroll
+    if (Math.abs(diffX) > 40 && Math.abs(diffX) > Math.abs(diffY) * 1.5) {
       pauseAutoAdvanceTemporarily();
       if (diffX > 0) {
-        // Swiped Left -> Next Image
         setCurrentImgIdx((prev) => (prev + 1) % rawImages.length);
       } else {
-        // Swiped Right -> Prev Image
         setCurrentImgIdx((prev) => (prev - 1 + rawImages.length) % rawImages.length);
       }
     }
     touchStartXRef.current = null;
+    touchStartYRef.current = null;
   };
 
   const effectiveFavorite = onToggleFavorite ? isFavorite : localFavorite;
@@ -172,11 +204,10 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
   const hasOptions = hasVariants || hasColorVariants;
   const totalCartQty = getItemQuantity(product.id);
 
-  const [selectedVariantIndex] = useState(0);
   const activeVariant: ProductVariant | undefined = isSeparatedVariant
     ? separatedVariant
     : hasVariants
-    ? product.variants![selectedVariantIndex]
+    ? product.variants![0]
     : undefined;
 
   const cartItemId = `${product.id}-${activeVariant?.name || 'default'}`;
@@ -191,7 +222,6 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
     ) {
       return;
     }
-    onSelect?.(product.id);
     onOpenDetail(product);
   };
 
@@ -219,8 +249,6 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
     ? product.available !== false && !product.variants!.every((v) => v.available === false)
     : product.available !== false);
 
-  const effectiveSelected = Boolean(isSelected || isHovered);
-
   const getImageFitClass = (imgSrc: string, idx: number) => {
     // 1. Check if separated variant has an explicit fit
     if (isSeparatedVariant && separatedVariant?.imageFit) {
@@ -246,36 +274,40 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
     return product.imageFit === 'contain' ? 'object-contain p-2 bg-white' : 'object-cover bg-white';
   };
 
+  const hasMultipleImages = rawImages.length > 1;
+
   return (
     <div
       onClick={handleCardClick}
-      onMouseEnter={() => {
-        setIsHovered(true);
-        onHoverChange?.(product.id);
-      }}
-      onMouseLeave={() => {
-        setIsHovered(false);
-        onHoverChange?.(null);
-      }}
-      className="product-card-container group bg-white border border-slate-100/90 rounded-2xl sm:rounded-3xl p-2.5 sm:p-3.5 transition-all duration-300 ease-out cursor-pointer flex flex-col justify-between relative overflow-hidden select-none shadow-[0_2px_8px_rgba(15,23,42,0.03)] hover:shadow-[0_8px_24px_rgba(15,23,42,0.07)] hover:border-slate-200/90 active:scale-[0.99]"
+      onMouseEnter={hasMultipleImages ? () => setIsHovered(true) : undefined}
+      onMouseLeave={hasMultipleImages ? () => setIsHovered(false) : undefined}
+      className={`product-card-container group bg-white p-2.5 sm:p-3.5 transition-shadow duration-200 cursor-pointer flex flex-col justify-between relative overflow-hidden select-none active:scale-[0.99] ${
+        isSquare
+          ? 'rounded-none border-0 outline-none shadow-[0_6px_18px_-2px_rgba(15,23,42,0.08),0_2px_6px_-1px_rgba(15,23,42,0.05)] hover:shadow-[0_12px_28px_-3px_rgba(15,23,42,0.13),0_4px_10px_-2px_rgba(15,23,42,0.06)]'
+          : 'rounded-2xl sm:rounded-3xl border border-slate-100/90 shadow-[0_2px_8px_rgba(15,23,42,0.03)] hover:shadow-[0_8px_24px_rgba(15,23,42,0.07)] hover:border-slate-200/90'
+      }`}
       id={`product-card-${product.id}`}
     >
       <div>
         {/* Food Image Container with Native Lazy Loading & Smooth Manual Controls */}
         <div
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
+          onTouchStart={hasMultipleImages ? handleTouchStart : undefined}
+          onTouchEnd={hasMultipleImages ? handleTouchEnd : undefined}
           className="relative w-full aspect-[4/3] rounded-xl sm:rounded-2xl overflow-hidden bg-white mb-2.5 select-none"
         >
-          {rawImages.length > 0 ? (
+          {rawImages.length > 0 && !imgError ? (
             <img
               src={rawImages[currentImgIdx] || rawImages[0]}
               alt={product.name}
               loading={priority ? 'eager' : 'lazy'}
               fetchPriority={priority ? 'high' : 'auto'}
               decoding={priority ? 'sync' : 'async'}
-              onError={(e) => {
-                (e.currentTarget as HTMLElement).style.display = 'none';
+              onError={() => {
+                if (rawImages.length > 1 && currentImgIdx < rawImages.length - 1) {
+                  setCurrentImgIdx((prev) => prev + 1);
+                } else {
+                  setImgError(true);
+                }
               }}
               className={`absolute inset-0 w-full h-full ${getImageFitClass(
                 rawImages[currentImgIdx] || rawImages[0],
@@ -358,14 +390,14 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
             )
           )}
 
-          {/* Favorite Toggle Button with Translucent Glassy Blur Effect (no solid circle) */}
+          {/* Favorite Toggle Button (Zero GPU backdrop-blur overhead for 120fps scrolling) */}
           <button
             data-fav-btn="true"
             onClick={handleFavoriteClick}
-            className={`absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center backdrop-blur-md active:scale-90 transition-all z-10 cursor-pointer ${
+            className={`absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center active:scale-90 transition-transform z-10 cursor-pointer ${
               effectiveFavorite
-                ? 'bg-rose-500/20 text-rose-500 border border-rose-300/40 shadow-none'
-                : 'bg-white/25 hover:bg-white/45 text-slate-700 hover:text-rose-500 border border-white/40 shadow-none'
+                ? 'bg-rose-50/90 text-rose-500 border border-rose-200/80 shadow-2xs'
+                : 'bg-white/85 hover:bg-white text-slate-700 hover:text-rose-500 border border-slate-200/70 shadow-2xs'
             }`}
             aria-label="Save as favorite"
             id={`fav-btn-${product.id}`}
@@ -377,10 +409,10 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
             />
           </button>
 
-          {/* Sold Out Overlay: Ultra-translucent glass capsule with crisp white text & gentle pulse */}
+          {/* Sold Out Overlay */}
           {!isAvailable && (
-            <div className="absolute inset-0 bg-slate-950/20 flex items-center justify-center z-20 pointer-events-none">
-              <span className="backdrop-blur-md bg-white/20 border border-white/35 text-white font-heading font-black text-[10.5px] sm:text-[11px] px-3.5 py-1 rounded-full shadow-[0_2px_12px_rgba(0,0,0,0.18)] uppercase tracking-wider select-none drop-shadow-[0_1px_3px_rgba(0,0,0,0.4)] animate-gentle-pulse">
+            <div className="absolute inset-0 bg-slate-950/25 flex items-center justify-center z-20 pointer-events-none">
+              <span className="bg-slate-900/80 border border-white/35 text-white font-heading font-black text-[10.5px] sm:text-[11px] px-3.5 py-1 rounded-full shadow-[0_2px_12px_rgba(0,0,0,0.18)] uppercase tracking-wider select-none">
                 Sold Out
               </span>
             </div>
@@ -428,10 +460,7 @@ const ProductCardComponent: React.FC<ProductCardProps> = ({
             ) : null}
             {hasVariants ? (
               <div className="w-full relative pt-0.5">
-                <div 
-                  className="flex flex-nowrap items-center gap-1.5 w-full overflow-hidden"
-                  style={{ maskImage: 'linear-gradient(to right, black 80%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, black 80%, transparent 100%)' }}
-                >
+                <div className="flex flex-nowrap items-center gap-1.5 w-full overflow-hidden">
                   {product.variants!.map((v, idx) => (
                     <div
                       key={idx}
