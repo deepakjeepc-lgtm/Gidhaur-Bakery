@@ -1,108 +1,62 @@
-# Luxury Architectural Admin Panel & Staff Portals
+# Implementation Plan: Background Notifications (PWA & APK), Android Top Status Bar + Bottom Edge-to-Edge Fix (No Bottom Black Strip) & `AABBCC` Removal
 
-Upgrade the Admin Panel, Staff Login, Kitchen Display, Preparing Portal, and Delivery Rider Portal with a high-precision, luxury architectural interface built on geometric sans-serif typography (`Plus Jakarta Sans`), strict tracking hierarchy, tabular numerals, sharp `0px–2px` border geometry, and a dual-theme palette (`#0A0A0C` OLED Dark Mode default with an instant `#FAFAFA` Architectural Paper Light Mode toggle).
+## 1. Objective & Root Cause Analysis
 
-## User Review & Critical Decisions
+1. **Android Top Status Bar Visibility + Bottom Edge-to-Edge Fullscreen (No Bottom "Black Patti")**
+   - **Top Status Bar Root Cause**: Both `/public/manifest.json` and `/public/manifest.webmanifest` specify `"display_override": ["fullscreen", "standalone", ...]`. Because `"fullscreen"` is listed first, Android PWAs and APK builders (TWA / WebAPK / WebView wrappers) enter Android's immersive fullscreen mode (`SYSTEM_UI_FLAG_FULLSCREEN`), hiding the top status bar.
+   - **Bottom Black Strip ("Black Patti") Root Cause**: On Android gesture navigation devices (with the bottom home indicator pill), a black strip appears at the bottom when:
+     1. The viewport or root container (`100vh` / `100dvh`) stops above the gesture navigation inset (`env(safe-area-inset-bottom)`), exposing the underlying black WebView/window canvas, or
+     2. Fixed bottom sheets/modals (`CheckoutModal`, `ProductModal`, `OrderSuccessModal`, `CartDrawer`) use `max-h-[100dvh]` without extending their surface background through `env(safe-area-inset-bottom, 0px)` to the very bottom pixel (`100lvh` / `bottom: 0`), or
+     3. `<meta name="theme-color">` and `html, body` background colors aren't dynamically synchronized with the active surface (`#f6f8fb` / `#ffffff` on Storefront, `#0A0A0C` on Admin/Staff portals).
+   - **Fix**:
+     - Remove `"fullscreen"` from `display_override` in `/public/manifest.json` and `/public/manifest.webmanifest` so `"standalone"` is primary—keeping the **top system status bar always visible**.
+     - Keep `viewport-fit=cover` in `/index.html` and configure `html, body, #root` in `/src/index.css` to stretch across the full physical screen (`min-height: 100lvh; min-height: -webkit-fill-available; bottom: 0`) with matching surface backgrounds (`#f6f8fb` for Storefront, `#0A0A0C` for Admin Console) so the bottom home indicator area is drawn edge-to-edge over the app background instead of a black bar.
+     - Update bottom-anchored modals/drawers and navigation (`MobileBottomNav.tsx`, `CartDrawer.tsx`, `CheckoutModal.tsx`, `ProductModal.tsx`, `OrderSuccessModal.tsx`) so their backgrounds extend flush to `bottom: 0` with internal `padding-bottom: max(env(safe-area-inset-bottom, 0px), ...)`—giving a true edge-to-edge bottom fullscreen look with zero black strip ("black patti").
 
-> [!IMPORTANT]
-> All confirmed design and scope choices from your responses have been locked into this plan. No Storefront customer views, Firestore read/write guards, or backend business logic will be altered.
+2. **Notifications When App is Closed or Removed from Background (Customer + Admin)**
+   - **Root Cause**:
+     - Notifications currently only fire from foreground React components (`TrackOrderPage.tsx` for customers and `useOrderSoundAlert.ts` in `AdminDashboard.tsx` for admins). When the app is closed or swiped away from background recents, React unmounts and nothing wakes up the Service Worker.
+     - `/public/sw.js` lacks a `push` event listener, background sync / periodic check handlers, and Web Push (`PushManager`) subscription integration with `server.ts`.
+   - **Fix (Zero Extra Firestore Reads/Writes)**:
+     - **Web Push (`web-push` VAPID) + Service Worker (`push` event in `/public/sw.js`)**:
+       - Auto-generate & persist VAPID keys in `data/store.json` on `server.ts` and expose `GET /api/push/vapid-public-key` and `POST /api/push/subscribe`.
+       - When Admin logs in / opens Admin Panel (or enables notifications), subscribe the device's Service Worker `pushManager` with `role: 'admin'`.
+       - When a Customer places an order or tracks an order, subscribe the device's Service Worker `pushManager` with `role: 'customer'`, linked to their `orderId` and `phone`.
+       - Whenever an order is created (`POST /api/orders`) or its status changes (`PATCH /api/orders/:id`), `server.ts` immediately dispatches a native Web Push notification payload to matching Admin and Customer subscriptions—waking up `/public/sw.js` even when the app is completely closed!
+     - **Service Worker Background Sync & APK WebView Support**:
+       - Add `push`, `sync`, `periodicsync`, and background order-status check handlers in `/public/sw.js` against `/api/orders` (0 Firestore reads) so APK builders and installed PWAs reliably show lock-screen & status-bar notifications.
+       - Run customer & admin live SSE notification monitoring (`subscribeToLiveSync`) globally in `App.tsx` whenever the device has active customer orders today or an active Admin session.
 
-- **Confirmed Color Mode**: Default **Dark Mode (`#0A0A0C` Rich OLED Black)** with a persistent **Light/Dark Theme Toggle** switching seamlessly to **Architectural Paper Light Mode (`#FAFAFA` canvas / `#FFFFFF` cards)**.
-- **Confirmed Screen Scope**: Applied uniformly across **Admin Dashboard** (Orders, Catalog, Stock, Categories, Extras, Staff, History, Settings), **Staff Login**, **Kitchen Display**, **Preparing & Packing Portal**, and **Delivery Rider Portal**.
-- **Confirmed Typography Scope**: Strictly apply UI Typography & Geometry rules (Sections 1, 2.A–2.D, and 3) across all Admin and Staff screens, omitting A4 academic print rules (Section 2.E).
+3. **Permanent Removal of `AABBCC` Product**
+   - **Root Cause**: A test product with `"id": "gjpphaGqAsJ8G0obkGpn"` and `"name": "AABBCC"` (`price: 1`, category `"Burgers"`) exists in `data/products.json` along with its image files in `public/product-images/`.
+   - **Fix**:
+     - Permanently remove `"gjpphaGqAsJ8G0obkGpn"` (`AABBCC`) from `data/products.json` and delete `/public/product-images/gjpphagqasj8g0obkgpn-aabbcc*.webp`.
+     - Add `"gjpphaGqAsJ8G0obkGpn"` and normalized name `"aabbcc"` to `isProductBlacklisted()` in `src/services/productService.ts` and bump `CATALOG_CACHE_VERSION` so all devices immediately purge it from `localStorage`, `IndexedDB`, and Firestore `products` collection if present.
 
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**: Transforms the operational consoles of Swadeep Cake Shop & Restaurant into a luxury architectural command center with crisp legibility, zero-lag transitions, and disciplined typographic contrast.
-- **Target Audience / Persona**: Store administrators, kitchen chefs, preparing/packing staff, and delivery riders operating in high-tempo environments who need instant visual scannability across mobile and desktop screens.
-- **Key Value**: Eliminates visual clutter, cramped bold text, rounded pill noise, and inconsistent font weights by enforcing a systematic 4-tier typographic scale and high-contrast surface hierarchy in both OLED Dark and Architectural Paper Light themes.
-
----
-
-## 2. User Experience & Visual Design
-
-- **Key User Flows**:
-  1. **Staff Authentication**: Minimalist architectural login card featuring only the ID input, Password input, and solid high-contrast Login button (`#FFFFFF` on `#0A0A0C` in Dark Mode; `#111111` on `#FFFFFF` in Light Mode) with a 1-minute lockout countdown after every 3 failed attempts.
-  2. **Admin Console & Sub-Views**: Instant 0ms tab switching across Live Orders, Product Catalog, Stock Inventory, Staff Management, Order Archive, and Payment/Store Settings, plus a header toggle to switch between OLED Dark Mode and Architectural Paper Light Mode at any time.
-  3. **Kitchen, Preparing & Delivery Portals**: Unified architectural header, sharp bordered order cards, tabular-numeral timers/amounts, and high-contrast status action buttons.
-
-- **Visual Identity & Theme**:
-  - *Aesthetic Direction*: High-precision architectural console — sharp `0px` to `2px` square corners, crisp `1px solid` structural hairlines, generous vertical breathing room, zero fuzzy drop-shadows, and zero rounded pill capsules.
-  - *Color Palette & Mood*:
-    - **Dark Mode (Default)**:
-      - Canvas Background (`--admin-bg`): `#0A0A0C` (Rich OLED Black)
-      - Card / Surface Background (`--admin-surface`): `#141418` & `#18181D`
-      - Structural Borders (`--admin-border`): `#26262B` & `#2E2E36`
-      - Primary Typography (`--admin-text`): `#FFFFFF` & `#F5F5F7`
-      - Micro Label / Muted Typography (`--admin-muted`): `#A1A1AA`
-      - Primary CTA Button: `#FFFFFF` background with `#111111` text
-    - **Light Mode (Toggleable)**:
-      - Canvas Background (`--admin-bg`): `#FAFAFA` (Architectural Paper Off-White)
-      - Card / Modal Surface (`--admin-surface`): `#FFFFFF`
-      - Structural Borders (`--admin-border`): `#E5E5E0` & `#D4D4D0`
-      - Primary Typography (`--admin-text`): `#111111`
-      - Micro Label / Muted Typography (`--admin-muted`): `#71717A`
-      - Primary CTA Button: `#111111` background with `#FFFFFF` text
-    - **Semantic & Accent Highlights**:
-      - Deep Architectural Red (`#CC0000`) for critical alerts, lockouts, and high-priority indicators
-      - Warm Gold Amber (`#B45309`) for pending/attention states and active highlights
-  - *Typography & Hierarchy*:
-    - **Primary Sans-Serif**: `"Plus Jakarta Sans", system-ui, -apple-system, sans-serif` (with `Inter, Helvetica, Arial, sans-serif` fallback).
-    - **Tabular Numeric Discipline**: `font-variant-numeric: tabular-nums` enforced globally on all currency values (`₹`), order IDs, timestamps, phone numbers, stock quantities, and counters.
-    - **Tier A — Micro Labels, Section Headers & Eyebrows**: `UPPERCASE`, `font-weight: 700/800`, `10px–11px`, extended letter-spacing `+0.18em` (`0.16em–0.22em`), muted zinc (`#71717A` Light / `#A1A1AA` Dark) for input labels, table headers, and section tags.
-    - **Tier B — Component Titles & Card Headings**: `UPPERCASE` or clean Sentence Case, `font-weight: 700`, `12px–14px`, moderate tracking `+0.08em` to `+0.12em`, high-contrast `#111111` (Light) / `#FFFFFF` (Dark).
-    - **Tier C — Input Fields & Dropdowns**: `12px–13px`, `font-weight: 600` (SemiBold), background `#FAFAFA` (Light) / `#18181D` (Dark), `1px solid` border `#D4D4D0` (Light) / `#2E2E36` (Dark), text `#111111` / `#F5F5F7`, placeholder `#A1A1AA`.
-    - **Tier D — Action Buttons & CTA Badges**: Sharp `0px` border-radius, `UPPERCASE`, `font-weight: 700`, `11px–12px`, wide tracking `+0.16em` to `+0.18em`, solid high-contrast fill (`#111111` in Light Mode / `#FFFFFF` in Dark Mode).
-
-- **Interactive Feedback & Motion**:
-  - Instant `0ms` view and tab switching inside the Admin and Staff portals to preserve zero-lag responsiveness.
-  - Instant theme switching persisted in `localStorage` (`swadeep_admin_theme`) so the chosen Light or Dark mode remains active across sessions.
+4. **Additional Glitches Identified & Fixed**
+   - **Kitchen, Preparing, Admin & Track Order Server Sync Glitch**: `KitchenDisplayPage.tsx` and `PreparingDisplayPage.tsx` updated Firestore when marking orders `preparing` or `out_for_delivery`, but did not send `PATCH /api/orders/:id` to `server.ts`. Similarly, `AdminDashboard.tsx` (`handleAcceptCancellation` / `handleDeclineCancellation`) and `TrackOrderPage.tsx` (customer cancellation request) did not `PATCH /api/orders/:id`. Adding lightweight `fetch('/api/orders/' + id, { method: 'PATCH', ... })` calls ensures `server.ts` always stays in sync and triggers instant SSE + background Web Push notifications for every status change with **0 extra Firestore reads**.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## 2. Planned File Changes
 
-- **Decision 1: CSS Custom Properties Scoped to `.admin-curator-console`**
-  - *Chosen Approach*: Define semantic architectural CSS variables (`--admin-bg`, `--admin-surface`, `--admin-input`, `--admin-border`, `--admin-text`, `--admin-muted`, `--admin-cta-bg`, `--admin-cta-text`, `--admin-accent-red`, `--admin-accent-amber`) on `.admin-curator-console` with `[data-admin-theme="light"]` and `[data-admin-theme="dark"]` selectors, plus automatic class mapping for all Admin/Staff child views.
-  - *Why*: Ensures 100% visual consistency across all 19 Admin sub-screens and 3 Staff portals while keeping the customer Storefront completely isolated and untouched.
-  - *Alternatives Considered*: Hardcoding separate ternary class strings in every sub-component, which adds unnecessary code bloat and risks missed borders or labels.
-
-- **Decision 2: Strict Zero-Read/Write Frontend Isolation**
-  - *Chosen Approach*: Keep all typography, layout, and theme state strictly within the presentation layer and `localStorage`.
-  - *Why*: Respects the project's strict loop and spike immunity directives—zero extra Firestore reads, writes, or listeners.
-
----
-
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
-
-- **Architecture & Component Diagram**:
-
-```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                .admin-curator-console [data-admin-theme]                  │
-│   Typography Engine ("Plus Jakarta Sans" + tabular-nums + Tracking Tiers) │
-│   Theme Tokens: Dark (#0A0A0C / #141418) <─> Light (#FAFAFA / #FFFFFF)    │
-└─────────────────────────────────────┬─────────────────────────────────────┘
-                                      │
-        ┌─────────────────────────────┼─────────────────────────────┐
-        ▼                             ▼                             ▼
-┌───────────────────┐       ┌───────────────────┐       ┌───────────────────┐
-│    Staff Login    │       │  Admin Dashboard  │       │   Staff Portals   │
-│  - ID Input       │       │  - Theme Toggle   │       │  - Kitchen View   │
-│  - Password Input │       │  - Live Orders    │       │  - Preparing View │
-│  - Solid CTA Btn  │       │  - Catalog & Form │       │  - Delivery View  │
-│  - 3-Try Lockout  │       │  - Stock & Staff  │       │  - Sharp Cards &  │
-│    (60s Timer)    │       │  - Archive & Pay  │       │    Tabular Timers │
-└───────────────────┘       └───────────────────┘       └───────────────────┘
-```
-
-- **Data Model & State**:
-  - `adminTheme`: `'dark' | 'light'` stored in `localStorage` (`swadeep_admin_theme`), defaulting to `'dark'` (`#0A0A0C` OLED Black) and toggled via a dedicated header button across Admin and Staff portals.
-  - Typographic utility classes and scoped architectural rules applied to labels (`label`), headings (`h1–h4`), inputs (`input`, `select`, `textarea`), buttons (`button`), and numeric displays (`.font-mono`, `.font-price`, `.font-amount`, `.tabular-nums`).
-
-- **Interactive Component & State Mapping**:
-  - **Theme Toggle Control**: Clicking the Light/Dark button in the Admin or Staff Portal header flips `data-admin-theme` between `"dark"` and `"light"` in 0ms and persists the choice in `localStorage`.
-  - **Form & Filter Controls**: All inputs, dropdowns, search bars, and category/stock editors inherit the exact `#FAFAFA` / `#18181D` background, `1px solid` `#D4D4D0` / `#2E2E36` border, `12px–13px` `600` SemiBold text, and `+0.18em` uppercase field labels.
-  - **Primary Action Buttons**: Primary submit/confirm buttons render with sharp square edges, `+0.16em` uppercase bold typography, and solid `#FFFFFF` (Dark) / `#111111` (Light) contrast.
+- **`/public/manifest.json` & `/public/manifest.webmanifest`**:
+  - Remove `"fullscreen"` from `display_override` so Android PWAs and APK builds use `"standalone"` mode and always keep the top system status bar visible.
+- **`/index.html`, `/src/index.css` & `/src/App.tsx`**:
+  - Keep `viewport-fit=cover` and dynamically sync `<meta name="theme-color">` and root/body background colors (`#f6f8fb` / `#ffffff` on Storefront, `#0A0A0C` on Admin/Staff portals) so the top status bar stays visible and the bottom gesture home-indicator bar has **zero black strip ("black patti")**.
+  - Update bottom-fixed containers and modals (`MobileBottomNav.tsx`, `CartDrawer.tsx`, `CheckoutModal.tsx`, `ProductModal.tsx`, `OrderSuccessModal.tsx`) so their surface backgrounds bleed seamlessly through `env(safe-area-inset-bottom, 0px)` to the bottom screen edge.
+  - Attach global customer & admin background notification registration and SSE status listeners in `App.tsx` (0 Firestore reads).
+- **`/public/sw.js`**:
+  - Add `push` event listener to display high-priority native Android/iOS notifications (`vibrate`, `renotify: true`, `requireInteraction: true`, lock-screen action buttons) when the app is completely closed.
+  - Improve `notificationclick` to deep-link directly to `/#admin` for Admin alerts or `/#track` for Customer order updates.
+  - Add lightweight background sync / periodic check support for APK WebView wrappers.
+- **`/server.ts`**:
+  - Add Web Push (`web-push`) VAPID key management and `/api/push/vapid-public-key`, `/api/push/subscribe`, and `/api/push/test` endpoints.
+  - Automatically trigger Web Push notifications to registered **Admin** devices on new orders / cancellation requests, and to registered **Customer** devices on order status transitions (`accepted`, `preparing`, `out_for_delivery`, `delivered`, `rejected`).
+  - Auto-filter any `AABBCC` product from `loadProducts()`.
+- **`/src/utils/sound.ts` & `/src/services/customerNotificationService.ts`**:
+  - Add `registerPushSubscription(role, meta)` helper that connects the Service Worker `pushManager` to `/api/push/subscribe` seamlessly when notification permission is granted.
+- **`/src/components/admin/AdminDashboard.tsx`, `/src/components/kitchen/KitchenDisplayPage.tsx`, `/src/components/preparing/PreparingDisplayPage.tsx`, `/src/components/TrackOrderPage.tsx`**:
+  - Ensure all status transitions and cancellation requests also `PATCH /api/orders/:id` so background push notifications fire on every milestone.
+- **`/data/products.json` & `/src/services/productService.ts`**:
+  - Permanently delete the `AABBCC` product (`gjpphaGqAsJ8G0obkGpn`) and its WebP images, blacklist `aabbcc` in `isProductBlacklisted()`, and bump `CATALOG_CACHE_VERSION` so cached copies are wiped across all browsers/devices.

@@ -216,6 +216,16 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
 
     try {
       const tickedNames = nonFoodItems.map((i) => i.name || (i as any).product?.name || 'Item');
+      fetch(`/api/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          preparingReady: true,
+          preparingStatus: 'ready',
+          preparingTickedItems: tickedNames,
+        }),
+      }).catch(() => {});
+
       const orderRef = doc(db, 'orders', order.id);
       await updateDoc(orderRef, {
         preparingReady: true,
@@ -329,7 +339,36 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
       );
       setDispatchOrder(null);
 
-      // Persist in background
+      // Persist in background (both backend API for Web Push/SSE and Firestore)
+      try {
+        fetch(`/api/orders/${dispatchOrder.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status: 'out_for_delivery',
+            preparingStatus: 'dispatched',
+            kitchenStatus: 'ready',
+            kitchenReady: true,
+            preparingReady: true,
+            subtotal: dispatchedSubtotal,
+            totalAmount: dispatchedTotalAmount,
+            originalTotalAmount: dispatchOrder.originalTotalAmount || dispatchOrder.totalAmount,
+            originalSubtotal: dispatchOrder.originalSubtotal || dispatchOrder.subtotal,
+            dispatchedAt: new Date().toISOString(),
+            dispatchedItems: dispatchedItemNames,
+            untickedItems: untickedItemNames,
+            dispatchedItemIndices: dispatchedIndices,
+            ...(assignedAgent
+              ? {
+                  assignedAgentId: assignedAgent.id,
+                  assignedAgentName: assignedAgent.name,
+                  assignedAgentPhone: assignedAgent.phone,
+                }
+              : {}),
+          }),
+        }).catch(() => {});
+      } catch {}
+
       updateDoc(doc(db, 'orders', dispatchOrder.id), updates).catch((err) => {
         console.warn('Dispatch updateDoc notice:', err);
       });
@@ -373,6 +412,16 @@ export const PreparingDisplayPage: React.FC<PreparingDisplayPageProps> = ({
     }
 
     try {
+      fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'preparing',
+          preparingStatus: 'preparing',
+          preparingSentAt: new Date().toISOString(),
+        }),
+      }).catch(() => {});
+
       await updateDoc(doc(db, 'orders', orderId), {
         status: 'preparing',
         preparingStatus: 'preparing',

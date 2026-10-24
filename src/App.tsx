@@ -51,6 +51,14 @@ import {
   restoreScrollPosition,
 } from './utils/scrollStateStorage';
 import { triggerHaptic } from './utils/haptics';
+import { subscribeToLiveSync } from './services/syncService';
+import {
+  getCustomerTrackedOrderIds,
+  checkAndNotifyCustomerOrderStatus,
+  registerCustomerOrderForNotifications,
+} from './services/customerNotificationService';
+import { registerPushSubscription } from './utils/sound';
+import { getCustomerOwnOrders } from './services/orderArchiveService';
 
 import { UtensilsCrossed, RefreshCw, Heart, Search, X } from 'lucide-react';
 
@@ -88,6 +96,113 @@ function MainApp() {
 
   // Staff Session (Role-based: admin, kitchen, delivery)
   const [staffSession, setStaffSession] = useState<StaffSession | null>(() => getSavedStaffSession());
+
+  // Synchronize Android top status bar & bottom gesture home-indicator bar colors (eliminates bottom "black patti")
+  useEffect(() => {
+    const isAdminView = currentView === 'admin';
+    const topThemeColor = isAdminView ? '#0A0A0C' : '#ffffff';
+    const bottomNavColor = isAdminView ? '#0A0A0C' : '#f6f8fb';
+
+    try {
+      document.documentElement.classList.toggle('admin-mode-active', isAdminView);
+      document.body.classList.toggle('admin-mode-active', isAdminView);
+      document.documentElement.style.backgroundColor = bottomNavColor;
+      document.body.style.backgroundColor = bottomNavColor;
+
+      const themeMetaList = document.querySelectorAll('meta[name="theme-color"]');
+      themeMetaList.forEach((meta) => {
+        meta.setAttribute('content', topThemeColor);
+      });
+      const navMeta = document.querySelector('meta[name="navigation-bar-color"]');
+      if (navMeta) {
+        navMeta.setAttribute('content', bottomNavColor);
+      }
+    } catch {}
+  }, [currentView]);
+
+  // Global Background & Closed-App Notification Subscription + Live SSE Order Status Monitor (0 Firestore reads)
+  useEffect(() => {
+    // 1. Register existing customer orders on this device for Web Push & Service Worker sync
+    try {
+      const ownOrders = getCustomerOwnOrders();
+      ownOrders.forEach((o: any) => {
+        const oid = o?.orderId || o?.id;
+        if (oid) {
+          registerCustomerOrderForNotifications(String(oid), o?.phone);
+        }
+      });
+      const trackedIds = getCustomerTrackedOrderIds();
+      if (trackedIds.length > 0) {
+        registerPushSubscription('customer', { orderIds: trackedIds }).catch(() => {});
+      }
+    } catch {}
+
+    // 2. If Admin or Staff is logged in (or previously logged in on this device), register Admin Web Push
+    const isAdminOrStaff =
+      Boolean(user) ||
+      Boolean(staffSession) ||
+      localStorage.getItem('swadeep_is_admin_device') === 'true';
+    if (isAdminOrStaff) {
+      registerPushSubscription('admin', { isAdminDevice: true }).catch(() => {});
+    }
+
+    // 3. Global SSE listener for Customer Order Status changes (works even on Home screen, 0 Firestore reads!)
+    const unsubSSE = subscribeToLiveSync({
+      onOrders: (liveOrders) => {
+        if (!Array.isArray(liveOrders) || liveOrders.length === 0) return;
+        const trackedIds = getCustomerTrackedOrderIds();
+        if (trackedIds.length === 0) return;
+        const trackedSet = new Set(trackedIds.map((id) => String(id).toLowerCase()));
+        liveOrders.forEach((ord: any) => {
+          const oid = String(ord?.orderId || ord?.id || '').toLowerCase();
+          if (oid && trackedSet.has(oid)) {
+            checkAndNotifyCustomerOrderStatus(ord as Order);
+          }
+        });
+      },
+    });
+
+    // 4. Handle deep-link navigation when user taps a notification from Android status bar / lock screen
+    const handleSwMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'NAVIGATE_FROM_NOTIFICATION') {
+        if (data.role === 'admin' || String(data.url || '').includes('admin')) {
+          setCurrentViewState('admin');
+          saveActiveView('admin');
+        } else if (data.role === 'customer' || String(data.url || '').includes('track')) {
+          if (data.orderId) {
+            setTrackingOrderId(String(data.orderId));
+          }
+          setCurrentViewState('track');
+          saveActiveView('track');
+        }
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+
+    // Also check initial URL hash (#admin or #track) when launched from closed state via notification tap
+    try {
+      const hash = window.location.hash.toLowerCase();
+      if (hash === '#admin') {
+        setCurrentViewState('admin');
+        saveActiveView('admin');
+      } else if (hash === '#track') {
+        setCurrentViewState('track');
+        saveActiveView('track');
+      }
+    } catch {}
+
+    return () => {
+      unsubSSE();
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
+    };
+  }, [user, staffSession]);
 
   // Tracking query passed from checkout or recent order
   const [trackingOrderId, setTrackingOrderId] = useState('');
@@ -998,6 +1113,15 @@ function MainApp() {
           </PortalErrorBoundary>
         </div>
       )}
+
+      {/* Bottom Edge-to-Edge Home Indicator Surface Fill (Eliminates Android bottom "black patti" gap) */}
+      <div
+        aria-hidden="true"
+        className={`fixed bottom-0 left-0 right-0 pointer-events-none z-0 ${
+          currentView === 'admin' ? 'bg-[#0A0A0C]' : 'bg-[#f6f8fb]'
+        }`}
+        style={{ height: 'max(env(safe-area-inset-bottom, 0px), 2px)' }}
+      />
     </>
   );
 }

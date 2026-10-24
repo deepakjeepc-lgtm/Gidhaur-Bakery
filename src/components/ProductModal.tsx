@@ -499,12 +499,12 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-white flex flex-col w-full h-[100dvh] max-h-[100dvh] overflow-hidden overscroll-none select-none"
+      className="fixed inset-0 z-50 bg-white flex flex-col w-full h-full min-h-full overflow-hidden overscroll-none select-none"
       id="product-detail-fullscreen-view"
     >
       {/* Dedicated Clean Page View on Desktop AND Mobile - No Popup Lag or Background Clutter */}
       <div
-        className="relative bg-white w-full h-full max-h-[100dvh] max-w-4xl mx-auto flex flex-col select-none touch-auto overflow-hidden"
+        className="relative bg-white w-full h-full min-h-full max-w-4xl mx-auto flex flex-col select-none touch-auto overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Floating Top Navigation Header: Proper Back Button on Left, Veg Tag & Favorite on Right */}

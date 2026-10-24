@@ -85,9 +85,15 @@ export const OrderSuccessModal: React.FC<OrderSuccessModalProps> = ({
 
   useEffect(() => {
     if (order) {
-      registerCustomerOrderForNotifications(order.orderId);
-      // Gently request notification permission so customer receives status alerts
-      requestNotificationPermission().catch(() => {});
+      registerCustomerOrderForNotifications(order.orderId, order.phone);
+      // Gently request notification permission so customer receives status alerts even when app is closed
+      requestNotificationPermission()
+        .then((perm) => {
+          if (perm === 'granted') {
+            registerCustomerOrderForNotifications(order.orderId, order.phone);
+          }
+        })
+        .catch(() => {});
       setIsPaidLocally(order.paymentStatus === 'paid');
       triggerHaptic('success');
       try {
@@ -126,6 +132,15 @@ export const OrderSuccessModal: React.FC<OrderSuccessModalProps> = ({
     triggerHaptic('success');
     setIsPaidLocally(true);
     try {
+      fetch(`/api/orders/${order.orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentStatus: 'paid',
+          paymentMethod: 'upi',
+          paidAt: new Date().toISOString(),
+        }),
+      }).catch(() => {});
       const orderRef = doc(db, 'orders', order.orderId);
       await updateDoc(orderRef, {
         paymentStatus: 'paid',
@@ -139,7 +154,7 @@ export const OrderSuccessModal: React.FC<OrderSuccessModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-white flex flex-col w-full h-[100dvh] max-h-[100dvh] overflow-y-auto select-none animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 bg-white flex flex-col w-full h-full min-h-full overflow-y-auto select-none animate-in fade-in duration-150 pb-[env(safe-area-inset-bottom,0px)]"
       id="order-success-fullscreen-view"
     >
       <div

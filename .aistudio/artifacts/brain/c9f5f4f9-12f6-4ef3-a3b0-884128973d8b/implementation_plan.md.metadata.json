@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for upgrading the Admin Panel, Login, Kitchen Display, Preparing Portal, and Delivery Portal with a luxury architectural geometric sans-serif typography system, tabular numeric formatting, sharp 0px-2px geometry, and an OLED Dark Mode (#0A0A0C) / Architectural Paper Light Mode (#FAFAFA) theme switcher.",
-  "updatedAt":  "2026-10-23T12:19:18.798193915Z",
+  "summary":  "Revised implementation plan covering Android top status bar visibility + bottom edge-to-edge full screen (eliminating the bottom home-indicator black strip / \"black patti\"), background & closed-app Web Push + Service Worker notifications for both Customer and Admin (PWA & APK) with zero Firestore read/write spikes, permanent deletion of the AABBCC test product, and order status sync glitch fixes.",
+  "updatedAt":  "2026-10-24T05:39:44.191693218Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

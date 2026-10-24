@@ -296,6 +296,107 @@ export function markInitialOrdersAsSeen(orderIds: string[]) {
   orderIds.forEach((id) => notifiedOrderIds.add(id));
 }
 
+// Convert base64url VAPID public key to Uint8Array for PushManager.subscribe
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+// Synchronize state with Service Worker so background sync & APK WebViews know active orders & admin mode
+export async function syncServiceWorkerNotificationState(state: {
+  isAdminDevice?: boolean;
+  trackedOrderIds?: string[];
+  adminNotifiedIds?: string[];
+  customerNotifiedStatuses?: Record<string, string[]>;
+}) {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+  try {
+    const reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.ready);
+    const sw = reg?.active || navigator.serviceWorker.controller;
+    if (sw) {
+      sw.postMessage({
+        type: 'SYNC_SW_NOTIFICATION_STATE',
+        ...state,
+      });
+    }
+    // Also register Background Sync / Periodic Sync if supported by Android WebAPK / TWA
+    if (reg && 'sync' in reg) {
+      try {
+        await (reg as any).sync.register('gidhaur-order-sync');
+      } catch {}
+    }
+    if (reg && 'periodicSync' in reg) {
+      try {
+        await (reg as any).periodicSync.register('gidhaur-order-periodic-sync', {
+          minInterval: 60 * 1000,
+        });
+      } catch {}
+    }
+  } catch {}
+}
+
+// Register device for background Web Push notifications (works even when app is completely closed)
+export async function registerPushSubscription(
+  role: 'admin' | 'customer',
+  meta?: {
+    orderIds?: string[];
+    phone?: string;
+    isAdminDevice?: boolean;
+  }
+): Promise<boolean> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return false;
+
+  try {
+    // 1. Always sync lightweight state with Service Worker first
+    await syncServiceWorkerNotificationState({
+      isAdminDevice: role === 'admin' ? true : meta?.isAdminDevice,
+      trackedOrderIds: meta?.orderIds,
+    });
+
+    if (!('PushManager' in window) || !('Notification' in window)) return false;
+    if (Notification.permission !== 'granted') return false;
+
+    const reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.ready);
+    if (!reg || !reg.pushManager) return false;
+
+    const keyRes = await fetch('/api/push/vapid-public-key');
+    if (!keyRes.ok) return false;
+    const { publicKey } = await keyRes.json();
+    if (!publicKey) return false;
+
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+
+    if (sub) {
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscription: sub.toJSON ? sub.toJSON() : sub,
+          role,
+          orderIds: meta?.orderIds || [],
+          phone: meta?.phone || '',
+        }),
+      });
+      return true;
+    }
+  } catch (err) {
+    console.debug('Web Push subscription note:', err);
+  }
+  return false;
+}
+
 // Request and fire browser notification if allowed (with lock-screen & background Service Worker support)
 export async function sendNativeNotification(
   title: string,
@@ -339,6 +440,7 @@ export async function sendNativeNotification(
             icon: '/icon-192.png',
             badge: '/icon-192.png',
             tag: options?.tag || 'gidhaur-order-alert',
+            renotify: true,
             vibrate: vibratePattern,
             requireInteraction: true,
             silent: false,
@@ -390,3 +492,4 @@ export function stopCurrentlyPlayingAudio() {
     currentPlayingAudio = null;
   }
 }
+

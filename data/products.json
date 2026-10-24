@@ -5523,44 +5523,6 @@
     "category": "Pizzas"
   },
   {
-    "id": "gjpphaGqAsJ8G0obkGpn",
-    "images": [
-      "/product-images/gjpphagqasj8g0obkgpn-aabbcc-img0.webp"
-    ],
-    "isPinnedToFront": false,
-    "isNonFood": false,
-    "category": "Burgers",
-    "imageFits": {
-      "0": "cover"
-    },
-    "isFeatured": false,
-    "createdAt": {
-      "type": "firestore/timestamp/1.0",
-      "seconds": 1791527384,
-      "nanoseconds": 292000000
-    },
-    "isVegetarian": true,
-    "availableExtras": [
-      {
-        "available": true,
-        "name": "Extra Cheese",
-        "category": "Cheese & Dips",
-        "id": "extra-cheese",
-        "price": 30
-      }
-    ],
-    "description": "",
-    "available": true,
-    "name": "AABBCC",
-    "colorVariants": [],
-    "price": 1,
-    "imageUrl": "/product-images/gjpphagqasj8g0obkgpn-aabbcc.webp",
-    "sortOrder": 100,
-    "showVariantsSeparately": false,
-    "imageFit": "cover",
-    "variants": []
-  },
-  {
     "id": "hmSo0x4XkBggQ1hYJAC7",
     "variants": [],
     "imageFit": "contain",

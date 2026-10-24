@@ -5,10 +5,16 @@
  */
 
 import { Order, OrderStatus } from '../types';
-import { sendNativeNotification, playSynthesizedChime } from '../utils/sound';
+import {
+  sendNativeNotification,
+  playSynthesizedChime,
+  registerPushSubscription,
+  syncServiceWorkerNotificationState,
+} from '../utils/sound';
 
 const STORAGE_KEY_CUSTOMER_NOTIFIED = 'gidhaur_customer_notified_statuses_v1';
 const STORAGE_KEY_CUSTOMER_ORDERS = 'gidhaur_customer_active_order_ids_v1';
+const STORAGE_KEY_CUSTOMER_PHONE = 'gidhaur_customer_last_phone_v1';
 
 // Get notified statuses map: { [orderId]: Set of statuses already notified }
 function getNotifiedStatuses(): Record<string, string[]> {
@@ -30,21 +36,44 @@ function saveNotifiedStatus(orderId: string, status: OrderStatus): void {
       current[orderId] = [...existing, status];
       localStorage.setItem(STORAGE_KEY_CUSTOMER_NOTIFIED, JSON.stringify(current));
     }
+    syncServiceWorkerNotificationState({
+      customerNotifiedStatuses: current,
+    }).catch(() => {});
   } catch {}
 }
 
 /**
- * Register an order to be tracked for customer notifications
+ * Register an order to be tracked for customer notifications (including background / closed-app Web Push)
  */
-export function registerCustomerOrderForNotifications(orderId: string): void {
-  if (typeof window === 'undefined') return;
+export function registerCustomerOrderForNotifications(orderId: string, phone?: string): void {
+  if (typeof window === 'undefined' || !orderId) return;
   try {
     const raw = localStorage.getItem(STORAGE_KEY_CUSTOMER_ORDERS);
     const existing: string[] = raw ? JSON.parse(raw) : [];
-    if (!existing.includes(orderId)) {
-      existing.push(orderId);
-      localStorage.setItem(STORAGE_KEY_CUSTOMER_ORDERS, JSON.stringify(existing.slice(-20))); // Keep last 20
+    const cleanId = String(orderId).trim();
+    if (cleanId && !existing.includes(cleanId)) {
+      existing.push(cleanId);
     }
+    const updatedList = existing.slice(-20);
+    localStorage.setItem(STORAGE_KEY_CUSTOMER_ORDERS, JSON.stringify(updatedList));
+
+    let activePhone = phone ? String(phone).replace(/\D/g, '') : '';
+    if (activePhone) {
+      localStorage.setItem(STORAGE_KEY_CUSTOMER_PHONE, activePhone);
+    } else {
+      activePhone = localStorage.getItem(STORAGE_KEY_CUSTOMER_PHONE) || '';
+    }
+
+    // Subscribe device to Web Push & Service Worker background sync
+    registerPushSubscription('customer', {
+      orderIds: updatedList,
+      phone: activePhone,
+    }).catch(() => {});
+
+    syncServiceWorkerNotificationState({
+      trackedOrderIds: updatedList,
+      customerNotifiedStatuses: getNotifiedStatuses(),
+    }).catch(() => {});
   } catch {}
 }
 
@@ -62,7 +91,7 @@ export function getCustomerTrackedOrderIds(): string[] {
  * Check and notify customer if their order status has progressed
  */
 export function checkAndNotifyCustomerOrderStatus(order: Order): void {
-  if (!order || !order.id || !order.status) return;
+  if (!order || (!order.id && !order.orderId) || !order.status) return;
 
   const orderId = order.orderId || order.id;
   const status = order.status;
@@ -117,7 +146,7 @@ export function checkAndNotifyCustomerOrderStatus(order: Order): void {
   // Send native phone notification with vibration
   sendNativeNotification(title, body, {
     tag: `customer-order-${orderId}-${status}`,
-    url: `/`,
+    url: `/#track`,
     vibrate: [300, 150, 300],
   });
 }

@@ -126,6 +126,17 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
       prev.map((o) => (o.id === orderId || o.orderId === orderId ? { ...o, status: 'preparing' as const, kitchenStatus: 'preparing' as const } : o))
     );
     try {
+      fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'preparing',
+          kitchenStatus: 'preparing',
+          kitchenSentAt: new Date().toISOString(),
+        }),
+      }).catch(() => {});
+    } catch {}
+    try {
       const orderRef = doc(db, 'orders', orderId);
       await updateDoc(orderRef, {
         status: 'preparing',
@@ -183,6 +194,18 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
       });
       return next;
     });
+
+    try {
+      fetch(`/api/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kitchenReady: true,
+          kitchenStatus: 'ready',
+          kitchenTickedItems: tickedDishes,
+        }),
+      }).catch(() => {});
+    } catch {}
 
     try {
       const orderRef = doc(db, 'orders', order.id);
@@ -279,6 +302,28 @@ export const KitchenDisplayPage: React.FC<KitchenDisplayPageProps> = ({
     }
 
     try {
+      fetch(`/api/orders/${selectedOrderForDispatch.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'out_for_delivery',
+          kitchenStatus: 'ready',
+          kitchenReady: true,
+          preparingReady: true,
+          assignedAgentId: assignedAgent ? assignedAgent.id : 'unassigned',
+          assignedAgentName: assignedAgent ? assignedAgent.name : 'Delivery Rider',
+          assignedAgentPhone: assignedAgent ? assignedAgent.phone : '',
+          dispatchedAt: new Date().toISOString(),
+          dispatchedItems: dispatchedItemNames,
+          untickedItems: untickedItemNames,
+          dispatchedItemIndices: dispatchedIndices,
+          subtotal: dispatchedSubtotal,
+          totalAmount: dispatchedTotalAmount,
+          originalTotalAmount: selectedOrderForDispatch.originalTotalAmount || selectedOrderForDispatch.totalAmount,
+          originalSubtotal: selectedOrderForDispatch.originalSubtotal || selectedOrderForDispatch.subtotal,
+        }),
+      }).catch(() => {});
+
       const orderRef = doc(db, 'orders', selectedOrderForDispatch.id);
       updateDoc(orderRef, {
         status: 'out_for_delivery',

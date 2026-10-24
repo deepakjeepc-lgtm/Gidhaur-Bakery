@@ -9,12 +9,11 @@
   "dir": "ltr",
   "display": "standalone",
   "display_override": [
-    "fullscreen",
     "standalone",
     "window-controls-overlay",
     "browser"
   ],
-  "background_color": "#ffffff",
+  "background_color": "#f6f8fb",
   "theme_color": "#ffffff",
   "orientation": "portrait-primary",
   "prefer_related_applications": false,

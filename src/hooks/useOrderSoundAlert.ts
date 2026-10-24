@@ -11,6 +11,8 @@ import {
   sendNativeNotification,
   getNotificationPermissionStatus,
   requestNotificationPermission,
+  registerPushSubscription,
+  syncServiceWorkerNotificationState,
   stopCurrentlyPlayingAudio,
   SoundPreset
 } from '../utils/sound';
@@ -89,12 +91,23 @@ export function useOrderSoundAlert(orders: Order[], isSoundEnabledProp?: boolean
     setSettings((prev) => ({ ...prev, volume: vol }));
   }, []);
 
-  // Request browser / mobile notification permission
+  // Request browser / mobile notification permission & register Admin Web Push subscription
   const handleRequestPermission = useCallback(async () => {
     const res = await requestNotificationPermission();
     setPermissionStatus(res);
+    if (res === 'granted') {
+      registerPushSubscription('admin', { isAdminDevice: true }).catch(() => {});
+    }
     return res;
   }, []);
+
+  // Auto-register Admin Web Push subscription on mount when permission is granted
+  useEffect(() => {
+    try {
+      localStorage.setItem('swadeep_is_admin_device', 'true');
+    } catch {}
+    registerPushSubscription('admin', { isAdminDevice: true }).catch(() => {});
+  }, [permissionStatus]);
 
   // Silence currently active alarm
   const silenceAlarm = useCallback(() => {
@@ -162,17 +175,25 @@ export function useOrderSoundAlert(orders: Order[], isSoundEnabledProp?: boolean
     let perm = getNotificationPermissionStatus();
     if (perm !== 'granted') {
       perm = await handleRequestPermission();
+    } else {
+      registerPushSubscription('admin', { isAdminDevice: true }).catch(() => {});
     }
 
-    // Send single test notification with vibration for phone
+    // Send single test notification with vibration for phone + trigger Web Push test
     sendNativeNotification(
       '🔔 Test Order Alert - Gidhaur Bakery',
-      'Test order for ₹280. Phone ring & notification test successful!',
+      'Test order for ₹280. Phone ring & background notification test successful!',
       {
         tag: 'test-order-alert',
+        url: '/#admin',
         vibrate: [500, 250, 500, 250, 500],
       }
     );
+    fetch('/api/push/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'admin' }),
+    }).catch(() => {});
 
     // Start 2-minute test audio alarm
     setIsSoundTesting(true);
@@ -223,7 +244,15 @@ export function useOrderSoundAlert(orders: Order[], isSoundEnabledProp?: boolean
     if (!initialLoadDone.current) {
       if (orders.length > 0) {
         // Mark existing orders as acknowledged so we don't spam upon page load
-        orders.forEach((o) => acknowledgedOrderIds.current.add(o.id));
+        const seenIds: string[] = [];
+        orders.forEach((o) => {
+          acknowledgedOrderIds.current.add(o.id);
+          seenIds.push(o.orderId || o.id);
+        });
+        syncServiceWorkerNotificationState({
+          isAdminDevice: true,
+          adminNotifiedIds: seenIds,
+        }).catch(() => {});
         initialLoadDone.current = true;
       }
       return;
@@ -239,20 +268,30 @@ export function useOrderSoundAlert(orders: Order[], isSoundEnabledProp?: boolean
     if (hasActivePending) {
       const isHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
-      // 1. If phone is locked or app is in background / closed: send ONE notification per order
+      // 1. Send ONE notification per new pending order
+      const newlyNotifiedIds: string[] = [];
       unhandledPendingOrders.forEach((ord) => {
         if (!outsideNotifiedOrderIds.current.has(ord.id)) {
           outsideNotifiedOrderIds.current.add(ord.id);
+          newlyNotifiedIds.push(ord.orderId || ord.id);
           sendNativeNotification(
             `🔔 New Order Received! #${ord.orderId}`,
             `${ord.customerName} placed order for ₹${ord.totalAmount}. Tap to view and accept.`,
             {
-              tag: `order-${ord.orderId}`,
+              tag: `admin-order-${ord.orderId}`,
+              url: '/#admin',
               vibrate: [500, 250, 500, 250, 500],
             }
           );
         }
       });
+
+      if (newlyNotifiedIds.length > 0) {
+        syncServiceWorkerNotificationState({
+          isAdminDevice: true,
+          adminNotifiedIds: newlyNotifiedIds,
+        }).catch(() => {});
+      }
 
       // 2. If app is visible (open), start the continuous 2-minute alarm reminder!
       if (!isHidden && !isAlarmRinging) {

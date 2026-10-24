@@ -3,8 +3,8 @@ import { db } from '../firebase/config';
 import { Product } from '../types';
 
 // Hardcoded sample/dummy products (empty set - all real products in catalog are preserved)
-export const HARDCODED_PRODUCT_NAMES = new Set<string>();
-export const CATALOG_CACHE_VERSION = 'swadeep_v6_264_static_images';
+export const HARDCODED_PRODUCT_NAMES = new Set<string>(['aabbcc']);
+export const CATALOG_CACHE_VERSION = 'swadeep_v7_clean_catalog';
 const STORAGE_KEY_CATALOG_VERSION = 'swadeep_catalog_version';
 
 const STORAGE_KEY_DELETED_IDS = 'swadeep_deleted_product_ids';
@@ -270,11 +270,14 @@ export function isProductBlacklisted(product: { id: string; name?: string }): bo
     return true;
   }
 
-  // Rule 3: Only dummy initial seed placeholder IDs (not real user products)
+  // Rule 3: Only dummy initial seed placeholder IDs and permanently removed test items (AABBCC)
   if (
     id.startsWith('init-dummy-') ||
     id.startsWith('sample-mock-') ||
-    id === 'item-pizza-1'
+    id === 'item-pizza-1' ||
+    id === 'gjpphaGqAsJ8G0obkGpn' ||
+    normName === 'aabbcc' ||
+    HARDCODED_PRODUCT_NAMES.has(normName)
   ) {
     return true;
   }
@@ -454,6 +457,11 @@ export function purgeLocalHardcodedProducts(): void {
   try {
     // Clean swadeep_cached_products
     getSanitizedCachedProducts();
+    removeProductFromIndexedDB('gjpphaGqAsJ8G0obkGpn').catch(() => {});
+    if (localStorage.getItem('swadeep_purged_aabbcc_v1') !== 'done') {
+      localStorage.setItem('swadeep_purged_aabbcc_v1', 'done');
+      deleteDoc(doc(db, 'products', 'gjpphaGqAsJ8G0obkGpn')).catch(() => {});
+    }
   } catch {}
 }
 

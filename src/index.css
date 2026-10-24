@@ -37,15 +37,24 @@
   html {
     width: 100%;
     max-width: 100%;
+    min-height: 100%;
+    min-height: 100dvh;
+    min-height: 100lvh;
+    min-height: -webkit-fill-available;
     overflow-x: clip;
     margin: 0;
     padding: 0;
+    background-color: #f6f8fb;
     -webkit-overflow-scrolling: touch;
   }
 
   body {
     width: 100%;
     max-width: 100%;
+    min-height: 100%;
+    min-height: 100dvh;
+    min-height: 100lvh;
+    min-height: -webkit-fill-available;
     overflow-x: clip;
     margin: 0;
     padding: 0;
@@ -60,10 +69,19 @@
     -webkit-overflow-scrolling: touch;
   }
 
+  html.admin-mode-active,
+  body.admin-mode-active {
+    background-color: #0A0A0C !important;
+    color: #FFFFFF;
+  }
+
   #root {
     width: 100%;
     max-width: 100%;
     min-height: 100vh;
+    min-height: 100dvh;
+    min-height: 100lvh;
+    min-height: -webkit-fill-available;
   }
 
   img {

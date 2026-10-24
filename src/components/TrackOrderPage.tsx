@@ -128,7 +128,7 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
   useEffect(() => {
     if (orders && orders.length > 0) {
       orders.forEach((o) => {
-        registerCustomerOrderForNotifications(o.orderId || o.id);
+        registerCustomerOrderForNotifications(o.orderId || o.id, o.phone);
         checkAndNotifyCustomerOrderStatus(o);
       });
     }
@@ -872,6 +872,17 @@ export const TrackOrderPage: React.FC<TrackOrderPageProps> = ({
     try {
       setIsCancelling(true);
       triggerHaptic('medium');
+      try {
+        fetch(`/api/orders/${orderToCancel.id || orderToCancel.orderId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cancellationRequested: true,
+            cancellationStatus: 'requested',
+            cancellationRequestedAt: new Date().toISOString(),
+          }),
+        }).catch(() => {});
+      } catch {}
       const orderDocRef = doc(db, 'orders', orderToCancel.id);
       await updateDoc(orderDocRef, {
         cancellationRequested: true,

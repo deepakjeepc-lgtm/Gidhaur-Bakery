@@ -36,6 +36,7 @@ import { QuotaExhaustedModal } from './QuotaExhaustedModal';
 import { isQuotaExhausted, markQuotaExhausted, isFirestoreQuotaError } from '../services/quotaService';
 import { WhatsAppOrderDetails } from '../utils/whatsappOrder';
 import { saveCustomerOwnOrder } from '../services/orderArchiveService';
+import { registerCustomerOrderForNotifications } from '../services/customerNotificationService';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -373,6 +374,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     try {
       saveCustomerOwnOrder(fullRecentOrder);
+      registerCustomerOrderForNotifications(generatedOrderId, cleanPhone);
     } catch (e) {
       console.warn('LocalStorage recent orders error:', e);
     }

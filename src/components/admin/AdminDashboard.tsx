@@ -709,6 +709,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleAcceptCancellation = async (orderId: string) => {
     try {
+      fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'rejected',
+          cancellationStatus: 'accepted',
+          cancellationResolvedAt: new Date().toISOString(),
+          rejectedAt: new Date().toISOString(),
+        }),
+      }).catch(() => {});
+
       const orderDoc = doc(db, 'orders', orderId);
       await updateDoc(orderDoc, {
         status: 'rejected',
@@ -737,6 +748,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDeclineCancellation = async (orderId: string) => {
     try {
+      fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cancellationStatus: 'rejected',
+          cancellationResolvedAt: new Date().toISOString(),
+        }),
+      }).catch(() => {});
+
       const orderDoc = doc(db, 'orders', orderId);
       await updateDoc(orderDoc, {
         cancellationStatus: 'rejected',

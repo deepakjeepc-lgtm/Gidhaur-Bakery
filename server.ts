@@ -32,6 +32,18 @@ app.use(express.static(path.join(process.cwd(), 'public')));
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STORE_FILE = path.join(DATA_DIR, 'store.json');
 
+interface PushSubscriptionRecord {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  role: 'admin' | 'customer';
+  orderIds?: string[];
+  phone?: string;
+  updatedAt: string;
+}
+
 interface StoreData {
   bannerSettings: any;
   orders: any[];
@@ -42,6 +54,11 @@ interface StoreData {
   };
   settings: any;
   customerEmails: any[];
+  vapidKeys?: {
+    publicKey: string;
+    privateKey: string;
+  };
+  pushSubscriptions?: PushSubscriptionRecord[];
 }
 
 const DEFAULT_BANNER_SETTINGS = {
@@ -108,6 +125,8 @@ function loadStore(): StoreData {
         staff: parsed.staff || { deliveryAgents: [], kitchenStaff: [] },
         settings: parsed.settings || {},
         customerEmails: Array.isArray(parsed.customerEmails) ? parsed.customerEmails : [],
+        vapidKeys: parsed.vapidKeys || undefined,
+        pushSubscriptions: Array.isArray(parsed.pushSubscriptions) ? parsed.pushSubscriptions : [],
       };
     }
   } catch (err) {
@@ -121,6 +140,7 @@ function loadStore(): StoreData {
     staff: { deliveryAgents: [], kitchenStaff: [] },
     settings: {},
     customerEmails: [],
+    pushSubscriptions: [],
   };
   saveStore(initial);
   return initial;
@@ -158,12 +178,187 @@ function broadcastSSE(eventType: string, payload: any) {
 }
 
 // -------------------------------------------------------------
+// Web Push (VAPID) Background Notification Engine (0 Firestore Reads)
+// -------------------------------------------------------------
+let webPushInitialized = false;
+let webPushMod: any = null;
+
+async function getConfiguredWebPush() {
+  if (webPushInitialized && webPushMod) return webPushMod;
+  try {
+    const mod = await import('web-push');
+    webPushMod = (mod as any).default || mod;
+    if (!store.vapidKeys || !store.vapidKeys.publicKey || !store.vapidKeys.privateKey) {
+      const generated = webPushMod.generateVAPIDKeys();
+      store.vapidKeys = {
+        publicKey: generated.publicKey,
+        privateKey: generated.privateKey,
+      };
+      saveStore(store);
+    }
+    webPushMod.setVAPIDDetails(
+      'mailto:support@gidhaurbakery.com',
+      store.vapidKeys.publicKey,
+      store.vapidKeys.privateKey
+    );
+    webPushInitialized = true;
+    return webPushMod;
+  } catch (err) {
+    console.warn('WebPush initialization note:', err);
+    return null;
+  }
+}
+
+// Pre-warm VAPID keys on server startup
+getConfiguredWebPush().catch(() => {});
+
+async function dispatchWebPushNotifications(
+  filterFn: (sub: PushSubscriptionRecord) => boolean,
+  payload: {
+    title: string;
+    body: string;
+    tag?: string;
+    url?: string;
+    role?: 'admin' | 'customer';
+    orderId?: string;
+    status?: string;
+    vibrate?: number[];
+  }
+) {
+  try {
+    const wp = await getConfiguredWebPush();
+    if (!wp) return;
+    const subs = Array.isArray(store.pushSubscriptions) ? store.pushSubscriptions : [];
+    const targets = subs.filter(filterFn);
+    if (targets.length === 0) return;
+
+    const expiredEndpoints = new Set<string>();
+    const messageStr = JSON.stringify(payload);
+
+    await Promise.allSettled(
+      targets.map(async (sub) => {
+        try {
+          await wp.sendNotification(
+            {
+              endpoint: sub.endpoint,
+              keys: sub.keys,
+            },
+            messageStr,
+            {
+              TTL: 86400,
+              urgency: 'high',
+            }
+          );
+        } catch (err: any) {
+          if (err?.statusCode === 404 || err?.statusCode === 410) {
+            expiredEndpoints.add(sub.endpoint);
+          }
+        }
+      })
+    );
+
+    if (expiredEndpoints.size > 0) {
+      store.pushSubscriptions = (store.pushSubscriptions || []).filter(
+        (s) => !expiredEndpoints.has(s.endpoint)
+      );
+      saveStore(store);
+    }
+  } catch (err) {
+    console.warn('dispatchWebPushNotifications note:', err);
+  }
+}
+
+// -------------------------------------------------------------
 // API Routes
 // -------------------------------------------------------------
 
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// Web Push Public Key & Subscription Endpoints
+app.get('/api/push/vapid-public-key', async (_req, res) => {
+  try {
+    await getConfiguredWebPush();
+    res.json({ publicKey: store.vapidKeys?.publicKey || '' });
+  } catch {
+    res.json({ publicKey: '' });
+  }
+});
+
+app.post('/api/push/subscribe', async (req, res) => {
+  try {
+    const { subscription, role = 'customer', orderIds = [], phone = '' } = req.body || {};
+    if (!subscription || !subscription.endpoint || !subscription.keys) {
+      return res.status(400).json({ error: 'Valid push subscription required' });
+    }
+    if (!Array.isArray(store.pushSubscriptions)) {
+      store.pushSubscriptions = [];
+    }
+
+    const cleanPhone = String(phone || '').replace(/\D/g, '');
+    const cleanOrderIds = Array.isArray(orderIds)
+      ? orderIds.map((id: any) => String(id || '').trim()).filter(Boolean)
+      : [];
+
+    const existingIdx = store.pushSubscriptions.findIndex(
+      (s) => s.endpoint === subscription.endpoint && s.role === role
+    );
+
+    if (existingIdx >= 0) {
+      const existing = store.pushSubscriptions[existingIdx];
+      const mergedOrders = Array.from(
+        new Set([...(existing.orderIds || []), ...cleanOrderIds])
+      ).slice(-30);
+      store.pushSubscriptions[existingIdx] = {
+        ...existing,
+        keys: subscription.keys,
+        role: role === 'admin' ? 'admin' : 'customer',
+        orderIds: mergedOrders,
+        phone: cleanPhone || existing.phone || '',
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      store.pushSubscriptions.push({
+        endpoint: subscription.endpoint,
+        keys: subscription.keys,
+        role: role === 'admin' ? 'admin' : 'customer',
+        orderIds: cleanOrderIds.slice(-30),
+        phone: cleanPhone,
+        updatedAt: new Date().toISOString(),
+      });
+      // Keep max 500 active subscriptions
+      if (store.pushSubscriptions.length > 500) {
+        store.pushSubscriptions = store.pushSubscriptions.slice(-500);
+      }
+    }
+
+    saveStore(store);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to save push subscription' });
+  }
+});
+
+app.post('/api/push/test', async (req, res) => {
+  try {
+    const { role = 'admin' } = req.body || {};
+    await dispatchWebPushNotifications(
+      (s) => s.role === role,
+      {
+        title: '🔔 Test Order Alert - Gidhaur Bakery',
+        body: 'Background & closed-app push notification is active and working!',
+        tag: 'test-order-alert',
+        url: role === 'admin' ? '/#admin' : '/#track',
+        role: role === 'admin' ? 'admin' : 'customer',
+        vibrate: [500, 250, 500, 250, 500],
+      }
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Push test failed' });
+  }
 });
 
 // SSE Live Sync Stream for Real-Time Multi-Device Collaboration
@@ -209,7 +404,14 @@ function loadProducts(): any[] {
     if (fs.existsSync(PRODUCTS_FILE)) {
       const raw = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (p) =>
+            p &&
+            p.id !== 'gjpphaGqAsJ8G0obkGpn' &&
+            String(p.name || '').trim().toLowerCase() !== 'aabbcc'
+        );
+      }
     }
   } catch (err) {
     console.warn('Could not read products.json:', err);
@@ -476,6 +678,7 @@ app.post('/api/orders', (req, res) => {
   }
 
   const existingIdx = store.orders.findIndex((o) => o.id === newOrder.id || o.orderId === newOrder.orderId);
+  const isBrandNewOrder = existingIdx === -1;
   if (existingIdx >= 0) {
     store.orders[existingIdx] = { ...store.orders[existingIdx], ...newOrder, updatedAt: new Date().toISOString() };
   } else {
@@ -489,6 +692,25 @@ app.post('/api/orders', (req, res) => {
   saveStore(store);
 
   broadcastSSE('orders_update', store.orders);
+
+  // Trigger background Web Push notification to all Admin devices when a new order arrives
+  if (isBrandNewOrder) {
+    const ordId = String(newOrder.orderId || newOrder.id || '');
+    dispatchWebPushNotifications(
+      (s) => s.role === 'admin',
+      {
+        title: `🔔 New Order Received! #${ordId}`,
+        body: `${newOrder.customerName || 'Customer'} placed an order for ₹${newOrder.totalAmount || 0}. Tap to view & accept.`,
+        tag: `admin-order-${ordId}`,
+        url: '/#admin',
+        role: 'admin',
+        orderId: ordId,
+        status: 'pending',
+        vibrate: [500, 250, 500, 250, 500],
+      }
+    ).catch(() => {});
+  }
+
   res.json({ success: true, order: newOrder });
 });
 
@@ -540,6 +762,10 @@ app.patch('/api/orders/:id', (req, res) => {
     }
   }
 
+  const prevOrder = orderIdx !== -1 ? store.orders[orderIdx] : null;
+  const prevStatus = prevOrder?.status;
+  const prevCancelStatus = prevOrder?.cancellationStatus;
+
   if (orderIdx === -1) {
     const newOrder = {
       id,
@@ -563,16 +789,88 @@ app.patch('/api/orders/:id', (req, res) => {
     updatedAt: new Date().toISOString(),
   };
 
-  if (store.orders[orderIdx].status === 'delivered') {
-    upsertIntoServerArchive(store.orders[orderIdx], {
-      deliveredAt: store.orders[orderIdx].deliveredAt || new Date().toISOString(),
+  const updatedOrder = store.orders[orderIdx];
+
+  if (updatedOrder.status === 'delivered') {
+    upsertIntoServerArchive(updatedOrder, {
+      deliveredAt: updatedOrder.deliveredAt || new Date().toISOString(),
     });
   }
 
   saveStore(store);
 
   broadcastSSE('orders_update', store.orders);
-  res.json({ success: true, order: store.orders[orderIdx] });
+
+  const ordId = String(updatedOrder.orderId || updatedOrder.id || id);
+  const cleanOrderPhone = String(updatedOrder.phone || '').replace(/\D/g, '');
+
+  // 1. If Customer requested cancellation, notify Admin in background
+  if (
+    updates.cancellationStatus === 'requested' &&
+    prevCancelStatus !== 'requested'
+  ) {
+    dispatchWebPushNotifications(
+      (s) => s.role === 'admin',
+      {
+        title: `⚠️ Cancellation Request #${ordId}`,
+        body: `${updatedOrder.customerName || 'Customer'} requested to cancel order #${ordId}. Tap to review.`,
+        tag: `admin-cancel-${ordId}`,
+        url: '/#admin',
+        role: 'admin',
+        orderId: ordId,
+        vibrate: [500, 250, 500],
+      }
+    ).catch(() => {});
+  }
+
+  // 2. If Order Status transitioned, notify matching Customer devices in background (even when app is closed!)
+  if (updates.status && updates.status !== prevStatus) {
+    const nextStatus = updates.status;
+    let title = '';
+    let body = '';
+    if (nextStatus === 'accepted') {
+      title = `🎉 Order Confirmed! #${ordId}`;
+      body = `Gidhaur Bakery accepted your order. Kitchen preparation will begin shortly!`;
+    } else if (nextStatus === 'preparing') {
+      title = `👨‍🍳 Fresh in the Kitchen! #${ordId}`;
+      body = `Your delicious items are now being baked and prepared fresh.`;
+    } else if (nextStatus === 'out_for_delivery') {
+      title = `🛵 Out For Delivery! #${ordId}`;
+      body = `Your order is on the way! Delivery rider is en route to your address.`;
+    } else if (nextStatus === 'delivered') {
+      title = `✅ Order Delivered! #${ordId}`;
+      body = `Your order from Gidhaur Bakery has been delivered. Enjoy your delicious treats!`;
+    } else if (nextStatus === 'rejected') {
+      title = `⚠️ Order Update #${ordId}`;
+      body = `Your order #${ordId} was declined or cancelled. Tap to view details.`;
+    }
+
+    if (title) {
+      dispatchWebPushNotifications(
+        (s) => {
+          if (s.role !== 'customer') return false;
+          const matchesId =
+            Array.isArray(s.orderIds) &&
+            s.orderIds.some((oid) => String(oid).toLowerCase() === ordId.toLowerCase());
+          const matchesPhone =
+            Boolean(cleanOrderPhone && cleanOrderPhone.length >= 10 && s.phone === cleanOrderPhone);
+          return matchesId || matchesPhone;
+        },
+        {
+          title,
+          body,
+          tag: `customer-order-${ordId}-${nextStatus}`,
+          url: '/#track',
+          role: 'customer',
+          orderId: ordId,
+          status: nextStatus,
+          vibrate: [300, 150, 300],
+        }
+      ).catch(() => {});
+    }
+  }
+
+  res.json({ success: true, order: updatedOrder });
 });
 
 app.delete('/api/orders/:id', (req, res) => {
